@@ -73,9 +73,21 @@ static constexpr uint32_t k_projectile_fire_debug_addr = 0x817FE100;
 static constexpr uint32_t k_projectile_probe_debug_addr = 0x817FE300;
 static constexpr uint32_t k_gun_target_hook_addr = 0x817FE400;
 static constexpr uint32_t k_final_input_offset = 0xB54;
+static constexpr uint32_t k_final_input_right_stick_x = k_final_input_offset + 0x10;
+static constexpr uint32_t k_final_input_right_stick_y = k_final_input_offset + 0x14;
+static constexpr uint32_t k_final_input_right_stick_x_press = k_final_input_offset + 0x22;
+static constexpr uint32_t k_final_input_right_stick_y_press = k_final_input_offset + 0x23;
 static constexpr uint32_t k_final_input_dpad_held_0 = k_final_input_offset + 0x2C;
 static constexpr uint32_t k_final_input_dpad_held_1 = k_final_input_offset + 0x2D;
 static constexpr uint32_t k_final_input_dpad_pressed_0 = k_final_input_offset + 0x2E;
+static constexpr uint32_t k_player_disable_input_flags_offset = 0x9C6;
+static constexpr uint8_t k_player_disable_input_mask = 0x04;
+static constexpr uint32_t k_player_free_look_state_offset = 0x3DC;
+static constexpr uint32_t k_player_free_look_center_time_offset = 0x3E0;
+static constexpr uint32_t k_player_free_look_yaw_angle_offset = 0x3E4;
+static constexpr uint32_t k_player_free_look_yaw_vel_offset = 0x3E8;
+static constexpr uint32_t k_player_free_look_pitch_angle_offset = 0x3EC;
+static constexpr uint32_t k_player_free_look_pitch_vel_offset = 0x3F0;
 static constexpr uint32_t k_cannon_rotation_offsets[9] = {
     0x4A8, 0x4AC, 0x4B0,
     0x4B8, 0x4BC, 0x4C0,
@@ -206,6 +218,41 @@ static XrDpadDir get_stick_dpad_direction(float x, float y, float deadzone) {
     return x > 0.0f ? XrDpadRight : XrDpadLeft;
 }
 
+static XrDpadDir get_stick_dpad_direction_with_hysteresis(float x, float y,
+                                                          float deadzone,
+                                                          XrDpadDir last_dir) {
+    const float mag = std::sqrt(x * x + y * y);
+    const float exit_deadzone = std::max(0.05f, deadzone * 0.55f);
+    if (mag < exit_deadzone)
+        return XrDpadNone;
+
+    XrDpadDir dir = get_stick_dpad_direction(x, y, deadzone);
+    if (dir != XrDpadNone)
+        return dir;
+    if (last_dir == XrDpadNone)
+        return XrDpadNone;
+
+    const float ax = std::fabs(x);
+    const float ay = std::fabs(y);
+    constexpr float kAxisSwitchBias = 1.35f;
+    switch (last_dir) {
+    case XrDpadUp:
+    case XrDpadDown:
+        if (ay * kAxisSwitchBias >= ax)
+            return y >= 0.0f ? XrDpadUp : XrDpadDown;
+        break;
+    case XrDpadLeft:
+    case XrDpadRight:
+        if (ax * kAxisSwitchBias >= ay)
+            return x >= 0.0f ? XrDpadRight : XrDpadLeft;
+        break;
+    default:
+        break;
+    }
+    return ax > ay ? (x >= 0.0f ? XrDpadRight : XrDpadLeft)
+                   : (y >= 0.0f ? XrDpadUp : XrDpadDown);
+}
+
 static void select_xr_dpad_stick_axis(const Pose& pose, float& x, float& y, int& axis_out) {
     if (g_settings.xr_dpad_stick_axis >= 0 && g_settings.xr_dpad_stick_axis < 5) {
         axis_out = g_settings.xr_dpad_stick_axis;
@@ -233,6 +280,20 @@ static bool left_controller_is_near_head(const Pose& left, const Pose& hmd) {
            dy <= 0.22f;
 }
 
+static bool left_controller_is_near_head_for_dpad(const Pose& left, const Pose& hmd) {
+    if (!left.valid || !hmd.valid) return false;
+    const float dx = left.px - hmd.px;
+    const float dy = left.py - hmd.py;
+    const float dz = left.pz - hmd.pz;
+    const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+    g_app.dbg_left_to_head_dist = dist;
+    g_app.dbg_left_to_head_y = dy;
+    return dist <= g_settings.xr_dpad_head_radius + 0.06f &&
+           dy >= -(g_settings.xr_dpad_head_y_below + 0.04f) &&
+           dy <= 0.28f;
+}
+
 static bool read_camera_yaw_delta_degrees_quiet(float& yaw_delta_deg) {
     uint32_t player_yaw_addr = 0;
     if (!g_dolphin.is_connected() || !resolve_active_camera_transform_addr(player_yaw_addr))
@@ -257,10 +318,63 @@ static void prime_xy_from_yaw(float yaw, float& x, float& y) {
     y = std::cos(yaw);
 }
 
+static void set_player_input_disabled_for_dpad(uint32_t state_mgr, bool disabled) {
+    static bool s_forced_disabled = false;
+    static bool s_was_disabled = false;
+    const auto addrs = get_addresses();
+    const uint32_t player = g_dolphin.read_u32(state_mgr + addrs.player_offset);
+    if (player < 0x80000000) {
+        s_forced_disabled = false;
+        s_was_disabled = false;
+        return;
+    }
+
+    const uint32_t flags_addr = player + k_player_disable_input_flags_offset;
+    uint8_t flags = g_dolphin.read_u8(flags_addr);
+    if (disabled) {
+        if (!s_forced_disabled) {
+            s_was_disabled = (flags & k_player_disable_input_mask) != 0;
+            s_forced_disabled = true;
+        }
+        flags |= k_player_disable_input_mask;
+        g_dolphin.write_u8(flags_addr, flags);
+        return;
+    }
+
+    if (s_forced_disabled && !s_was_disabled) {
+        flags &= static_cast<uint8_t>(~k_player_disable_input_mask);
+        g_dolphin.write_u8(flags_addr, flags);
+    }
+    s_forced_disabled = false;
+    s_was_disabled = false;
+}
+
+static void suppress_c_stick_for_dpad(uint32_t state_mgr) {
+    g_dolphin.write_float(state_mgr + k_final_input_right_stick_x, 0.0f);
+    g_dolphin.write_float(state_mgr + k_final_input_right_stick_y, 0.0f);
+    g_dolphin.write_u8(state_mgr + k_final_input_right_stick_x_press, 0);
+    g_dolphin.write_u8(state_mgr + k_final_input_right_stick_y_press, 0);
+
+    const auto addrs = get_addresses();
+    const uint32_t player = g_dolphin.read_u32(state_mgr + addrs.player_offset);
+    if (player < 0x80000000)
+        return;
+
+    g_dolphin.write_u8(player + k_player_free_look_state_offset, 0);
+    g_dolphin.write_u8(player + k_player_free_look_state_offset + 1, 0);
+    g_dolphin.write_u8(player + k_player_free_look_state_offset + 2, 0);
+    g_dolphin.write_float(player + k_player_free_look_center_time_offset, 0.0f);
+    g_dolphin.write_float(player + k_player_free_look_yaw_angle_offset, 0.0f);
+    g_dolphin.write_float(player + k_player_free_look_yaw_vel_offset, 0.0f);
+    g_dolphin.write_float(player + k_player_free_look_pitch_angle_offset, 0.0f);
+    g_dolphin.write_float(player + k_player_free_look_pitch_vel_offset, 0.0f);
+}
+
 static bool apply_xr_dpad_input(const Pose& left, const Pose& hmd) {
     static XrDpadDir s_last_dir = XrDpadNone;
     static auto s_dir_start = std::chrono::steady_clock::time_point{};
     static auto s_last_press_pulse = std::chrono::steady_clock::time_point{};
+    static auto s_last_near_head = std::chrono::steady_clock::time_point{};
     g_app.dbg_xr_dpad_active = false;
     g_app.dbg_xr_dpad_dir = XrDpadNone;
     float stick_x = 0.0f;
@@ -272,22 +386,51 @@ static bool apply_xr_dpad_input(const Pose& left, const Pose& hmd) {
     g_app.dbg_left_stick_y = stick_y;
 
     if (!g_settings.xr_dpad_enabled || !g_app.dolphin_ok) {
+        if (g_app.dolphin_ok) {
+            const auto addrs = get_addresses();
+            if (addrs.state_manager >= 0x80000000)
+                set_player_input_disabled_for_dpad(addrs.state_manager, false);
+        }
         s_last_dir = XrDpadNone;
         s_dir_start = {};
         s_last_press_pulse = {};
+        s_last_near_head = {};
         return false;
     }
 
     const auto addrs = get_addresses();
     const uint32_t state_mgr = addrs.state_manager;
-    if (state_mgr < 0x80000000 || !left_controller_is_near_head(left, hmd)) {
+    if (state_mgr < 0x80000000) {
         s_last_dir = XrDpadNone;
         s_dir_start = {};
         s_last_press_pulse = {};
+        s_last_near_head = {};
         return false;
     }
 
-    const XrDpadDir dir = get_stick_dpad_direction(stick_x, stick_y, g_settings.xr_dpad_deadzone);
+    const auto now = std::chrono::steady_clock::now();
+    const bool near_head = left_controller_is_near_head_for_dpad(left, hmd);
+    bool in_head_zone = near_head;
+    if (near_head) {
+        s_last_near_head = now;
+    } else {
+        const bool in_head_grace =
+            s_last_near_head.time_since_epoch().count() != 0 &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last_near_head).count() < 260;
+        if (!in_head_grace) {
+            set_player_input_disabled_for_dpad(state_mgr, false);
+            s_last_dir = XrDpadNone;
+            s_dir_start = {};
+            s_last_press_pulse = {};
+            return false;
+        }
+        in_head_zone = true;
+    }
+    set_player_input_disabled_for_dpad(state_mgr, in_head_zone);
+    suppress_c_stick_for_dpad(state_mgr);
+
+    const XrDpadDir dir = get_stick_dpad_direction_with_hysteresis(
+        stick_x, stick_y, g_settings.xr_dpad_deadzone, s_last_dir);
     if (dir == XrDpadNone) {
         s_last_dir = XrDpadNone;
         s_dir_start = {};
@@ -295,7 +438,6 @@ static bool apply_xr_dpad_input(const Pose& left, const Pose& hmd) {
         return false;
     }
 
-    const auto now = std::chrono::steady_clock::now();
     if (dir != s_last_dir) {
         s_dir_start = now;
         s_last_press_pulse = {};
@@ -635,18 +777,29 @@ static bool offhand_prime_yaw(const Pose& offhand, float yaw_delta_deg, float& y
     const float qy = adjusted.qy;
     const float qz = adjusted.qz;
     const float qw = adjusted.qw;
-    const float r02 = 2.0f * (qx * qz + qw * qy);
-    const float r22 = 1.0f - 2.0f * (qx * qx + qy * qy);
 
-    float prime_forward_x = -r02;
-    float prime_forward_y = r22;
+    const float sin_yaw = 2.0f * (qw * qy + qx * qz);
+    const float cos_yaw = 1.0f - 2.0f * (qy * qy + qz * qz);
+    if (!std::isfinite(sin_yaw) || !std::isfinite(cos_yaw))
+        return false;
+
+    float prime_forward_x = -sin_yaw;
+    float prime_forward_y = cos_yaw;
     const float len = std::sqrt(prime_forward_x * prime_forward_x +
                                 prime_forward_y * prime_forward_y);
     if (!std::isfinite(len) || len < 0.0001f)
         return false;
-
     prime_forward_x /= len;
     prime_forward_y /= len;
+
+    const float r12 = 2.0f * (qy * qz - qw * qx);
+    const float pitch_up = std::asin(std::clamp(-r12, -1.0f, 1.0f));
+    constexpr float kAllowBackwardFlipPitch = 90.0f * static_cast<float>(M_PI / 180.0f);
+    if (std::fabs(pitch_up) > kAllowBackwardFlipPitch) {
+        prime_forward_x = -prime_forward_x;
+        prime_forward_y = -prime_forward_y;
+    }
+
     yaw_out = yaw_from_prime_xy(prime_forward_x, prime_forward_y);
     return true;
 }
@@ -685,7 +838,7 @@ static bool write_directional_movement_velocity(const Pose& move_input,
         return false;
     }
 
-    if (left_controller_is_near_head(move_input, hmd)) {
+    if (left_controller_is_near_head_for_dpad(move_input, hmd)) {
         g_directional_move_speed = 0.0f;
         return false;
     }
