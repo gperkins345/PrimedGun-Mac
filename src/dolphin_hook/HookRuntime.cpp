@@ -4,7 +4,6 @@
 #include "GameTimingHooks.h"
 #include "DolphinXrBridge.h"
 #include "Ipc.h"
-#include "JitHooks.h"
 #include "OpenXrHooks.h"
 
 #include <windows.h>
@@ -45,15 +44,12 @@ DWORD WINAPI RuntimeThread(void*) {
     }
 
     GameTimingHooks::Install();
-    JitHooks::Install();
     GraphicsHooks::Install();
     OpenXrHooks::InstallIfAvailable(shared.Get());
     Log(L"PrimedGun hook runtime is active inside Dolphin.");
 
     uint64_t lastMaintenanceTick = 0;
     while (g_running.load()) {
-        GameTimingHooks::SuppressLockCameraPitchForLogicTick();
-
         const uint64_t now = GetTickCount64();
         if (now - lastMaintenanceTick >= 250) {
             lastMaintenanceTick = now;
@@ -61,7 +57,6 @@ DWORD WINAPI RuntimeThread(void*) {
             GraphicsHooks::PollBackendModules(shared.Get());
             GameTimingHooks::Poll(shared.Get());
             OpenXrHooks::Poll(shared.Get());
-            JitHooks::Poll();
 
             if (SharedState* state = shared.Get()) {
                 state->hookStatusFlags |= HookStatusDllAlive;
@@ -75,7 +70,6 @@ DWORD WINAPI RuntimeThread(void*) {
     OpenXrHooks::Shutdown();
     GraphicsHooks::Shutdown();
     GameTimingHooks::Shutdown();
-    JitHooks::Shutdown();
     Log(L"PrimedGun hook runtime stopped.");
     return 0;
 }

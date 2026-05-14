@@ -1,5 +1,4 @@
 #include "GraphicsHooks.h"
-#include "VulkanHooks.h"
 
 #include <windows.h>
 
@@ -31,7 +30,7 @@ std::array<BackendModule, 5> g_backends{{
 } // namespace
 
 bool Install() {
-    Log(L"GraphicsHooks::Install: runtime initialized. Backend-specific detours are pending.");
+    Log(L"GraphicsHooks::Install: runtime initialized. Vulkan tracing detours are disabled in release mode.");
     PollBackendModules();
     return true;
 }
@@ -44,12 +43,10 @@ void PollBackendModules(const SharedState* shared) {
         }
     }
 
-    VulkanHooks::InstallIfAvailable();
-    VulkanHooks::PollRuntimeControls(shared);
+    (void)shared;
 }
 
 void Shutdown() {
-    VulkanHooks::Shutdown();
     Log(L"GraphicsHooks::Shutdown");
 }
 

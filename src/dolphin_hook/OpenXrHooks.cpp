@@ -15,9 +15,11 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -46,6 +48,7 @@ PFN_xrCreateSession g_realCreateSession = nullptr;
 PFN_xrCreateSwapchain g_realCreateSwapchain = nullptr;
 PFN_xrEnumerateSwapchainFormats g_realEnumerateSwapchainFormats = nullptr;
 PFN_xrDestroySwapchain g_realDestroySwapchain = nullptr;
+PFN_xrCreateReferenceSpace g_realCreateReferenceSpace = nullptr;
 PFN_xrEnumerateSwapchainImages g_realEnumerateSwapchainImages = nullptr;
 PFN_xrAcquireSwapchainImage g_realAcquireSwapchainImage = nullptr;
 PFN_xrWaitSwapchainImage g_realWaitSwapchainImage = nullptr;
@@ -72,6 +75,22 @@ std::unordered_map<XrSpace, std::string> g_spaces;
 uint64_t g_generation = 0;
 uint64_t g_lastLogMs = 0;
 uint64_t g_lastInstallCheckMs = 0;
+XrSession g_dolphinSession = XR_NULL_HANDLE;
+XrSpace g_dolphinReferenceSpace = XR_NULL_HANDLE;
+uint8_t* g_dolphinOpenXrManager = nullptr;
+uint64_t g_lastManagerScanMs = 0;
+bool g_dolphinHomeZeroed = false;
+bool g_dolphinReferenceSpaceIsStage = false;
+uint32_t g_startupCenterSpoofFrames = 0;
+uint32_t g_appliedViewHeightGeneration = 0;
+uint32_t g_validLocateViewFrames = 0;
+uint8_t* g_lastManagerCandidate = nullptr;
+uint32_t g_managerStableScans = 0;
+uint64_t g_lastHeightRecenterLogMs = 0;
+bool g_heightOnlyRecenterPatchAttempted = false;
+bool g_heightOnlyRecenterPatchInstalled = false;
+uint64_t g_leftGripPoseMs = 0;
+uint64_t g_rightGripPoseMs = 0;
 
 enum class GraphicsApi {
     Unknown,
@@ -93,14 +112,19 @@ struct QuadLayerState {
     VkCommandPool vkCommandPool = VK_NULL_HANDLE;
     VkBuffer vkStagingBuffer = VK_NULL_HANDLE;
     VkDeviceMemory vkStagingMemory = VK_NULL_HANDLE;
+    VkDeviceSize vkStagingSize = 0;
     XrSwapchain swapchain = XR_NULL_HANDLE;
+    XrSwapchain promptSwapchain = XR_NULL_HANDLE;
     int64_t format = DXGI_FORMAT_R8G8B8A8_UNORM;
     uint32_t width = 1024;
     uint32_t height = 384;
+    uint32_t promptWidth = 1024;
+    uint32_t promptHeight = 384;
     XrSpace space = XR_NULL_HANDLE;
     uint64_t promptFirstFrameMs = 0;
     uint32_t contentKind = 0;
     uint32_t uploadedMenuGeneration = 0;
+    bool promptTextureReady = false;
     bool textureReady = false;
     bool warnedNoTexture = false;
     bool warnedCreateFailed = false;
@@ -110,6 +134,50 @@ struct QuadLayerState {
 };
 
 QuadLayerState g_quadLayer;
+
+struct HookEyeView {
+    XrPosef pose;
+    XrFovf fov;
+};
+
+struct DolphinOpenXrManagerLayout {
+    XrInstance instance;
+    XrSystemId systemId;
+    XrSession session;
+    XrSpace referenceSpace;
+    void* swapchain;
+    XrSessionState sessionState;
+    bool sessionRunning;
+    bool exitRenderLoop;
+    XrFrameState frameState;
+    XrActionSet inputActionSet;
+    std::array<XrPath, 2> inputHandPaths;
+    XrAction actionPrimaryClick;
+    XrAction actionSecondaryClick;
+    XrAction actionMenuClick;
+    XrAction actionThumbstickClick;
+    XrAction actionTriggerClick;
+    XrAction actionSqueezeClick;
+    XrAction actionTriggerValue;
+    XrAction actionSqueezeValue;
+    XrAction actionThumbstickX;
+    XrAction actionThumbstickY;
+    XrAction actionAimPose;
+    XrAction actionGripPose;
+    XrAction actionHaptic;
+    std::array<XrSpace, 2> aimSpaces;
+    std::array<XrSpace, 2> gripSpaces;
+    std::array<bool, 2> hapticsActive;
+    std::array<XrViewConfigurationView, 2> viewConfigViews;
+    std::array<XrView, 2> views;
+    std::array<HookEyeView, 2> eyeViews;
+    bool homeSet;
+    XrVector3f homePosition;
+    std::atomic<bool> recenterRequested;
+    XrEnvironmentBlendMode activeBlendMode;
+};
+
+static_assert(offsetof(DolphinOpenXrManagerLayout, referenceSpace) == 24);
 
 PFN_vkGetInstanceProcAddr g_vkGetInstanceProcAddr = nullptr;
 PFN_vkGetDeviceProcAddr g_vkGetDeviceProcAddr = nullptr;
@@ -195,6 +263,7 @@ void CleanupVulkanQuadResources() {
         g_quadLayer.vkCommandPool = VK_NULL_HANDLE;
         g_quadLayer.vkStagingBuffer = VK_NULL_HANDLE;
         g_quadLayer.vkStagingMemory = VK_NULL_HANDLE;
+        g_quadLayer.vkStagingSize = 0;
         return;
     }
     if (g_quadLayer.vkStagingBuffer && g_vkDestroyBuffer) {
@@ -209,6 +278,7 @@ void CleanupVulkanQuadResources() {
     g_quadLayer.vkCommandPool = VK_NULL_HANDLE;
     g_quadLayer.vkStagingBuffer = VK_NULL_HANDLE;
     g_quadLayer.vkStagingMemory = VK_NULL_HANDLE;
+    g_quadLayer.vkStagingSize = 0;
 }
 
 void DestroyPromptSwapchain() {
@@ -219,6 +289,28 @@ void DestroyPromptSwapchain() {
     g_quadLayer.textureReady = false;
     g_quadLayer.contentKind = 0;
     g_quadLayer.uploadedMenuGeneration = 0;
+}
+
+void DestroyHeightPromptSwapchain() {
+    if (g_quadLayer.promptSwapchain != XR_NULL_HANDLE && g_realDestroySwapchain) {
+        g_realDestroySwapchain(g_quadLayer.promptSwapchain);
+    }
+    g_quadLayer.promptSwapchain = XR_NULL_HANDLE;
+    g_quadLayer.promptTextureReady = false;
+}
+
+bool FindFrameProjectionSpace(const XrFrameEndInfo* frameEndInfo, XrSpace& space) {
+    if (!frameEndInfo || !frameEndInfo->layers || frameEndInfo->layerCount == 0)
+        return false;
+
+    for (uint32_t i = 0; i < frameEndInfo->layerCount; ++i) {
+        const XrCompositionLayerBaseHeader* layer = frameEndInfo->layers[i];
+        if (layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
+            space = reinterpret_cast<const XrCompositionLayerProjection*>(layer)->space;
+            return space != XR_NULL_HANDLE;
+        }
+    }
+    return false;
 }
 
 bool ResolveVulkanFunctions() {
@@ -350,9 +442,20 @@ bool EnsureVulkanUploadResources(const std::vector<uint32_t>& pixels) {
         }
     }
 
+    const VkDeviceSize uploadSize = static_cast<VkDeviceSize>(pixels.size() * sizeof(uint32_t));
+    if (g_quadLayer.vkStagingBuffer && g_quadLayer.vkStagingSize < uploadSize) {
+        if (g_vkDestroyBuffer)
+            g_vkDestroyBuffer(g_quadLayer.vkDevice, g_quadLayer.vkStagingBuffer, nullptr);
+        if (g_vkFreeMemory)
+            g_vkFreeMemory(g_quadLayer.vkDevice, g_quadLayer.vkStagingMemory, nullptr);
+        g_quadLayer.vkStagingBuffer = VK_NULL_HANDLE;
+        g_quadLayer.vkStagingMemory = VK_NULL_HANDLE;
+        g_quadLayer.vkStagingSize = 0;
+    }
+
     if (!g_quadLayer.vkStagingBuffer) {
         VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        bufferInfo.size = pixels.size() * sizeof(uint32_t);
+        bufferInfo.size = uploadSize;
         bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         VkResult result = g_vkCreateBuffer(g_quadLayer.vkDevice, &bufferInfo, nullptr,
@@ -387,21 +490,22 @@ bool EnsureVulkanUploadResources(const std::vector<uint32_t>& pixels) {
             Log(L"OpenXR quad prompt failed to bind Vulkan staging memory result=" + std::to_wstring(result));
             return false;
         }
+        g_quadLayer.vkStagingSize = uploadSize;
     }
 
     void* mapped = nullptr;
     const VkResult result = g_vkMapMemory(g_quadLayer.vkDevice, g_quadLayer.vkStagingMemory, 0,
-                                          pixels.size() * sizeof(uint32_t), 0, &mapped);
+                                          uploadSize, 0, &mapped);
     if (result != VK_SUCCESS || !mapped) {
         Log(L"OpenXR quad prompt failed to map Vulkan staging memory result=" + std::to_wstring(result));
         return false;
     }
-    std::memcpy(mapped, pixels.data(), pixels.size() * sizeof(uint32_t));
+    std::memcpy(mapped, pixels.data(), static_cast<size_t>(uploadSize));
     g_vkUnmapMemory(g_quadLayer.vkDevice, g_quadLayer.vkStagingMemory);
     return true;
 }
 
-bool UploadPromptToVulkanImage(VkImage image) {
+bool UploadPromptToVulkanImage(VkImage image, uint32_t width, uint32_t height) {
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     allocateInfo.commandPool = g_quadLayer.vkCommandPool;
@@ -443,7 +547,7 @@ bool UploadPromptToVulkanImage(VkImage image) {
     copyRegion.imageSubresource.mipLevel = 0;
     copyRegion.imageSubresource.baseArrayLayer = 0;
     copyRegion.imageSubresource.layerCount = 1;
-    copyRegion.imageExtent = {g_quadLayer.width, g_quadLayer.height, 1};
+    copyRegion.imageExtent = {width, height, 1};
     g_vkCmdCopyBufferToImage(commandBuffer, g_quadLayer.vkStagingBuffer, image,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
 
@@ -566,10 +670,10 @@ std::vector<uint32_t> BuildPromptPixels(uint32_t width, uint32_t height) {
     FillRect(pixels, width, height, 0, 0, static_cast<int>(width), 8, 0xE0FFB030u);
     FillRect(pixels, width, height, 0, static_cast<int>(height) - 8, static_cast<int>(width), 8, 0xE0FFB030u);
 
-    constexpr const char* line1 = "MOVE YOUR BODY AND";
-    constexpr const char* line2 = "CLICK RIGHT STICK TO";
-    constexpr const char* line3 = "ALIGN CONTROLLER";
-    constexpr const char* line4 = "WITH CANNON";
+    constexpr const char* line1 = "CLICK RIGHT";
+    constexpr const char* line2 = "THUMBSTICK";
+    constexpr const char* line3 = "TO SET";
+    constexpr const char* line4 = "HEIGHT";
     const int scale = 5;
     const int lineStep = 78;
     const int y = 44;
@@ -753,6 +857,16 @@ bool IsReadableMemory(const void* ptr, size_t size) {
     return end >= start && end <= regionEnd;
 }
 
+bool IsWritableProtect(DWORD protect) {
+    if (protect & (PAGE_GUARD | PAGE_NOACCESS))
+        return false;
+    protect &= 0xff;
+    return protect == PAGE_READWRITE ||
+           protect == PAGE_WRITECOPY ||
+           protect == PAGE_EXECUTE_READWRITE ||
+           protect == PAGE_EXECUTE_WRITECOPY;
+}
+
 bool PatchImportThunk(void** thunk, void* replacement, void** original) {
     if (!thunk || !IsReadableMemory(thunk, sizeof(void*)))
         return false;
@@ -786,6 +900,19 @@ void CopyPose(PoseState& dst, const XrPosef& pose) {
     dst.orientation.w = pose.orientation.w;
 }
 
+void CopyPosePosition(PoseState& dst, const XrPosef& pose) {
+    dst.positionMeters.x = pose.position.x;
+    dst.positionMeters.y = pose.position.y;
+    dst.positionMeters.z = pose.position.z;
+}
+
+void CopyPoseOrientation(PoseState& dst, const XrPosef& pose) {
+    dst.orientation.x = pose.orientation.x;
+    dst.orientation.y = pose.orientation.y;
+    dst.orientation.z = pose.orientation.z;
+    dst.orientation.w = pose.orientation.w;
+}
+
 bool IsPoseValid(XrSpaceLocationFlags flags) {
     return (flags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0 &&
            (flags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
@@ -797,6 +924,291 @@ void MarkOpenXrActive(SharedState* state) {
     state->trackingSource = 1;
     state->trackingRuntimeActive = 1;
     state->trackingGeneration = ++g_generation;
+}
+
+bool LooksLikeDolphinOpenXrManager(uint8_t* candidate) {
+    if (!candidate || !IsReadableMemory(candidate, sizeof(DolphinOpenXrManagerLayout)))
+        return false;
+
+    auto* manager = reinterpret_cast<DolphinOpenXrManagerLayout*>(candidate);
+    if (manager->session != g_dolphinSession || manager->referenceSpace != g_dolphinReferenceSpace)
+        return false;
+    if (manager->frameState.type != XR_TYPE_FRAME_STATE)
+        return false;
+    if (manager->views[0].type != XR_TYPE_VIEW || manager->views[1].type != XR_TYPE_VIEW)
+        return false;
+    return true;
+}
+
+uint8_t* FindDolphinOpenXrManager() {
+    if (g_dolphinSession == XR_NULL_HANDLE || g_dolphinReferenceSpace == XR_NULL_HANDLE)
+        return nullptr;
+
+    const uintptr_t referenceOffset = offsetof(DolphinOpenXrManagerLayout, referenceSpace);
+    uint8_t* address = nullptr;
+    MEMORY_BASIC_INFORMATION mbi{};
+    while (VirtualQuery(address, &mbi, sizeof(mbi))) {
+        auto* region = static_cast<uint8_t*>(mbi.BaseAddress);
+        const size_t size = mbi.RegionSize;
+        address = region + size;
+
+        if (mbi.State != MEM_COMMIT || !IsWritableProtect(mbi.Protect) ||
+            size < sizeof(DolphinOpenXrManagerLayout)) {
+            continue;
+        }
+
+        const size_t limit = size - sizeof(XrSpace);
+        for (size_t offset = 0; offset <= limit; offset += sizeof(void*)) {
+            XrSpace value = XR_NULL_HANDLE;
+            std::memcpy(&value, region + offset, sizeof(value));
+            if (value != g_dolphinReferenceSpace || offset < referenceOffset)
+                continue;
+
+            uint8_t* candidate = region + offset - referenceOffset;
+            if (LooksLikeDolphinOpenXrManager(candidate))
+                return candidate;
+        }
+    }
+    return nullptr;
+}
+
+bool EnsureDolphinOpenXrManager() {
+    if (g_dolphinSession == XR_NULL_HANDLE || g_dolphinReferenceSpace == XR_NULL_HANDLE)
+        return false;
+
+    if (g_validLocateViewFrames < 300)
+        return false;
+
+    if (!LooksLikeDolphinOpenXrManager(g_dolphinOpenXrManager)) {
+        const uint64_t now = GetTickCount64();
+        if (g_lastManagerScanMs != 0 && now - g_lastManagerScanMs < 1000)
+            return false;
+        g_lastManagerScanMs = now;
+        uint8_t* candidate = FindDolphinOpenXrManager();
+        if (!candidate) {
+            g_lastManagerCandidate = nullptr;
+            g_managerStableScans = 0;
+            g_dolphinOpenXrManager = nullptr;
+            return false;
+        }
+        if (candidate == g_lastManagerCandidate) {
+            ++g_managerStableScans;
+        } else {
+            g_lastManagerCandidate = candidate;
+            g_managerStableScans = 1;
+        }
+        if (g_managerStableScans >= 3) {
+            g_dolphinOpenXrManager = candidate;
+            Log(L"OpenXrHooks found stable Dolphin OpenXRManager for height-only recenter.");
+        }
+    }
+
+    return g_dolphinOpenXrManager != nullptr;
+}
+
+struct PeSectionRange {
+    uint8_t* begin = nullptr;
+    size_t size = 0;
+};
+
+bool GetModuleSection(HMODULE module, const char* sectionName, PeSectionRange& range) {
+    if (!module || !sectionName)
+        return false;
+
+    auto* base = reinterpret_cast<uint8_t*>(module);
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return false;
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return false;
+
+    IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(nt);
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+        char name[9] = {};
+        std::memcpy(name, section[i].Name, sizeof(section[i].Name));
+        if (std::strcmp(name, sectionName) == 0) {
+            range.begin = base + section[i].VirtualAddress;
+            range.size = std::max<size_t>(section[i].Misc.VirtualSize, section[i].SizeOfRawData);
+            return range.begin && range.size != 0;
+        }
+    }
+    return false;
+}
+
+uint8_t* FindBytes(uint8_t* begin, size_t size, const uint8_t* needle, size_t needleSize) {
+    if (!begin || !needle || needleSize == 0 || size < needleSize)
+        return nullptr;
+    const size_t limit = size - needleSize;
+    for (size_t i = 0; i <= limit; ++i) {
+        if (std::memcmp(begin + i, needle, needleSize) == 0)
+            return begin + i;
+    }
+    return nullptr;
+}
+
+uint8_t* FindAscii(uint8_t* begin, size_t size, const char* text) {
+    return FindBytes(begin, size, reinterpret_cast<const uint8_t*>(text), std::strlen(text));
+}
+
+uint8_t* FindRipRelativeLeaTo(uint8_t* begin, size_t size, uint8_t* target) {
+    if (!begin || !target || size < 7)
+        return nullptr;
+    for (size_t i = 0; i + 7 <= size; ++i) {
+        uint8_t* at = begin + i;
+        if (at[0] != 0x48 || at[1] != 0x8D || at[2] != 0x05)
+            continue;
+        int32_t displacement = 0;
+        std::memcpy(&displacement, at + 3, sizeof(displacement));
+        if (at + 7 + displacement == target)
+            return at;
+    }
+    return nullptr;
+}
+
+uint8_t* FindMovssStore(uint8_t* begin, uint8_t* end, uint8_t modrm) {
+    if (!begin || !end || end <= begin)
+        return nullptr;
+    for (uint8_t* at = begin; at + 8 <= end; ++at) {
+        if (at[0] == 0xF3 && at[1] == 0x0F && at[2] == 0x11 && at[3] == modrm)
+            return at;
+    }
+    return nullptr;
+}
+
+int32_t ReadDisp32(const uint8_t* instruction) {
+    int32_t value = 0;
+    std::memcpy(&value, instruction + 4, sizeof(value));
+    return value;
+}
+
+bool NopInstruction(uint8_t* address, size_t length) {
+    if (!address || length == 0)
+        return false;
+
+    bool alreadyNopped = true;
+    for (size_t i = 0; i < length; ++i) {
+        if (address[i] != 0x90) {
+            alreadyNopped = false;
+            break;
+        }
+    }
+    if (alreadyNopped)
+        return true;
+
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(address, length, PAGE_EXECUTE_READWRITE, &oldProtect))
+        return false;
+    std::memset(address, 0x90, length);
+    FlushInstructionCache(GetCurrentProcess(), address, length);
+    DWORD ignored = 0;
+    VirtualProtect(address, length, oldProtect, &ignored);
+    return true;
+}
+
+void InstallHeightOnlyRecenterPatch() {
+    if (g_heightOnlyRecenterPatchInstalled || g_heightOnlyRecenterPatchAttempted)
+        return;
+    g_heightOnlyRecenterPatchAttempted = true;
+
+    HMODULE exe = GetModuleHandleW(nullptr);
+    PeSectionRange text{};
+    PeSectionRange rdata{};
+    if (!GetModuleSection(exe, ".text", text) || !GetModuleSection(exe, ".rdata", rdata)) {
+        Log(L"OpenXrHooks height-only recenter patch failed: PE sections unavailable.");
+        return;
+    }
+
+    constexpr const char* recenterText = "OpenXR: Recentered home position to";
+    uint8_t* recenterString = FindAscii(rdata.begin, rdata.size, recenterText);
+    if (!recenterString) {
+        Log(L"OpenXrHooks height-only recenter patch failed: recenter string not found.");
+        return;
+    }
+
+    uint8_t* recenterLea = FindRipRelativeLeaTo(text.begin, text.size, recenterString);
+    if (!recenterLea) {
+        Log(L"OpenXrHooks height-only recenter patch failed: recenter string xref not found.");
+        return;
+    }
+
+    uint8_t* windowBegin = recenterLea > text.begin + 0x100 ? recenterLea - 0x100 : text.begin;
+    uint8_t* textEnd = text.begin + text.size;
+    uint8_t* windowEnd = std::min(textEnd, recenterLea + 0x240);
+
+    uint8_t* storeX = FindMovssStore(windowBegin, windowEnd, 0x8B);
+    uint8_t* storeY = FindMovssStore(storeX ? storeX + 8 : windowBegin, windowEnd, 0x9B);
+    uint8_t* storeZ = FindMovssStore(storeY ? storeY + 8 : windowBegin, windowEnd, 0x93);
+    if (!storeX || !storeY || !storeZ) {
+        Log(L"OpenXrHooks height-only recenter patch failed: home position stores not found.");
+        return;
+    }
+
+    const int32_t dispX = ReadDisp32(storeX);
+    const int32_t dispY = ReadDisp32(storeY);
+    const int32_t dispZ = ReadDisp32(storeZ);
+    if (!(dispY == dispX + 4 && dispZ == dispY + 4)) {
+        Log(L"OpenXrHooks height-only recenter patch failed: unexpected home store offsets x=" +
+            std::to_wstring(dispX) + L" y=" + std::to_wstring(dispY) + L" z=" + std::to_wstring(dispZ));
+        return;
+    }
+
+    if (!NopInstruction(storeX, 8) || !NopInstruction(storeZ, 8)) {
+        Log(L"OpenXrHooks height-only recenter patch failed: VirtualProtect/NOP failed.");
+        return;
+    }
+
+    g_heightOnlyRecenterPatchInstalled = true;
+    Log(L"OpenXrHooks installed Dolphin height-only recenter patch. Dolphin reset now updates Y only.");
+}
+
+void ApplyDolphinHomeHeightOnly(float headCenterY) {
+    // Disabled after testing: writing Dolphin's OpenXRManager homePosition from
+    // the injected bridge can crash on right-stick recenter because the runtime
+    // object layout is not stable enough to treat as a writable ABI.
+    return;
+    SharedState* state = g_sharedState.load();
+    if (!state || state->settings.viewHeightGeneration == 0)
+        return;
+    if (state->settings.viewHeightGeneration == g_appliedViewHeightGeneration)
+        return;
+    if (!std::isfinite(headCenterY))
+        return;
+    if (!EnsureDolphinOpenXrManager())
+        return;
+
+    auto* manager = reinterpret_cast<DolphinOpenXrManagerLayout*>(g_dolphinOpenXrManager);
+    if (!LooksLikeDolphinOpenXrManager(g_dolphinOpenXrManager))
+        return;
+    manager->homeSet = true;
+    manager->homePosition.y = headCenterY;
+    g_appliedViewHeightGeneration = state->settings.viewHeightGeneration;
+    Log(L"OpenXrHooks applied Dolphin height-only home recenter.");
+}
+
+void CenterViewsForDolphinStartup(uint32_t viewCount, XrView* views) {
+    if (!views || viewCount == 0 || g_startupCenterSpoofFrames == 0)
+        return;
+
+    SharedState* state = g_sharedState.load();
+    float startupHeight = state ? state->settings.viewHeightHomeMeters : 1.6374f;
+    if (!std::isfinite(startupHeight))
+        startupHeight = 1.6374f;
+    startupHeight = std::clamp(startupHeight, 0.4f, 2.4f);
+
+    XrVector3f center = views[0].pose.position;
+    if (viewCount >= 2) {
+        center.x = (views[0].pose.position.x + views[1].pose.position.x) * 0.5f;
+        center.y = (views[0].pose.position.y + views[1].pose.position.y) * 0.5f;
+        center.z = (views[0].pose.position.z + views[1].pose.position.z) * 0.5f;
+    }
+
+    for (uint32_t i = 0; i < viewCount; ++i) {
+        views[i].pose.position.x -= center.x;
+        views[i].pose.position.y += startupHeight - center.y;
+        views[i].pose.position.z -= center.z;
+    }
+    --g_startupCenterSpoofFrames;
 }
 
 PoseState* PoseForSubaction(SharedState* state, XrPath subactionPath) {
@@ -889,7 +1301,8 @@ XrResult XRAPI_PTR Hook_xrCreateActionSpace(XrSession session, const XrActionSpa
         std::lock_guard<std::mutex> guard(g_mutex);
         const auto actionIt = g_actions.find(createInfo->action);
         const auto pathIt = g_paths.find(createInfo->subactionPath);
-        if (actionIt != g_actions.end() && pathIt != g_paths.end() && actionIt->second == "aim_pose") {
+        if (actionIt != g_actions.end() && pathIt != g_paths.end() &&
+            (actionIt->second == "aim_pose" || actionIt->second == "grip_pose")) {
             g_spaces[*space] = actionIt->second + "|" + pathIt->second;
         }
     }
@@ -906,6 +1319,8 @@ XrResult XRAPI_PTR Hook_xrCreateSession(XrInstance instance, const XrSessionCrea
     const XrGraphicsBindingVulkanKHR* vulkanBinding = FindVulkanBinding(createInfo);
     const XrResult result = g_realCreateSession(instance, createInfo, session);
     if (XR_SUCCEEDED(result) && session && *session != XR_NULL_HANDLE) {
+        DestroyPromptSwapchain();
+        DestroyHeightPromptSwapchain();
         CleanupVulkanQuadResources();
         if (g_quadLayer.d3dContext) {
             g_quadLayer.d3dContext->Release();
@@ -939,7 +1354,9 @@ XrResult XRAPI_PTR Hook_xrCreateSession(XrInstance instance, const XrSessionCrea
             g_quadLayer.d3dDevice->GetImmediateContext(&g_quadLayer.d3dContext);
         }
         g_quadLayer.swapchain = XR_NULL_HANDLE;
+        g_quadLayer.promptSwapchain = XR_NULL_HANDLE;
         g_quadLayer.textureReady = false;
+        g_quadLayer.promptTextureReady = false;
         g_quadLayer.warnedNoTexture = false;
         g_quadLayer.warnedCreateFailed = false;
         g_quadLayer.loggedSelectedFormat = false;
@@ -1055,6 +1472,91 @@ bool EnsureD3D11PromptSwapchain() {
     return true;
 }
 
+bool EnsureD3D11HeightPromptSwapchain() {
+    if (g_quadLayer.promptTextureReady && g_quadLayer.promptSwapchain != XR_NULL_HANDLE &&
+        g_quadLayer.promptWidth == 1024 && g_quadLayer.promptHeight == 384) {
+        return true;
+    }
+    if (g_quadLayer.promptSwapchain != XR_NULL_HANDLE)
+        DestroyHeightPromptSwapchain();
+
+    g_quadLayer.promptWidth = 1024;
+    g_quadLayer.promptHeight = 384;
+    if (g_quadLayer.session == XR_NULL_HANDLE || g_quadLayer.graphicsApi != GraphicsApi::D3D11 ||
+        !g_quadLayer.d3dContext || !g_realCreateSwapchain || !g_realEnumerateSwapchainFormats ||
+        !g_realEnumerateSwapchainImages ||
+        !g_realAcquireSwapchainImage || !g_realWaitSwapchainImage || !g_realReleaseSwapchainImage) {
+        return false;
+    }
+
+    SelectSwapchainFormat(GraphicsApi::D3D11, g_quadLayer.format);
+
+    XrSwapchainCreateInfo createInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    createInfo.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+    createInfo.format = g_quadLayer.format;
+    createInfo.sampleCount = 1;
+    createInfo.width = g_quadLayer.promptWidth;
+    createInfo.height = g_quadLayer.promptHeight;
+    createInfo.faceCount = 1;
+    createInfo.arraySize = 1;
+    createInfo.mipCount = 1;
+
+    XrResult result = g_realCreateSwapchain(g_quadLayer.session, &createInfo, &g_quadLayer.promptSwapchain);
+    if (XR_FAILED(result) || g_quadLayer.promptSwapchain == XR_NULL_HANDLE) {
+        Log(L"OpenXR height prompt failed to create D3D11 swapchain result=" + std::to_wstring(result));
+        return false;
+    }
+
+    uint32_t imageCount = 0;
+    result = g_realEnumerateSwapchainImages(g_quadLayer.promptSwapchain, 0, &imageCount, nullptr);
+    if (XR_FAILED(result) || imageCount == 0) {
+        DestroyHeightPromptSwapchain();
+        return false;
+    }
+
+    std::vector<XrSwapchainImageD3D11KHR> images(imageCount, {XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
+    result = g_realEnumerateSwapchainImages(
+        g_quadLayer.promptSwapchain, imageCount, &imageCount,
+        reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
+    if (XR_FAILED(result)) {
+        DestroyHeightPromptSwapchain();
+        return false;
+    }
+
+    const std::vector<uint32_t> pixels = BuildPromptPixels(g_quadLayer.promptWidth, g_quadLayer.promptHeight);
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        uint32_t acquired = 0;
+        XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+        result = g_realAcquireSwapchainImage(g_quadLayer.promptSwapchain, &acquireInfo, &acquired);
+        if (XR_FAILED(result)) {
+            DestroyHeightPromptSwapchain();
+            return false;
+        }
+        XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+        waitInfo.timeout = XR_INFINITE_DURATION;
+        result = g_realWaitSwapchainImage(g_quadLayer.promptSwapchain, &waitInfo);
+        if (XR_FAILED(result)) {
+            DestroyHeightPromptSwapchain();
+            return false;
+        }
+        if (acquired < images.size() && images[acquired].texture) {
+            g_quadLayer.d3dContext->UpdateSubresource(
+                images[acquired].texture, 0, nullptr, pixels.data(),
+                g_quadLayer.promptWidth * sizeof(uint32_t), 0);
+        }
+        XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+        result = g_realReleaseSwapchainImage(g_quadLayer.promptSwapchain, &releaseInfo);
+        if (XR_FAILED(result)) {
+            DestroyHeightPromptSwapchain();
+            return false;
+        }
+    }
+
+    g_quadLayer.promptTextureReady = true;
+    Log(L"OpenXR height prompt D3D11 swapchain ready.");
+    return true;
+}
+
 bool EnsureVulkanPromptSwapchain() {
     SharedState* shared = g_sharedState.load();
     const SettingsState settings = shared ? shared->settings : SettingsState{};
@@ -1144,7 +1646,7 @@ bool EnsureVulkanPromptSwapchain() {
         }
 
         if (acquired < images.size() && images[acquired].image != VK_NULL_HANDLE &&
-            !UploadPromptToVulkanImage(images[acquired].image)) {
+            !UploadPromptToVulkanImage(images[acquired].image, g_quadLayer.width, g_quadLayer.height)) {
             DestroyPromptSwapchain();
             return false;
         }
@@ -1165,14 +1667,107 @@ bool EnsureVulkanPromptSwapchain() {
     return true;
 }
 
-bool ShouldShowQuadPrompt() {
+bool EnsureVulkanHeightPromptSwapchain() {
+    if (g_quadLayer.promptTextureReady && g_quadLayer.promptSwapchain != XR_NULL_HANDLE &&
+        g_quadLayer.promptWidth == 1024 && g_quadLayer.promptHeight == 384) {
+        return true;
+    }
+    if (g_quadLayer.promptSwapchain != XR_NULL_HANDLE)
+        DestroyHeightPromptSwapchain();
+
+    g_quadLayer.promptWidth = 1024;
+    g_quadLayer.promptHeight = 384;
+    if (g_quadLayer.session == XR_NULL_HANDLE || g_quadLayer.graphicsApi != GraphicsApi::Vulkan ||
+        !g_quadLayer.vkDevice || !g_realCreateSwapchain || !g_realEnumerateSwapchainFormats ||
+        !g_realEnumerateSwapchainImages ||
+        !g_realAcquireSwapchainImage || !g_realWaitSwapchainImage || !g_realReleaseSwapchainImage) {
+        return false;
+    }
+
+    SelectSwapchainFormat(GraphicsApi::Vulkan, g_quadLayer.format);
+
+    XrSwapchainCreateInfo createInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    createInfo.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+    createInfo.format = g_quadLayer.format;
+    createInfo.sampleCount = 1;
+    createInfo.width = g_quadLayer.promptWidth;
+    createInfo.height = g_quadLayer.promptHeight;
+    createInfo.faceCount = 1;
+    createInfo.arraySize = 1;
+    createInfo.mipCount = 1;
+
+    XrResult result = g_realCreateSwapchain(g_quadLayer.session, &createInfo, &g_quadLayer.promptSwapchain);
+    if (XR_FAILED(result) || g_quadLayer.promptSwapchain == XR_NULL_HANDLE) {
+        Log(L"OpenXR height prompt failed to create Vulkan swapchain result=" + std::to_wstring(result));
+        return false;
+    }
+
+    uint32_t imageCount = 0;
+    result = g_realEnumerateSwapchainImages(g_quadLayer.promptSwapchain, 0, &imageCount, nullptr);
+    if (XR_FAILED(result) || imageCount == 0) {
+        DestroyHeightPromptSwapchain();
+        return false;
+    }
+
+    std::vector<XrSwapchainImageVulkanKHR> images(imageCount, {XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+    result = g_realEnumerateSwapchainImages(
+        g_quadLayer.promptSwapchain, imageCount, &imageCount,
+        reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
+    if (XR_FAILED(result)) {
+        DestroyHeightPromptSwapchain();
+        return false;
+    }
+
+    const std::vector<uint32_t> pixels = BuildPromptPixels(g_quadLayer.promptWidth, g_quadLayer.promptHeight);
+    if (!EnsureVulkanUploadResources(pixels)) {
+        DestroyHeightPromptSwapchain();
+        return false;
+    }
+
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        uint32_t acquired = 0;
+        XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+        result = g_realAcquireSwapchainImage(g_quadLayer.promptSwapchain, &acquireInfo, &acquired);
+        if (XR_FAILED(result)) {
+            DestroyHeightPromptSwapchain();
+            return false;
+        }
+
+        XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+        waitInfo.timeout = XR_INFINITE_DURATION;
+        result = g_realWaitSwapchainImage(g_quadLayer.promptSwapchain, &waitInfo);
+        if (XR_FAILED(result)) {
+            DestroyHeightPromptSwapchain();
+            return false;
+        }
+
+        if (acquired < images.size() && images[acquired].image != VK_NULL_HANDLE &&
+            !UploadPromptToVulkanImage(images[acquired].image,
+                                       g_quadLayer.promptWidth,
+                                       g_quadLayer.promptHeight)) {
+            DestroyHeightPromptSwapchain();
+            return false;
+        }
+
+        XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+        result = g_realReleaseSwapchainImage(g_quadLayer.promptSwapchain, &releaseInfo);
+        if (XR_FAILED(result)) {
+            DestroyHeightPromptSwapchain();
+            return false;
+        }
+    }
+
+    g_quadLayer.promptTextureReady = true;
+    Log(L"OpenXR height prompt Vulkan swapchain ready.");
+    return true;
+}
+
+bool ShouldShowHeightPrompt() {
     SharedState* state = g_sharedState.load();
-    if (!state || (state->settings.showAlignmentPrompt == 0 && state->settings.vrMenuVisible == 0)) {
+    if (!state || state->settings.showAlignmentPrompt == 0 || state->settings.vrMenuVisible != 0) {
         g_quadLayer.promptFirstFrameMs = 0;
         return false;
     }
-    if (state->settings.vrMenuVisible != 0)
-        return true;
 
     const uint64_t now = GetTickCount64();
     if (g_quadLayer.promptFirstFrameMs == 0) {
@@ -1202,34 +1797,57 @@ XrQuaternionf MulQuat(const XrQuaternionf& a, const XrQuaternionf& b) {
 }
 
 bool BuildQuadLayer(const XrFrameEndInfo* frameEndInfo, XrCompositionLayerQuad& quad) {
-    if (!ShouldShowQuadPrompt() || !frameEndInfo || !frameEndInfo->layers || frameEndInfo->layerCount == 0) {
+    if (!frameEndInfo || !frameEndInfo->layers || frameEndInfo->layerCount == 0) {
         return false;
     }
 
-    if (g_quadLayer.graphicsApi == GraphicsApi::D3D11 && !EnsureD3D11PromptSwapchain()) {
+    SharedState* shared = g_sharedState.load();
+    const bool menuVisible = shared && shared->settings.vrMenuVisible != 0;
+    const bool heightPromptVisible = !menuVisible && ShouldShowHeightPrompt();
+    if (!menuVisible && !heightPromptVisible) {
         return false;
     }
-    if (g_quadLayer.graphicsApi == GraphicsApi::Vulkan && !EnsureVulkanPromptSwapchain()) {
-        return false;
+
+    XrSwapchain layerSwapchain = XR_NULL_HANDLE;
+    uint32_t layerWidth = 0;
+    uint32_t layerHeight = 0;
+    bool textureReady = false;
+
+    if (menuVisible) {
+        if (g_quadLayer.graphicsApi == GraphicsApi::D3D11 && !EnsureD3D11PromptSwapchain()) {
+            return false;
+        }
+        if (g_quadLayer.graphicsApi == GraphicsApi::Vulkan && !EnsureVulkanPromptSwapchain()) {
+            return false;
+        }
+        layerSwapchain = g_quadLayer.swapchain;
+        layerWidth = g_quadLayer.width;
+        layerHeight = g_quadLayer.height;
+        textureReady = g_quadLayer.textureReady;
+    } else {
+        if (g_quadLayer.graphicsApi == GraphicsApi::D3D11 && !EnsureD3D11HeightPromptSwapchain()) {
+            return false;
+        }
+        if (g_quadLayer.graphicsApi == GraphicsApi::Vulkan && !EnsureVulkanHeightPromptSwapchain()) {
+            return false;
+        }
+        layerSwapchain = g_quadLayer.promptSwapchain;
+        layerWidth = g_quadLayer.promptWidth;
+        layerHeight = g_quadLayer.promptHeight;
+        textureReady = g_quadLayer.promptTextureReady;
     }
-    if (!g_quadLayer.textureReady || g_quadLayer.swapchain == XR_NULL_HANDLE) {
+
+    if (!textureReady || layerSwapchain == XR_NULL_HANDLE) {
         if (!g_quadLayer.warnedNoTexture) {
             g_quadLayer.warnedNoTexture = true;
-            Log(L"OpenXR quad prompt has no upload path for graphics=" +
+            Log(L"OpenXR quad overlay has no upload path for graphics=" +
                 std::wstring(GraphicsApiName(g_quadLayer.graphicsApi)));
         }
         return false;
     }
 
     XrSpace space = XR_NULL_HANDLE;
-    for (uint32_t i = 0; i < frameEndInfo->layerCount; ++i) {
-        const XrCompositionLayerBaseHeader* layer = frameEndInfo->layers[i];
-        if (layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
-            space = reinterpret_cast<const XrCompositionLayerProjection*>(layer)->space;
-            break;
-        }
-    }
-    if (space == XR_NULL_HANDLE) {
+    if (!FindFrameProjectionSpace(frameEndInfo, space)) {
         return false;
     }
 
@@ -1238,13 +1856,11 @@ bool BuildQuadLayer(const XrFrameEndInfo* frameEndInfo, XrCompositionLayerQuad& 
                       XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
     quad.space = space;
     quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-    quad.subImage.swapchain = g_quadLayer.swapchain;
+    quad.subImage.swapchain = layerSwapchain;
     quad.subImage.imageRect.offset = {0, 0};
     quad.subImage.imageRect.extent = {
-        static_cast<int32_t>(g_quadLayer.width),
-        static_cast<int32_t>(g_quadLayer.height)};
-    SharedState* shared = g_sharedState.load();
-    const bool menuVisible = shared && shared->settings.vrMenuVisible != 0;
+        static_cast<int32_t>(layerWidth),
+        static_cast<int32_t>(layerHeight)};
     if (menuVisible) {
         const PoseState left = shared->leftHandPose;
         quad.pose.orientation = MulQuat(
@@ -1257,8 +1873,17 @@ bool BuildQuadLayer(const XrFrameEndInfo* frameEndInfo, XrCompositionLayerQuad& 
             left.positionMeters.z + offset.z};
         quad.size = {1.05f, 0.72f};
     } else {
-        quad.pose.orientation = {0.0f, 0.0f, 0.0f, 1.0f};
-        quad.pose.position = {0.0f, -0.08f, -1.35f};
+        const PoseState hmd = shared ? shared->hmdPose : PoseState{};
+        quad.pose.orientation = {
+            hmd.orientation.x,
+            hmd.orientation.y,
+            hmd.orientation.z,
+            hmd.orientation.w};
+        XrVector3f offset = RotateVector(quad.pose.orientation, {0.0f, 0.0f, -1.35f});
+        quad.pose.position = {
+            hmd.positionMeters.x + offset.x,
+            hmd.positionMeters.y + offset.y,
+            hmd.positionMeters.z + offset.z};
         quad.size = {0.675f, 0.25f};
     }
 
@@ -1277,14 +1902,7 @@ bool BuildLaserLayer(const XrFrameEndInfo* frameEndInfo, XrCompositionLayerQuad&
     }
 
     XrSpace space = XR_NULL_HANDLE;
-    for (uint32_t i = 0; i < frameEndInfo->layerCount; ++i) {
-        const XrCompositionLayerBaseHeader* layer = frameEndInfo->layers[i];
-        if (layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
-            space = reinterpret_cast<const XrCompositionLayerProjection*>(layer)->space;
-            break;
-        }
-    }
-    if (space == XR_NULL_HANDLE)
+    if (!FindFrameProjectionSpace(frameEndInfo, space))
         return false;
 
     const PoseState right = shared->rightHandPose;
@@ -1299,13 +1917,13 @@ bool BuildLaserLayer(const XrFrameEndInfo* frameEndInfo, XrCompositionLayerQuad&
     laser.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
     laser.subImage.swapchain = g_quadLayer.swapchain;
     laser.subImage.imageRect.offset = {0, 0};
-    laser.subImage.imageRect.extent = {static_cast<int32_t>(g_quadLayer.width), 10};
+    laser.subImage.imageRect.extent = {16, 10};
     laser.pose.orientation = MulQuat(rightQ, {-half, 0.0f, 0.0f, half});
     laser.pose.position = {
         right.positionMeters.x + forward.x * 0.40f,
         right.positionMeters.y + forward.y * 0.40f,
         right.positionMeters.z + forward.z * 0.40f};
-    laser.size = {0.012f, 0.80f};
+    laser.size = {0.008f, 0.80f};
     return true;
 }
 
@@ -1434,15 +2052,63 @@ XrResult XRAPI_PTR Hook_xrGetActionStateVector2f(XrSession session, const XrActi
     return result;
 }
 
+XrResult XRAPI_PTR Hook_xrCreateReferenceSpace(XrSession session,
+                                               const XrReferenceSpaceCreateInfo* createInfo,
+                                               XrSpace* space) {
+    if (!createInfo || !g_realCreateReferenceSpace) {
+        return g_realCreateReferenceSpace(session, createInfo, space);
+    }
+
+    XrReferenceSpaceCreateInfo stageInfo = *createInfo;
+    XrReferenceSpaceCreateInfo originalInfo = *createInfo;
+    const bool wantsHeadLocalSpace =
+        createInfo->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL ||
+        createInfo->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_STAGE;
+    if (wantsHeadLocalSpace) {
+        stageInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+        stageInfo.poseInReferenceSpace = {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}};
+    }
+
+    XrResult result = g_realCreateReferenceSpace(session, wantsHeadLocalSpace ? &stageInfo : createInfo, space);
+    bool usingStage = wantsHeadLocalSpace && XR_SUCCEEDED(result) && space && *space != XR_NULL_HANDLE;
+    if (wantsHeadLocalSpace && !usingStage) {
+        result = g_realCreateReferenceSpace(session, &originalInfo, space);
+    }
+    if (XR_SUCCEEDED(result) && space && *space != XR_NULL_HANDLE &&
+        (createInfo->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL ||
+         createInfo->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_STAGE)) {
+        g_dolphinSession = session;
+        g_dolphinReferenceSpace = *space;
+        g_dolphinOpenXrManager = nullptr;
+        g_lastManagerScanMs = 0;
+        g_dolphinHomeZeroed = false;
+        g_appliedViewHeightGeneration = 0;
+        g_validLocateViewFrames = 0;
+        g_lastManagerCandidate = nullptr;
+        g_managerStableScans = 0;
+        g_dolphinReferenceSpaceIsStage = usingStage;
+        g_startupCenterSpoofFrames = usingStage ? 180 : 0;
+        Log(usingStage ? L"OpenXrHooks forced Dolphin reference space to STAGE for play-space origin."
+                       : L"OpenXrHooks kept Dolphin original reference space; STAGE was unavailable.");
+    }
+    return result;
+}
+
 XrResult XRAPI_PTR Hook_xrLocateViews(XrSession session, const XrViewLocateInfo* viewLocateInfo,
                                       XrViewState* viewState, uint32_t viewCapacityInput,
                                       uint32_t* viewCountOutput, XrView* views) {
     const XrResult result = g_realLocateViews(session, viewLocateInfo, viewState, viewCapacityInput, viewCountOutput, views);
     if (XR_SUCCEEDED(result) && views && viewCountOutput && *viewCountOutput > 0 && viewState &&
         IsPoseValid(viewState->viewStateFlags)) {
+        const uint32_t count = std::min<uint32_t>(*viewCountOutput, viewCapacityInput);
+        if (g_validLocateViewFrames < 1000000)
+            ++g_validLocateViewFrames;
         SharedState* state = g_sharedState.load();
+        float headCenterY = views[0].pose.position.y;
+        if (count >= 2) {
+            headCenterY = (views[0].pose.position.y + views[1].pose.position.y) * 0.5f;
+        }
         if (state) {
-            const uint32_t count = std::min<uint32_t>(*viewCountOutput, viewCapacityInput);
             XrPosef pose = views[0].pose;
             if (count >= 2) {
                 pose.position.x = (views[0].pose.position.x + views[1].pose.position.x) * 0.5f;
@@ -1452,6 +2118,9 @@ XrResult XRAPI_PTR Hook_xrLocateViews(XrSession session, const XrViewLocateInfo*
             CopyPose(state->hmdPose, pose);
             MarkOpenXrActive(state);
         }
+        InstallHeightOnlyRecenterPatch();
+        ApplyDolphinHomeHeightOnly(headCenterY);
+        CenterViewsForDolphinStartup(count, views);
     }
     return result;
 }
@@ -1468,11 +2137,24 @@ XrResult XRAPI_PTR Hook_xrLocateSpace(XrSpace space, XrSpace baseSpace, XrTime t
         }
 
         SharedState* state = g_sharedState.load();
-        if (state && tag.find("aim_pose") != std::string::npos) {
-            if (tag.find("/user/hand/left") != std::string::npos)
-                CopyPose(state->leftHandPose, location->pose);
-            else if (tag.find("/user/hand/right") != std::string::npos)
-                CopyPose(state->rightHandPose, location->pose);
+        if (state && (tag.find("aim_pose") != std::string::npos ||
+                      tag.find("grip_pose") != std::string::npos)) {
+            const bool isLeft = tag.find("/user/hand/left") != std::string::npos;
+            const bool isRight = tag.find("/user/hand/right") != std::string::npos;
+            PoseState* hand = isLeft ? &state->leftHandPose : (isRight ? &state->rightHandPose : nullptr);
+            if (!hand)
+                return result;
+
+            const uint64_t now = GetTickCount64();
+            uint64_t& gripMs = isLeft ? g_leftGripPoseMs : g_rightGripPoseMs;
+            if (tag.find("grip_pose") != std::string::npos) {
+                CopyPosePosition(*hand, location->pose);
+                gripMs = now;
+            } else {
+                CopyPoseOrientation(*hand, location->pose);
+                if (gripMs == 0 || now - gripMs > 250)
+                    CopyPosePosition(*hand, location->pose);
+            }
             MarkOpenXrActive(state);
         }
     }
@@ -1501,6 +2183,11 @@ PFN_xrVoidFunction WrapProc(const char* name, PFN_xrVoidFunction proc) {
         if (!g_realCreateSession)
             g_realCreateSession = reinterpret_cast<PFN_xrCreateSession>(proc);
         return reinterpret_cast<PFN_xrVoidFunction>(&Hook_xrCreateSession);
+    }
+    if (std::strcmp(name, "xrCreateReferenceSpace") == 0) {
+        if (!g_realCreateReferenceSpace)
+            g_realCreateReferenceSpace = reinterpret_cast<PFN_xrCreateReferenceSpace>(proc);
+        return reinterpret_cast<PFN_xrVoidFunction>(&Hook_xrCreateReferenceSpace);
     }
     if (std::strcmp(name, "xrCreateSwapchain") == 0) {
         if (!g_realCreateSwapchain)
@@ -1813,6 +2500,7 @@ void Poll(SharedState* state) {
 void Shutdown() {
     g_sharedState = nullptr;
     DestroyPromptSwapchain();
+    DestroyHeightPromptSwapchain();
     CleanupVulkanQuadResources();
     Log(L"OpenXrHooks shutdown.");
 }

@@ -90,6 +90,7 @@ static float g_camera_base_prime_x = 0.0f;
 static float g_camera_base_prime_y = 0.0f;
 static float g_camera_base_prime_z = 0.0f;
 static bool g_translation_base_valid = false;
+static std::atomic<uint32_t> g_view_height_generation = 0;
 static float g_last_written_basis[9] = {};
 static float g_last_desired_basis[9] = {};
 static bool g_last_written_basis_valid = false;
@@ -136,6 +137,7 @@ static void app_hook_log(std::wstring_view message) {
         g_hook_log.flush();
     }
 }
+
 
 static std::wstring hex32(uint32_t value) {
     std::wstringstream ss;
@@ -342,6 +344,101 @@ static bool find_ini_section(const std::vector<std::string>& lines, const std::s
     return false;
 }
 
+static bool ini_line_is_section_header(const std::string& line, std::string* section_name = nullptr) {
+    const std::string trimmed = trim_ascii(line);
+    if (trimmed.size() < 2 || trimmed.front() != '[' || trimmed.back() != ']')
+        return false;
+
+    if (section_name)
+        *section_name = trimmed.substr(1, trimmed.size() - 2);
+    return true;
+}
+
+
+static std::vector<std::string> remove_ini_sections(
+    const std::vector<std::string>& lines,
+    const std::vector<std::string>& sections) {
+    std::vector<std::string> output;
+    output.reserve(lines.size());
+
+    bool skipping = false;
+    for (const std::string& line : lines) {
+        std::string section_name;
+        if (ini_line_is_section_header(line, &section_name)) {
+            skipping = std::find(sections.begin(), sections.end(), section_name) != sections.end();
+        }
+
+        if (!skipping)
+            output.push_back(line);
+    }
+    return output;
+}
+
+
+static std::vector<std::string> split_text_lines(const char* text) {
+    std::vector<std::string> lines;
+    std::istringstream in(text);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        lines.push_back(line);
+    }
+    return lines;
+}
+
+
+static void remove_ini_section_line(std::vector<std::string>& lines,
+                                    const std::string& section,
+                                    const std::string& line_to_remove) {
+    const std::string section_header = "[" + section + "]";
+    bool in_section = false;
+    std::vector<std::string> output;
+    output.reserve(lines.size());
+
+    for (const std::string& line : lines) {
+        std::string section_name;
+        if (ini_line_is_section_header(line, &section_name)) {
+            in_section = trim_ascii(line) == section_header;
+            output.push_back(line);
+            continue;
+        }
+
+        if (in_section && trim_ascii(line) == line_to_remove)
+            continue;
+
+        output.push_back(line);
+    }
+
+    lines.swap(output);
+}
+
+
+static void add_ini_section_line(std::vector<std::string>& lines,
+                                 const std::string& section,
+                                 const std::string& line_to_add) {
+    const std::string section_header = "[" + section + "]";
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (trim_ascii(lines[i]) != section_header)
+            continue;
+
+        size_t insert_at = i + 1;
+        for (; insert_at < lines.size(); ++insert_at) {
+            const std::string trimmed = trim_ascii(lines[insert_at]);
+            if (trimmed == line_to_add)
+                return;
+            if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']')
+                break;
+        }
+        lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(insert_at), line_to_add);
+        return;
+    }
+
+    lines.push_back(section_header);
+    lines.push_back(line_to_add);
+}
+
+
 static void write_text_lines_if_changed(const fs::path& path, const std::vector<std::string>& lines) {
     std::ostringstream serialized;
     for (const std::string& line : lines)
@@ -517,6 +614,7 @@ static void apply_ini_section_values(const fs::path& path, const std::string& se
             }
         }
     }
+    
 
     std::vector<std::string> additions;
     for (size_t i = 0; i < values.size(); ++i) {
@@ -629,6 +727,7 @@ static void apply_dolphin_xr_gamecube_controls() {
     }
 }
 
+
 static void sync_dolphin_xr_gamecube_controls(bool enabled) {
     if (enabled) {
         apply_dolphin_xr_gamecube_controls();
@@ -649,20 +748,55 @@ static void restore_dolphin_borrowed_controls() {
     g_last_auto_dolphin_xr_controls = false;
 }
 
-static void apply_dolphin_vr_units_per_meter() {
-    const fs::path path = dolphin_gm8e01_vr_settings_path();
-    if (path.empty())
-        return;
+static std::vector<fs::path> dolphin_gm8e01_vr_settings_paths();
 
-    const std::vector<std::pair<std::string, std::string>> graphics_values = {
+static void apply_dolphin_vr_units_per_meter() {
+    const std::vector<std::pair<std::string, std::string>> forced_vr_values = {
         {"UnitsPerMeter", "1.50"},
+        {"LeanBackAngle", "0."},
+        {"CameraForward", "0."},
+        {"HeadLockedCurvature", "0."},
+        {"ElementDepth", "0.0010"},
     };
-    apply_ini_section_values(path, "Graphics.VR", graphics_values, {});
+    const std::vector<std::string> inherited_vr_keys = {
+        "VirtualScreen",
+        "DontClearScreen",
+        "OpcodeReplay",
+        "AutoVBIFromHMD",
+    };
 
     const std::vector<std::pair<std::string, std::string>> legacy_values = {
         {"UnitsPerMetre", "1.50"},
     };
-    apply_ini_section_values(path, "VR", legacy_values, {});
+
+    for (const fs::path& path : dolphin_gm8e01_vr_settings_paths()) {
+        if (path.empty())
+            continue;
+
+        apply_ini_section_values(path, "Graphics.VR", forced_vr_values, inherited_vr_keys);
+        apply_ini_section_values(path, "GFX.VR", {}, inherited_vr_keys);
+        apply_ini_section_values(path, "VR", legacy_values, inherited_vr_keys);
+        app_hook_log(L"Applied PrimedGun GM8E01 VR defaults in " + path.wstring());
+    }
+}
+
+static void apply_dolphin_60fps_cap() {
+    if (!g_settings.dolphin_60fps_cap)
+        return;
+
+    const fs::path path = dolphin_ini_path();
+    if (path.empty())
+        return;
+
+    backup_file_once(path);
+    apply_ini_section_values(path, "Core",
+                             {{"EmulationSpeed", "1."},
+                              {"OverclockEnable", "False"},
+                              {"Overclock", "1."},
+                              {"VIOverclockEnable", "False"},
+                              {"VIOverclock", "1."}},
+                             {});
+    app_hook_log(L"Applied Dolphin 60 FPS cap: normal speed with CPU and VI overclock disabled.");
 }
 
 static void apply_dolphin_xr_camera_forward_zero() {
@@ -690,6 +824,457 @@ static void disable_unmanaged_dolphin_codes() {
     disable_unmanaged_dolphin_codes_in(dolphin_gm8e01_settings_path());
     disable_unmanaged_dolphin_codes_in(dolphin_gm8e01_vr_settings_path());
 }
+
+static std::optional<DWORD> find_process_id_by_name(const wchar_t* exe_name);
+
+static std::optional<fs::path> dolphin_process_path(DWORD process_id) {
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
+    if (!process)
+        return std::nullopt;
+
+    std::wstring buffer(32768, L'\0');
+    DWORD size = static_cast<DWORD>(buffer.size());
+    const BOOL ok = QueryFullProcessImageNameW(process, 0, buffer.data(), &size);
+    CloseHandle(process);
+    if (!ok || size == 0)
+        return std::nullopt;
+
+    buffer.resize(size);
+    return fs::path(buffer);
+}
+
+
+static void add_unique_path(std::vector<fs::path>& paths, const fs::path& path) {
+    if (path.empty())
+        return;
+
+    std::error_code ec;
+    const fs::path normalized = fs::weakly_canonical(path, ec);
+    const fs::path candidate = ec ? fs::absolute(path, ec) : normalized;
+    const std::wstring candidate_text = candidate.wstring();
+    for (const fs::path& existing : paths) {
+        std::error_code existing_ec;
+        const fs::path existing_normalized = fs::weakly_canonical(existing, existing_ec);
+        const std::wstring existing_text = (existing_ec ? existing : existing_normalized).wstring();
+        if (_wcsicmp(existing_text.c_str(), candidate_text.c_str()) == 0)
+            return;
+    }
+    paths.push_back(path);
+}
+
+
+static std::vector<fs::path> dolphin_gm8e01_vr_settings_paths() {
+    std::vector<fs::path> paths;
+    add_unique_path(paths, dolphin_gm8e01_vr_settings_path());
+
+    const std::optional<DWORD> dolphin_pid = find_process_id_by_name(L"Dolphin.exe");
+    if (!dolphin_pid)
+        return paths;
+
+    const std::optional<fs::path> dolphin_path = dolphin_process_path(*dolphin_pid);
+    if (!dolphin_path)
+        return paths;
+
+    const fs::path exe_dir = dolphin_path->parent_path();
+    add_unique_path(paths, exe_dir / L"GameSettingsVR" / L"GM8E01.ini");
+    if (exe_dir.has_parent_path())
+        add_unique_path(paths, exe_dir.parent_path() / L"GameSettingsVR" / L"GM8E01.ini");
+    return paths;
+}
+
+
+static const char* primedgun_gm8e01_vr_shader_profile() {
+return R"ini([ShaderOverride_Enable]
+$Unnamed Shader 1
+$Unnamed Shader 2
+$Unnamed Shader 3
+$Unnamed Shader 4
+$Unnamed Shader 5
+$Unnamed Shader 6
+$Unnamed Shader 7
+$Unnamed Shader 8
+$Unnamed Shader 9
+$Unnamed Shader 10
+$Unnamed Shader 11
+$Unnamed Shader 12
+$Unnamed Shader 13
+$Unnamed Shader 14
+$Unnamed Shader 15
+$Unnamed Shader 17
+$Unnamed Shader 18
+$Unnamed Shader 19
+$Unnamed Shader 21
+$Unnamed Shader 22
+$Unnamed Shader 23
+$Unnamed Shader 24
+$Unnamed Shader 25
+$Unnamed Shader 26
+$Unnamed Shader 27
+$Unnamed Shader 28
+[ShaderOverride]
+$Unnamed Shader 1
+Hash=000000000f312e21
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+layer=0
+texture_mode=include
+texture=5a8bf056331986c0
+
+$Unnamed Shader 2
+Hash=000000001fa17058
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=5a8bf056331986c0
+
+$Unnamed Shader 3
+Hash=0000000075945182
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=091f5d24144ede56
+texture=1887bd9eea299c6f
+texture=3c96a23daee3b1ba
+texture=49679a7ccbbbdefb
+texture=7b99549023d73d0e
+texture=a63ebdc372c2c2b0
+texture=b2f411682a7de4a5
+texture=b9b77bed5f7fe2d2
+texture=e433bfd213466a50
+texture=f394c71d898aa628
+texture=f6415ff79092ca08
+
+$Unnamed Shader 4
+Hash=00000000a1291ea6
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=5a8bf056331986c0
+
+$Unnamed Shader 5
+Hash=00000000bd217dc5
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=4659c82198269108
+
+$Unnamed Shader 6
+Hash=00000000c1202e58
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=5a8bf056331986c0
+
+$Unnamed Shader 7
+Hash=00000000d8ab2990
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=47382578f2df4238
+texture=5a8bf056331986c0
+
+$Unnamed Shader 8
+Hash=00000000f5f6bd31
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=5a8bf056331986c0
+
+$Unnamed Shader 9
+Hash=00000000076435a1
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=5a8bf056331986c0
+texture=b093592e137cb513
+
+$Unnamed Shader 10
+Hash=0000000017f46bd8
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=5a8bf056331986c0
+texture=7b99549023d73d0e
+texture=a63ebdc372c2c2b0
+
+$Unnamed Shader 11
+Hash=000000006d51147b
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=091f5d24144ede56
+texture=1887bd9eea299c6f
+texture=3c96a23daee3b1ba
+texture=4659c82198269108
+texture=49679a7ccbbbdefb
+texture=7b99549023d73d0e
+texture=a63ebdc372c2c2b0
+texture=b9b77bed5f7fe2d2
+texture=e433bfd213466a50
+texture=f394c71d898aa628
+texture=f6415ff79092ca08
+
+$Unnamed Shader 12
+Hash=00000000a5e4383c
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=4659c82198269108
+
+$Unnamed Shader 13
+Hash=00000000b9ec5b5f
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=5a8bf056331986c0
+
+$Unnamed Shader 14
+Hash=00000000c06e6c69
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=47382578f2df4238
+texture=5a8bf056331986c0
+
+$Unnamed Shader 15
+Hash=00000000ed33f8c8
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=02f5631fb7a3b6ff
+texture=5a8bf056331986c0
+
+$Unnamed Shader 17
+Hash=00000000d9e56ba1
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=5a8bf056331986c0
+
+$Unnamed Shader 18
+Hash=00000000076435a1
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=02f5631fb7a3b6ff
+texture=847faa3fbc72fafd
+texture=c2f7a381aa992132
+
+$Unnamed Shader 19
+Hash=0000000017f46bd8
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=6213dc7b4cea2067
+texture=7b99549023d73d0e
+texture=847faa3fbc72fafd
+
+$Unnamed Shader 21
+Hash=00000000b9ec5b5f
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=847faa3fbc72fafd
+texture=d642fe322e4d3ac8
+texture=de81ade3d6923bae
+texture=fd423b037c7bf9d8
+
+$Unnamed Shader 22
+Hash=00000000d9e56ba1
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=6213dc7b4cea2067
+
+$Unnamed Shader 23
+Hash=00000000ed33f8c8
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=6213dc7b4cea2067
+
+$Unnamed Shader 24
+Hash=00000000c06e6c69
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=47382578f2df4238
+texture=847faa3fbc72fafd
+texture=e8f3888a8db51c51
+
+$Unnamed Shader 25
+Hash=0000000017f46bd8
+Type=PS
+match_mode=exact_hash
+handling=skip
+texture_mode=include
+texture=98d66e7812c70dd8
+
+$Unnamed Shader 26
+Hash=0000000053bb9636
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+
+$Unnamed Shader 27
+Hash=00000000ed33f8c8
+Type=PS
+match_mode=exact_hash
+handling=fullscreen
+texture_mode=include
+texture=847faa3fbc72fafd
+
+$Unnamed Shader 28
+Hash=00000000c06e6c69
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=b0f5bd8d58ca0c28
+texture=c30411f60672bd23
+texture=e8f3888a8db51c51
+)ini";
+}
+
+
+static std::string primedgun_shader_test_mode() {
+    const fs::path path = exe_directory() / L"primedgun_shader_test_mode.txt";
+    std::ifstream in(path);
+    std::string mode;
+    if (!std::getline(in, mode))
+        return {};
+    return trim_ascii(mode);
+}
+
+
+static void append_hud_texture_skip_overrides(std::vector<std::string>& shader_lines) {
+    if (!g_app.shader_texture_skip_enabled)
+        return;
+
+    g_app.shader_texture_skip_index = std::clamp(
+        g_app.shader_texture_skip_index, 0,
+        static_cast<int>(std::size(kHudTextureHashes)) - 1);
+    const std::string texture = kHudTextureHashes[g_app.shader_texture_skip_index];
+
+    static constexpr const char* kHudSkipShaderHashes[] = {
+        "00000000c06e6c69",
+        "00000000b9ec5b5f",
+        "0000000053bb9636",
+        "00000000ed33f8c8",
+        "00000000d9e56ba1",
+        "000000000f312e21",
+        "000000001fa17058",
+        "00000000a1291ea6",
+        "00000000bd217dc5",
+        "00000000d8ab2990",
+        "00000000f5f6bd31",
+        "00000000c1202e58",
+        "00000000076435a1",
+        "000000006d51147b",
+        "0000000075945182",
+    };
+
+    for (size_t i = 0; i < std::size(kHudSkipShaderHashes); ++i) {
+        const std::string name = "$PG Texture Skip " + std::to_string(i);
+        add_ini_section_line(shader_lines, "ShaderOverride_Enable", name);
+        shader_lines.push_back({});
+        shader_lines.push_back(name);
+        shader_lines.push_back(std::string("Hash=") + kHudSkipShaderHashes[i]);
+        shader_lines.push_back("Type=PS");
+        shader_lines.push_back("match_mode=exact_hash");
+        shader_lines.push_back("handling=skip");
+        shader_lines.push_back("texture_mode=include");
+        shader_lines.push_back("texture=" + texture);
+    }
+}
+
+
+static void apply_primedgun_shader_test_mode(std::vector<std::string>& shader_lines,
+                                             const std::string& mode) {
+    if (!g_app.shader_hud_core_elements)
+        remove_ini_section_line(shader_lines, "ElementsGroupOverride_Enable", "$HUD Core Elements");
+    if (!g_app.shader_visor_beam_icon)
+        remove_ini_section_line(shader_lines, "ShaderOverride_Enable", "$HUD Visor & Beam Icon");
+    if (!g_app.shader_area_variant_4)
+        remove_ini_section_line(shader_lines, "ShaderOverride_Enable", "$HUD Area Variant 4");
+    if (!g_app.shader_missing_map_shader)
+        remove_ini_section_line(shader_lines, "ShaderOverride_Enable", "$HUD Missing Map Shader");
+
+    if (mode == "disable_c06e6c69" || mode == "disable_visor_beam_icon") {
+        remove_ini_section_line(shader_lines, "ShaderOverride_Enable", "$HUD Visor & Beam Icon");
+    } else if (mode == "disable_d8ab2990" || mode == "disable_area_variant_4") {
+        remove_ini_section_line(shader_lines, "ShaderOverride_Enable", "$HUD Area Variant 4");
+    } else if (mode == "disable_c1202e58" || mode == "disable_missing_map_shader") {
+        remove_ini_section_line(shader_lines, "ShaderOverride_Enable", "$HUD Missing Map Shader");
+    } else if (mode == "disable_hud_core_elements") {
+        remove_ini_section_line(shader_lines, "ElementsGroupOverride_Enable", "$HUD Core Elements");
+    }
+    append_hud_texture_skip_overrides(shader_lines);
+}
+
+
+static void apply_primedgun_vr_shader_profile_in(const fs::path& path) {
+    if (path.empty())
+        return;
+
+    backup_file_once(path);
+
+    std::vector<std::string> lines = remove_ini_sections(
+        read_text_lines(path),
+        {"ShaderOverride_Enable", "ShaderOverride",
+         "ElementsGroupOverride_Enable", "ElementsGroupOverride"});
+
+    while (!lines.empty() && lines.back().empty())
+        lines.pop_back();
+    if (!lines.empty())
+        lines.push_back({});
+
+    std::vector<std::string> shader_lines =
+        split_text_lines(primedgun_gm8e01_vr_shader_profile());
+    apply_primedgun_shader_test_mode(shader_lines, primedgun_shader_test_mode());
+    lines.insert(lines.end(), shader_lines.begin(), shader_lines.end());
+    write_text_lines_if_changed(path, lines);
+}
+
+
+static void apply_primedgun_vr_shader_profile() {
+    if (fs::exists(exe_directory() / L"primedgun_shader_capture_mode.txt")) {
+        app_hook_log(L"Skipped PrimedGun GM8E01 VR shader profile; shader capture mode is enabled.");
+        return;
+    }
+
+    for (const fs::path& path : dolphin_gm8e01_vr_settings_paths()) {
+        apply_primedgun_vr_shader_profile_in(path);
+        std::wstring suffix;
+        const std::string mode = primedgun_shader_test_mode();
+        if (!mode.empty())
+            suffix = L" (test mode: " + std::wstring(mode.begin(), mode.end()) + L")";
+        app_hook_log(L"Forced PrimedGun GM8E01 VR shader profile in " + path.wstring() + suffix);
+    }
+}
+
 
 static std::vector<LoadedPatch> load_app_patch_files() {
     std::vector<LoadedPatch> patches;
@@ -914,9 +1499,10 @@ static void ensure_shared_state() {
     if (state->magic != PrimedGun::SharedStateMagic || state->version != PrimedGun::SharedStateVersion)
         *state = PrimedGun::SharedState{};
     state->appHeartbeat++;
+    const uint32_t next_patch_generation = state->patch.generation + 1;
     state->patch = PrimedGun::PatchState{};
     state->patch.count = static_cast<uint32_t>(std::min<size_t>(patches.size(), PrimedGun::MaxGamePatches));
-    state->patch.generation++;
+    state->patch.generation = next_patch_generation;
     for (uint32_t i = 0; i < state->patch.count; ++i) {
         state->patch.patches[i].enabled = 1;
         state->patch.patches[i].address = patches[i].address;
@@ -963,6 +1549,7 @@ static void verify_app_patches_applied() {
     }
 }
 
+
 static bool app_patches_are_applied() {
     if (!open_live_shared_state() || !g_shared_state)
         return false;
@@ -976,6 +1563,33 @@ static bool app_patches_are_applied() {
     }
     return true;
 }
+
+static void apply_helmet_opacity_zero() {
+    if (!g_app.dolphin_ok || !g_app.game_rev0_ok || !g_dolphin.is_connected())
+        return;
+
+    constexpr uint32_t k_gp_game_state = 0x805A8C40u;
+    constexpr uint32_t k_game_options_helmet_alpha_offset = 0x17Cu + 0x64u;
+    const uint32_t game_state = g_dolphin.read_u32(k_gp_game_state);
+    if (game_state < 0x80000000)
+        return;
+
+    const uint32_t helmet_alpha_addr = game_state + k_game_options_helmet_alpha_offset;
+    const uint32_t current = g_dolphin.read_u32(helmet_alpha_addr);
+    if (current == 0)
+        return;
+
+    if (current <= 0xff) {
+        g_dolphin.write_u32(helmet_alpha_addr, 0);
+        static uint32_t last_logged_game_state = 0;
+        if (last_logged_game_state != game_state) {
+            last_logged_game_state = game_state;
+            app_hook_log(L"PrimedGun set Helmet Opacity to 0 for game state " + hex32(game_state) + L".");
+        }
+    }
+}
+    
+
 
 static bool open_live_shared_state() {
     if (g_shared_state)
@@ -1013,6 +1627,7 @@ static void close_live_shared_state() {
     }
 }
 
+
 static Pose pose_from_shared(const PrimedGun::PoseState& in) {
     Pose out{};
     out.px = in.positionMeters.x;
@@ -1029,6 +1644,43 @@ static Pose pose_from_shared(const PrimedGun::PoseState& in) {
     out.valid = true;
     return out;
 }
+
+static float normalized_view_height_meters(float height) {
+    if (!std::isfinite(height))
+        return kDefaultViewHeightMeters;
+    return std::clamp(height, 0.4f, 2.4f);
+}
+
+
+static float current_view_height_meters() {
+    g_settings.view_height_meters = normalized_view_height_meters(g_settings.view_height_meters);
+    return g_settings.view_height_meters;
+}
+
+
+static float current_view_height_prime_z() {
+    return 0.0f;
+}
+
+
+static void publish_view_height_to_shared() {
+    if (!g_shared_state)
+        return;
+    g_shared_state->settings.viewHeightHomeMeters = current_view_height_meters();
+    g_shared_state->settings.viewHeightGeneration = g_view_height_generation.load(std::memory_order_relaxed);
+}
+
+
+static void calibrate_view_height_from_hmd(float hmd_height_meters) {
+    const float height = normalized_view_height_meters(hmd_height_meters);
+    g_view_height_generation.fetch_add(1, std::memory_order_relaxed);
+    g_settings.view_height_meters = height;
+    g_settings.save();
+    publish_view_height_to_shared();
+    app_hook_log(L"PrimedGun height calibration set Dolphin HMD home height to " +
+                 std::to_wstring(height) + L" m.");
+}
+
 
 static bool get_dolphinxr_poses(bool right_hand, Pose& controller, Pose& left_controller, Pose& hmd) {
     controller = {};
@@ -1248,7 +1900,10 @@ static void sync_vr_settings_to_shared(uint32_t generation, bool visible, uint32
     s.directionalMovementSpeed = g_settings.directional_movement_speed;
     s.directionalMovementAccel = g_settings.directional_movement_accel;
     s.directionalMovementAirAccel = g_settings.directional_movement_air_accel;
+    s.viewHeightHomeMeters = current_view_height_meters();
+    s.viewHeightGeneration = g_view_height_generation.load(std::memory_order_relaxed);
 }
+
 
 static bool ensure_dolphin_hook_loaded() {
     ensure_shared_state();
@@ -1365,12 +2020,14 @@ static void write_contiguous_basis9(uint32_t addr, const float* basis) {
     }
 }
 
+
 static void clear_u32_range(uint32_t addr, int words) {
     if (addr < 0x80000000) return;
     for (int i = 0; i < words; ++i) {
         g_dolphin.write_u32(addr + static_cast<uint32_t>(i * 4), 0);
     }
 }
+
 
 static bool resolve_active_camera_transform_addr(uint32_t& camera_addr);
 static bool read_player_yaw_from_transform2d(uint32_t addr, float& yaw_deg_out);
@@ -1399,6 +2056,7 @@ static void update_game_revision_detection() {
     }
 }
 
+
 static bool prime_game_is_loaded_in_ram() {
     if (!g_dolphin.is_connected())
         return false;
@@ -1426,6 +2084,7 @@ static const char* xr_dpad_dir_name(XrDpadDir dir) {
     default: return "none";
     }
 }
+
 
 static XrDpadDir get_stick_dpad_direction(float x, float y, float deadzone) {
     const float ax = std::fabs(x);
@@ -1971,6 +2630,7 @@ static void update_cannon_rotation_debug(uint32_t gun_ptr, const float* target_m
     }
 }
 
+
 static Matrix3x4 read_debug_matrix3x4(uint32_t addr) {
     Matrix3x4 mat = {};
     for (int row = 0; row < 3; ++row) {
@@ -2412,18 +3072,21 @@ static void disarm_memory_writes() {
     }
 }
 
+
 static void log_player_owned_projectiles(uint32_t state_mgr, uint32_t player, uint32_t gun_ptr, const float* basis) {
     if (!g_dolphin.is_connected())
         return;
 
     constexpr uint32_t k_object_list_offset = 0x810;
     constexpr uint32_t k_max_objects = 1024;
+    constexpr uint32_t k_scan_chunk = 64;
     static uint32_t seen[k_max_objects] = {};
+    static uint32_t next_scan_index = 0;
     static auto last_scan = std::chrono::steady_clock::time_point{};
 
     const auto now = std::chrono::steady_clock::now();
     if (last_scan.time_since_epoch().count() != 0 &&
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - last_scan).count() < 8) {
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - last_scan).count() < 12) {
         return;
     }
     last_scan = now;
@@ -2436,7 +3099,11 @@ static void log_player_owned_projectiles(uint32_t state_mgr, uint32_t player, ui
     if (player_uid == 0xffff)
         return;
 
-    for (uint32_t i = 0; i < k_max_objects; ++i) {
+    const uint32_t start_index = next_scan_index % k_max_objects;
+    next_scan_index = (start_index + k_scan_chunk) % k_max_objects;
+
+    for (uint32_t n = 0; n < k_scan_chunk; ++n) {
+        const uint32_t i = (start_index + n) % k_max_objects;
         const uint32_t obj = g_dolphin.read_u32(object_list + (i << 3) + 4);
         if (obj < 0x80000000 || obj == player || obj == gun_ptr)
             continue;
@@ -2444,6 +3111,10 @@ static void log_player_owned_projectiles(uint32_t state_mgr, uint32_t player, ui
         const uint32_t obj_uid_word = g_dolphin.read_u32(obj + 0x8);
         const uint16_t owner_uid = static_cast<uint16_t>(g_dolphin.read_u32(obj + 0xec) >> 16);
         if (owner_uid != player_uid)
+            continue;
+
+        const uint32_t marker = obj ^ obj_uid_word ^ (static_cast<uint32_t>(owner_uid) << 16);
+        if (seen[i] == marker)
             continue;
 
         float ox, oy, oz;
@@ -2454,19 +3125,19 @@ static void log_player_owned_projectiles(uint32_t state_mgr, uint32_t player, ui
 
         const bool can_correct_projectile =
             have_velocity && looks_like_real_player_projectile(obj, owner_uid);
-        const uint32_t marker = obj ^ obj_uid_word ^ (static_cast<uint32_t>(owner_uid) << 16);
-        const bool already_corrected = can_correct_projectile && seen[i] == marker;
 
-        if (can_correct_projectile && !already_corrected) {
+        if (can_correct_projectile) {
             write_basis_preserve_translation(obj + 0x34, basis);
             write_basis_preserve_translation(obj + 0x170 + 0x14, basis);
             seen[i] = marker;
         }
         const bool billboarded = false;
-        if (!can_correct_projectile || already_corrected)
+        if (!can_correct_projectile)
             continue;
+        (void)billboarded;
     }
 }
+
 
 static void log_projectile_fire_debug(const char* label, uint32_t base_addr, uint32_t& last_count) {
     (void)label;
@@ -2586,6 +3257,7 @@ static void rotate_prime_matrix_yaw(Matrix3x4& mat, float yaw_deg) {
         mat.at(1, col) = s * x + c * y;
     }
 }
+
 
 static void apply_tracking_world_yaw(Pose& pose, float yaw_deg) {
     const float yaw_rad = yaw_deg * (static_cast<float>(M_PI) / 180.0f);
@@ -3078,7 +3750,7 @@ static void write_gun_targeting(uint32_t state_mgr, uint32_t player, uint32_t gu
                               s_last_pick_gun == gun_ptr;
     const bool throttle_scan = same_context &&
                                s_last_pick_time.time_since_epoch().count() != 0 &&
-                               std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last_pick_time).count() < 33;
+                               std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last_pick_time).count() < 66;
 
     GunTargetPick pick = {};
     bool found = false;
@@ -3186,16 +3858,20 @@ static void write_gun_matrix(const Matrix3x4& mat) {
         g_app.dbg_world_xf = world_xf;
         g_app.dbg_local_xf = local_xf;
 
+        static uint32_t s_last_validated_gun_ptr = 0;
         const bool gun_chain_valid =
-            looks_like_transform_matrix(gun_xf) &&
-            looks_like_transform_matrix(beam_xf) &&
-            looks_like_transform_matrix(world_xf) &&
-            looks_like_transform_matrix(local_xf);
+            s_last_validated_gun_ptr == gun_ptr ||
+            (looks_like_transform_matrix(gun_xf) &&
+             looks_like_transform_matrix(beam_xf) &&
+             looks_like_transform_matrix(world_xf) &&
+             looks_like_transform_matrix(local_xf));
         if (!gun_chain_valid) {
+            s_last_validated_gun_ptr = 0;
             mark_cannon_transform_not_ready();
             disarm_memory_writes();
             return;
         }
+        s_last_validated_gun_ptr = gun_ptr;
         mark_cannon_transform_ready(player, gun_ptr);
         if (addrs.gun_pos >= 0x80000000) {
             g_dolphin.write_float(addrs.gun_pos + 0, g_smooth_mat[3]);
@@ -3228,6 +3904,7 @@ static void write_gun_matrix(const Matrix3x4& mat) {
         return;
     }
 }
+
 
 static void tracking_thread() {
     using clock = std::chrono::high_resolution_clock;
@@ -3270,8 +3947,9 @@ static void tracking_thread() {
     }
 }
 
+
 static void dpad_thread() {
-    constexpr auto k_tick = std::chrono::milliseconds(1);
+    constexpr auto k_tick = std::chrono::milliseconds(4);
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
     HighResWaitTimer wait_timer;
 
@@ -3300,6 +3978,8 @@ static void dpad_thread() {
         }
     }
 }
+    
+
 
 static void write_scan_pitch_from_controller_matrix(const Matrix3x4& mat) {
     if (!g_dolphin.is_connected() || !g_app.dolphin_ok)
@@ -3380,6 +4060,19 @@ static void writer_thread() {
                 g_settings.rot_offset_x, g_settings.rot_offset_y, g_settings.rot_offset_z,
                 g_settings.world_scale
             );
+            const Pose& right_controller = g_settings.use_right_hand ? pose : left_pose;
+            static bool last_right_thumbstick_click = false;
+            const bool right_thumbstick_click =
+                g_app.active && g_app.dolphin_ok && right_controller.valid && hmd_pose.valid &&
+                right_controller.thumbstick_click;
+            if (right_thumbstick_click && !last_right_thumbstick_click) {
+                calibrate_view_height_from_hmd(hmd_pose.py);
+                g_controller_base_prime_z = hmd_pose.py * g_settings.world_scale;
+                g_translation_base_valid = true;
+                app_hook_log(L"PrimedGun height-only cannon baseline reset.");
+            }
+            last_right_thumbstick_click = right_thumbstick_click;
+
             if (g_app.recenter_requested.exchange(false, std::memory_order_relaxed) ||
                 !g_translation_base_valid) {
                 g_camera_base_prime_x = 0.0f;
@@ -3387,8 +4080,9 @@ static void writer_thread() {
                 g_camera_base_prime_z = 0.0f;
                 g_controller_base_prime_x = 0.0f;
                 g_controller_base_prime_y = 0.0f;
-                g_controller_base_prime_z = 0.0f;
+                g_controller_base_prime_z = current_view_height_prime_z();
                 g_translation_base_valid = true;
+                publish_view_height_to_shared();
             }
 
             Matrix3x4 mat = pose_to_prime_matrix(
@@ -3442,6 +4136,7 @@ static void writer_thread() {
     }
 }
 
+
 static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
     if (msg == WM_CLOSE) {
@@ -3488,6 +4183,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     g_settings.load();
     open_app_hook_log();
     apply_dolphin_vr_units_per_meter();
+    apply_dolphin_60fps_cap();
+    apply_primedgun_vr_shader_profile();
     apply_dolphin_xr_camera_forward_zero();
     disable_unmanaged_dolphin_codes();
     sync_dolphin_xr_gamecube_controls(g_settings.auto_dolphin_xr_controls);
@@ -3564,6 +4261,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             g_app.active = false;
             g_app.dolphin_ok = false;
             g_dolphin.disconnect();
+            apply_primedgun_vr_shader_profile();
             ensure_dolphin_hook_loaded();
             g_app.dolphin_ok = g_dolphin.connect();
             g_app.dolphin_status = g_dolphin.status();
@@ -3575,6 +4273,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             sync_dolphin_xr_gamecube_controls(g_settings.auto_dolphin_xr_controls);
             g_settings.save();
         }
+        if (g_app.dolphin_performance_apply_requested.exchange(false, std::memory_order_relaxed)) {
+            apply_dolphin_60fps_cap();
+            g_settings.save();
+        }
+        if (g_app.shader_profile_apply_requested.exchange(false, std::memory_order_relaxed)) {
+            apply_primedgun_vr_shader_profile();
+        }
 
         static auto last_dolphin_auto_connect = std::chrono::steady_clock::time_point{};
         static DWORD last_auto_hook_pid = 0;
@@ -3585,6 +4290,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             last_dolphin_auto_connect = now;
             const std::optional<DWORD> dolphin_pid = find_process_id_by_name(L"Dolphin.exe");
             if (dolphin_pid && *dolphin_pid != last_auto_hook_pid) {
+                apply_primedgun_vr_shader_profile();
                 ensure_dolphin_hook_loaded();
                 last_auto_hook_pid = *dolphin_pid;
             } else if (!dolphin_pid) {
@@ -3666,6 +4372,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                     ++vr_settings_generation;
                 }
             }
+            
             const bool right_select = vr_right_pose.valid &&
                 (vr_right_pose.button_a || vr_right_pose.trigger_click);
             if (vr_settings_visible && menu_pointer_active && right_select && !last_right_select) {
@@ -3683,6 +4390,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                     ++vr_settings_generation;
                 }
             }
+            
             last_right_select = right_select;
             sync_vr_settings_to_shared(vr_settings_generation, vr_settings_visible, vr_settings_selected,
                                        menu_pointer_active, menu_pointer_x, menu_pointer_y);
@@ -3694,6 +4402,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             static bool skipped_first_prompt_ready = false;
             static bool waiting_for_second_prompt_ready = false;
             static bool alignment_prompt_shown_this_launch = false;
+            static bool last_prompt_right_thumb_click = false;
             static bool game_loaded_session_active = false;
             const auto addrs = get_addresses();
             const uint32_t state_mgr = addrs.state_manager;
@@ -3712,7 +4421,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                     first_prompt_ready_timeout_until = {};
                     alignment_prompt_show_until = {};
                     gameplay_ready_since = {};
-                    app_hook_log(L"Prompt gate: game loaded in RAM; alignment prompt re-armed.");
+                    last_prompt_right_thumb_click = false;
+                    app_hook_log(L"Prompt gate: game loaded in RAM; gameplay height prompt armed.");
                 }
             } else {
                 if (game_loaded_session_active && game_session_inactive_since.time_since_epoch().count() == 0) {
@@ -3727,9 +4437,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                     first_prompt_ready_timeout_until = {};
                     alignment_prompt_show_until = {};
                     gameplay_ready_since = {};
+                    last_prompt_right_thumb_click = false;
                     app_hook_log(L"Prompt gate: game unloaded from RAM; prompt session cleared.");
                 }
             }
+            
             const PromptGateSnapshot prompt_gate = read_prompt_gate_snapshot(player);
             const bool player_ready_for_prompt = player_is_prompt_gameplay_ready(player);
             const bool cannon_ready_for_prompt = cannon_transform_is_gameplay_ready(player);
@@ -3750,7 +4462,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                 waiting_for_second_prompt_ready = false;
                 first_prompt_ready_timeout_until = {};
                 alignment_prompt_show_until = {};
+                last_prompt_right_thumb_click = false;
             }
+            
 
             bool show_alignment_prompt = gameplay_ready_stable;
             if (gameplay_ready_stable && !skipped_first_prompt_ready) {
@@ -3768,6 +4482,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                     app_hook_log(L"Prompt gate: first ready window timeout expired; stable ready can show prompt.");
                 }
             }
+            
             if (alignment_prompt_shown_this_launch) {
                 show_alignment_prompt =
                     alignment_prompt_show_until.time_since_epoch().count() != 0 &&
@@ -3777,6 +4492,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                 alignment_prompt_show_until = now + std::chrono::seconds(10);
                 app_hook_log(L"Prompt gate: alignment prompt consumed for this game session.");
             }
+            const bool prompt_right_thumb_click = vr_right_pose.valid && vr_right_pose.thumbstick_click;
+            if (show_alignment_prompt && prompt_right_thumb_click && !last_prompt_right_thumb_click) {
+                show_alignment_prompt = false;
+                alignment_prompt_shown_this_launch = true;
+                alignment_prompt_show_until = {};
+                app_hook_log(L"Prompt gate: height prompt dismissed by right thumbstick.");
+            }
+            
+            last_prompt_right_thumb_click = prompt_right_thumb_click;
+            if (vr_settings_visible)
+                show_alignment_prompt = false;
             g_shared_state->settings.showAlignmentPrompt = show_alignment_prompt ? 1u : 0u;
             log_gameplay_candidate_profile(state_mgr, player, player_ready_for_prompt,
                                            cannon_ready_for_prompt, gameplay_ready_stable,
@@ -3817,6 +4543,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                 g_app.hook_status = "Hook: OpenXR bridge attached";
             }
         }
+        
 
         static auto last_hook_alive_retry = std::chrono::steady_clock::time_point{};
         if (dolphin_running_for_hook_status && !hook_recent &&
@@ -3845,6 +4572,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         if (last_patch_watchdog.time_since_epoch().count() == 0 ||
             std::chrono::duration_cast<std::chrono::milliseconds>(now - last_patch_watchdog).count() >= 1000) {
             verify_app_patches_applied();
+            apply_helmet_opacity_zero();
             last_patch_watchdog = now;
         }
 
@@ -3890,3 +4618,4 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     return 0;
 }
 //
+

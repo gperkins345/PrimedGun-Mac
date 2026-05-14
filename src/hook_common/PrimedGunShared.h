@@ -7,7 +7,7 @@ namespace PrimedGun {
 inline constexpr wchar_t SharedMemoryName[] = L"Local\\PrimedGunSharedState";
 inline constexpr wchar_t SharedMutexName[] = L"Local\\PrimedGunSharedStateMutex";
 inline constexpr uint32_t SharedStateMagic = 0x50475652; // PGVR
-inline constexpr uint32_t SharedStateVersion = 8;
+inline constexpr uint32_t SharedStateVersion = 9;
 inline constexpr uint32_t MaxGamePatches = 128;
 inline constexpr uint32_t HookStatusDllAlive = 1u << 0;
 inline constexpr uint32_t HookStatusOpenXrInstalled = 1u << 1;
@@ -80,6 +80,8 @@ struct SettingsState {
     float directionalMovementSpeed = 14.0f;
     float directionalMovementAccel = 45.0f;
     float directionalMovementAirAccel = 8.0f;
+    float viewHeightHomeMeters = 1.6374f;
+    uint32_t viewHeightGeneration = 0;
     CenterEyeViewport centerEyeViewport{};
 };
 

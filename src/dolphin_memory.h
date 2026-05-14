@@ -167,10 +167,47 @@ private:
         return pid;
     }
 
-    // Find Dolphin's emulated RAM base
-    // GC RAM = 32MB (0x2000000), Wii RAM = 64MB (0x4000000)
-    // Verify by checking if Trilogy state_manager at offset 0x00557678
-    // contains a valid 0x80xxxxxx pointer
+    static bool is_readable_protect(DWORD protect) {
+        if (protect & (PAGE_GUARD | PAGE_NOACCESS))
+            return false;
+        protect &= 0xff;
+        return protect == PAGE_READONLY ||
+               protect == PAGE_READWRITE ||
+               protect == PAGE_WRITECOPY ||
+               protect == PAGE_EXECUTE_READ ||
+               protect == PAGE_EXECUTE_READWRITE ||
+               protect == PAGE_EXECUTE_WRITECOPY;
+    }
+
+    bool read_process_u32_raw(uintptr_t address, uint32_t& value) const {
+        SIZE_T bytes_read = 0;
+        uint32_t raw = 0;
+        if (!ReadProcessMemory(handle_, reinterpret_cast<LPCVOID>(address), &raw, sizeof(raw), &bytes_read) ||
+            bytes_read != sizeof(raw)) {
+            return false;
+        }
+        value = _byteswap_ulong(raw);
+        return true;
+    }
+
+    bool looks_like_mem1_candidate(uintptr_t base, size_t region_size) const {
+        if (region_size < 0x01800000)
+            return false;
+
+        uint32_t game_id = 0;
+        uint32_t game_rev = 0;
+        if (!read_process_u32_raw(base, game_id) ||
+            !read_process_u32_raw(base + 4, game_rev)) {
+            return false;
+        }
+
+        // GM8E + 01/revision lives at the start of MEM1 once Prime is loaded.
+        return game_id == 0x474D3845u && (game_rev >> 16) == 0x3031u;
+    }
+
+    // Find Dolphin's emulated RAM base. Prefer the old stable mapped 32/64 MB
+    // regions, then validate wider/private candidates by the disc header at
+    // MEM1+0 when this Dolphin build exposes RAM differently.
     uintptr_t find_emu_base() const {
         MEMORY_BASIC_INFORMATION mbi;
         uintptr_t addr = 0;
@@ -179,13 +216,29 @@ private:
         while (VirtualQueryEx(handle_, (LPCVOID)addr, &mbi, sizeof(mbi))) {
             if (mbi.State == MEM_COMMIT && mbi.Type == MEM_MAPPED &&
                 (mbi.RegionSize == 0x4000000 || mbi.RegionSize == 0x2000000)) {
-
                 uintptr_t base = (uintptr_t)mbi.BaseAddress;
-                if (!fallback) fallback = base;
+                if (looks_like_mem1_candidate(base, mbi.RegionSize))
+                    return base;
+                if (!fallback)
+                    fallback = base;
             }
             if (addr + mbi.RegionSize <= addr) break;
             addr += mbi.RegionSize;
         }
+
+        addr = 0;
+        while (VirtualQueryEx(handle_, (LPCVOID)addr, &mbi, sizeof(mbi))) {
+            if (mbi.State == MEM_COMMIT && is_readable_protect(mbi.Protect) &&
+                mbi.RegionSize >= 0x01800000 &&
+                (mbi.Type == MEM_MAPPED || mbi.Type == MEM_PRIVATE)) {
+                uintptr_t base = (uintptr_t)mbi.BaseAddress;
+                if (looks_like_mem1_candidate(base, mbi.RegionSize))
+                    return base;
+            }
+            if (addr + mbi.RegionSize <= addr) break;
+            addr += mbi.RegionSize;
+        }
+
         return fallback;
     }
 };

@@ -44,6 +44,7 @@ For distribution/share, the useful files are:
 - In-headset settings menu anchored to the left controller.
 - Dolphin-side hook bridge for app-owned game patches, OpenXR tracking, overlays, and diagnostics.
 - Automatic Dolphin XR setup for the GM8E01 VR settings PrimedGun expects.
+- Pre-configured shader profile.
 
 ## Dolphin Setup
 
@@ -53,8 +54,6 @@ PrimedGun configures the Dolphin pieces it needs at startup where possible:
 - Sets the GM8E01 Dolphin XR world scale / units-per-meter value used by PrimedGun.
 - Can map Dolphin's Port 1 controls and reset-view hotkey to OpenXR when the setting is enabled.
 - Disables unmanaged Dolphin Action Replay and Gecko enabled-code lists so old user codes do not fight PrimedGun.
-
-PrimedGun does not delete old user code definitions. It only turns off enabled entries in Dolphin's normal AR/Gecko enabled lists and uses its own hook-owned patch file instead.
 
 ## App-Owned Patches
 
@@ -71,8 +70,7 @@ These patches are owned by PrimedGun and are applied through the hook, not throu
 1. Launch `PrimedGun.exe`.
 2. Load Metroid Prime GCN NTSC Rev 0 (`GM8E01`) in Dolphin.
 3. PrimedGun detects the game when GM8E01 is loaded into memory.
-4. When gameplay and cannon tracking are ready, an in-headset prompt appears once for that game memory load.
-5. Move your body and click the right stick to align controller with cannon.
+4. Click the right stick to set height.
 
 The alignment prompt can show again after the game is unloaded from memory and loaded again. Dolphin itself does not need to be closed.
 

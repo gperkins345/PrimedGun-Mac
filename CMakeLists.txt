@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
-project(PrimedGun VERSION 0.9.3)
+project(PrimedGun VERSION 0.9.4)
+
+set(PRIMEDGUN_VERSION_STRING "0.9.4")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,6 +50,10 @@ set(SOURCES
 )
 
 add_executable(PrimedGun WIN32 ${SOURCES})
+
+target_compile_definitions(PrimedGun PRIVATE
+    PRIMEDGUN_VERSION_STRING="${PRIMEDGUN_VERSION_STRING}"
+)
 
 target_include_directories(PrimedGun PRIVATE
     src/

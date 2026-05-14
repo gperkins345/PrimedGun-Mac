@@ -40,6 +40,10 @@ using VkBuffer = struct VkBuffer_T*;
 using VkRenderPass = struct VkRenderPass_T*;
 using VkFramebuffer = struct VkFramebuffer_T*;
 using VkDeviceMemory = struct VkDeviceMemory_T*;
+using VkDescriptorSet = struct VkDescriptorSet_T*;
+using VkPipeline = struct VkPipeline_T*;
+using VkPipelineLayout = struct VkPipelineLayout_T*;
+using VkSampler = struct VkSampler_T*;
 using VkResult = int32_t;
 using VkStructureType = int32_t;
 using VkFlags = uint32_t;
@@ -127,6 +131,24 @@ struct VkExtent3D {
     uint32_t depth;
 };
 
+struct VkImageCreateInfo {
+    VkStructureType sType;
+    const void* pNext;
+    VkFlags flags;
+    int32_t imageType;
+    int32_t format;
+    VkExtent3D extent;
+    uint32_t mipLevels;
+    uint32_t arrayLayers;
+    int32_t samples;
+    int32_t tiling;
+    VkFlags usage;
+    int32_t sharingMode;
+    uint32_t queueFamilyIndexCount;
+    const uint32_t* pQueueFamilyIndices;
+    int32_t initialLayout;
+};
+
 struct VkImageCopy {
     VkImageSubresourceLayers srcSubresource;
     VkOffset3D srcOffset;
@@ -199,6 +221,25 @@ struct VkPresentInfoKHR {
     VkResult* pResults;
 };
 
+struct VkDescriptorImageInfo {
+    VkSampler sampler;
+    VkImageView imageView;
+    int32_t imageLayout;
+};
+
+struct VkWriteDescriptorSet {
+    VkStructureType sType;
+    const void* pNext;
+    VkDescriptorSet dstSet;
+    uint32_t dstBinding;
+    uint32_t dstArrayElement;
+    uint32_t descriptorCount;
+    int32_t descriptorType;
+    const VkDescriptorImageInfo* pImageInfo;
+    const void* pBufferInfo;
+    const void* pTexelBufferView;
+};
+
 enum VkSubpassContents : int32_t {
     VK_SUBPASS_CONTENTS_INLINE = 0,
     VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS = 1,
@@ -226,10 +267,17 @@ using PFN_vkCmdClearColorImage = void (*)(VkCommandBuffer, VkImage, VkImageLayou
 using PFN_vkCmdCopyImage = void (*)(VkCommandBuffer, VkImage, VkImageLayout, VkImage, VkImageLayout, uint32_t, const void*);
 using PFN_vkCmdBlitImage = void (*)(VkCommandBuffer, VkImage, VkImageLayout, VkImage, VkImageLayout, uint32_t, const void*, VkFilter);
 using PFN_vkQueuePresentKHR = VkResult (*)(VkQueue, const VkPresentInfoKHR*);
+using PFN_vkCreateImage = VkResult (*)(VkDevice, const VkImageCreateInfo*, const void*, VkImage*);
+using PFN_vkDestroyImage = void (*)(VkDevice, VkImage, const void*);
 using PFN_vkCreateImageView = VkResult (*)(VkDevice, const VkImageViewCreateInfo*, const void*, VkImageView*);
 using PFN_vkDestroyImageView = void (*)(VkDevice, VkImageView, const void*);
 using PFN_vkCreateFramebuffer = VkResult (*)(VkDevice, const VkFramebufferCreateInfo*, const void*, VkFramebuffer*);
 using PFN_vkDestroyFramebuffer = void (*)(VkDevice, VkFramebuffer, const void*);
+using PFN_vkUpdateDescriptorSets = void (*)(VkDevice, uint32_t, const VkWriteDescriptorSet*, uint32_t, const void*);
+using PFN_vkCmdBindDescriptorSets = void (*)(VkCommandBuffer, int32_t, VkPipelineLayout, uint32_t, uint32_t, const VkDescriptorSet*, uint32_t, const uint32_t*);
+using PFN_vkCmdBindPipeline = void (*)(VkCommandBuffer, int32_t, VkPipeline);
+using PFN_vkCmdDraw = void (*)(VkCommandBuffer, uint32_t, uint32_t, uint32_t, uint32_t);
+using PFN_vkCmdDrawIndexed = void (*)(VkCommandBuffer, uint32_t, uint32_t, uint32_t, int32_t, uint32_t);
 
 PFN_vkGetInstanceProcAddr g_realGetInstanceProcAddr = nullptr;
 PFN_vkGetDeviceProcAddr g_realGetDeviceProcAddr = nullptr;
@@ -244,10 +292,17 @@ PFN_vkCmdClearColorImage g_realCmdClearColorImage = nullptr;
 PFN_vkCmdCopyImage g_realCmdCopyImage = nullptr;
 PFN_vkCmdBlitImage g_realCmdBlitImage = nullptr;
 PFN_vkQueuePresentKHR g_realQueuePresentKHR = nullptr;
+PFN_vkCreateImage g_realCreateImage = nullptr;
+PFN_vkDestroyImage g_realDestroyImage = nullptr;
 PFN_vkCreateImageView g_realCreateImageView = nullptr;
 PFN_vkDestroyImageView g_realDestroyImageView = nullptr;
 PFN_vkCreateFramebuffer g_realCreateFramebuffer = nullptr;
 PFN_vkDestroyFramebuffer g_realDestroyFramebuffer = nullptr;
+PFN_vkUpdateDescriptorSets g_realUpdateDescriptorSets = nullptr;
+PFN_vkCmdBindDescriptorSets g_realCmdBindDescriptorSets = nullptr;
+PFN_vkCmdBindPipeline g_realCmdBindPipeline = nullptr;
+PFN_vkCmdDraw g_realCmdDraw = nullptr;
+PFN_vkCmdDrawIndexed g_realCmdDrawIndexed = nullptr;
 
 std::atomic<uint64_t> g_viewportCalls = 0;
 std::atomic<uint64_t> g_scissorCalls = 0;
@@ -259,6 +314,9 @@ std::atomic<uint64_t> g_presentCalls = 0;
 std::atomic<bool> g_installed = false;
 std::atomic<bool> g_inlineDetoursInstalled = false;
 std::atomic<bool> g_forceNextFrameSummary = false;
+std::atomic<bool> g_captureDrawCalls = false;
+std::atomic<bool> g_armCaptureNextFrame = false;
+std::atomic<uint64_t> g_drawTraceLines = 0;
 std::atomic<bool> g_showAlignmentPrompt = false;
 std::atomic<uint64_t> g_overlayDraws = 0;
 std::mutex g_logMutex;
@@ -272,6 +330,13 @@ struct ViewportCapture {
     float height = 0.0f;
 };
 
+struct ScissorCapture {
+    int32_t x = 0;
+    int32_t y = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
 struct PassCapture {
     VkRenderPass renderPass = nullptr;
     VkFramebuffer framebuffer = nullptr;
@@ -280,7 +345,9 @@ struct PassCapture {
     uint32_t clearCount = 0;
     int vrEyeIndex = -1;
     uint32_t viewportCount = 0;
+    uint32_t scissorCount = 0;
     std::array<ViewportCapture, 4> firstViewports{};
+    std::array<ScissorCapture, 4> firstScissors{};
 };
 
 struct CopyCapture {
@@ -311,6 +378,38 @@ struct ImageViewInfo {
     int32_t format = 0;
 };
 
+struct ImageInfo {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t depth = 0;
+    uint32_t mipLevels = 0;
+    uint32_t arrayLayers = 0;
+    int32_t format = 0;
+    VkFlags usage = 0;
+};
+
+struct DescriptorImageBinding {
+    uint32_t binding = 0;
+    uint32_t arrayElement = 0;
+    int32_t descriptorType = 0;
+    int32_t imageLayout = 0;
+    VkSampler sampler = nullptr;
+    VkImageView imageView = nullptr;
+};
+
+struct DescriptorSetInfo {
+    std::array<DescriptorImageBinding, 32> imageBindings{};
+    uint32_t imageBindingCount = 0;
+};
+
+struct BoundCommandState {
+    std::array<VkDescriptorSet, 8> descriptorSets{};
+    uint32_t descriptorSetCount = 0;
+    VkPipelineLayout pipelineLayout = nullptr;
+    VkPipeline pipeline = nullptr;
+    int32_t pipelineBindPoint = 0;
+};
+
 struct FramebufferInfo {
     uint32_t width = 0;
     uint32_t height = 0;
@@ -321,7 +420,10 @@ struct FramebufferInfo {
 };
 
 std::unordered_map<VkImageView, ImageViewInfo> g_imageViews;
+std::unordered_map<VkImage, ImageInfo> g_images;
 std::unordered_map<VkFramebuffer, FramebufferInfo> g_framebuffers;
+std::unordered_map<VkDescriptorSet, DescriptorSetInfo> g_descriptorSets;
+std::unordered_map<VkCommandBuffer, BoundCommandState> g_boundState;
 
 std::wstring Widen(const char* text) {
     if (!text) {
@@ -453,6 +555,14 @@ std::wstring DescribeCopy(const CopyCapture& copy) {
         L") dstOfs=(" + std::to_wstring(copy.firstDstOffset.x) +
         L"," + std::to_wstring(copy.firstDstOffset.y) +
         L"," + std::to_wstring(copy.firstDstOffset.z) +
+        L")";
+}
+
+std::wstring DescribeScissor(const ScissorCapture& sc) {
+    return L"sc=(" + std::to_wstring(sc.x) +
+        L"," + std::to_wstring(sc.y) +
+        L" " + std::to_wstring(sc.width) +
+        L"x" + std::to_wstring(sc.height) +
         L")";
 }
 
@@ -647,6 +757,77 @@ std::wstring DescribeFramebufferAttachments(VkFramebuffer framebuffer) {
     return out;
 }
 
+std::wstring DescribeImageView(VkImageView view) {
+    std::lock_guard<std::mutex> guard(g_resourceMutex);
+    const auto viewIt = g_imageViews.find(view);
+    if (viewIt == g_imageViews.end()) {
+        return DescribeHandle(view) + L":?";
+    }
+
+    std::wstring out = DescribeHandle(view) + L":fmt" + std::to_wstring(viewIt->second.format);
+    const auto imageIt = g_images.find(viewIt->second.image);
+    if (imageIt != g_images.end()) {
+        const ImageInfo& image = imageIt->second;
+        out += L":" + std::to_wstring(image.width) +
+            L"x" + std::to_wstring(image.height) +
+            L" mips=" + std::to_wstring(image.mipLevels) +
+            L" usage=0x";
+        wchar_t usage[16] = {};
+        swprintf_s(usage, L"%x", image.usage);
+        out += usage;
+    }
+    return out;
+}
+
+std::wstring DescribeBoundDescriptors(VkCommandBuffer commandBuffer) {
+    BoundCommandState bound{};
+    std::array<DescriptorSetInfo, 8> sets{};
+    {
+        std::lock_guard<std::mutex> guard(g_resourceMutex);
+        const auto boundIt = g_boundState.find(commandBuffer);
+        if (boundIt == g_boundState.end()) {
+            return L" bound=<none>";
+        }
+
+        bound = boundIt->second;
+        const uint32_t setCount = std::min<uint32_t>(bound.descriptorSetCount, static_cast<uint32_t>(bound.descriptorSets.size()));
+        for (uint32_t setIndex = 0; setIndex < setCount; ++setIndex) {
+            const auto setIt = g_descriptorSets.find(bound.descriptorSets[setIndex]);
+            if (setIt == g_descriptorSets.end()) {
+                continue;
+            }
+            sets[setIndex] = setIt->second;
+        }
+    }
+
+    std::wstring out = L" pipe=" + DescribeHandle(bound.pipeline) +
+        L" layout=" + DescribeHandle(bound.pipelineLayout) +
+        L" bindPoint=" + std::to_wstring(bound.pipelineBindPoint) +
+        L" sets=" + std::to_wstring(bound.descriptorSetCount);
+
+    uint32_t loggedImages = 0;
+    const uint32_t setCount = std::min<uint32_t>(bound.descriptorSetCount, static_cast<uint32_t>(bound.descriptorSets.size()));
+    for (uint32_t setIndex = 0; setIndex < setCount && loggedImages < 14; ++setIndex) {
+        const DescriptorSetInfo& setInfo = sets[setIndex];
+        if (setInfo.imageBindingCount == 0) {
+            continue;
+        }
+        out += L" set" + std::to_wstring(setIndex) + L"=" + DescribeHandle(bound.descriptorSets[setIndex]);
+        const uint32_t imageCount = std::min<uint32_t>(setInfo.imageBindingCount, static_cast<uint32_t>(setInfo.imageBindings.size()));
+        for (uint32_t imageIndex = 0; imageIndex < imageCount && loggedImages < 14; ++imageIndex) {
+            const DescriptorImageBinding& binding = setInfo.imageBindings[imageIndex];
+            out += L" b" + std::to_wstring(binding.binding) +
+                L"[" + std::to_wstring(binding.arrayElement) + L"]" +
+                L" type=" + std::to_wstring(binding.descriptorType) +
+                L" layout=" + std::to_wstring(binding.imageLayout) +
+                L" sampler=" + DescribeHandle(binding.sampler) +
+                L" view=" + DescribeImageView(binding.imageView);
+            ++loggedImages;
+        }
+    }
+    return out;
+}
+
 void LogFrameSummaryLocked(std::wstring_view reason) {
     const bool forced = g_forceNextFrameSummary.exchange(false);
     if (!forced && g_frame.frameIndex > 180 && (g_frame.frameIndex % 300) != 0 && reason == L"present") {
@@ -673,6 +854,10 @@ void LogFrameSummaryLocked(std::wstring_view reason) {
         const uint32_t viewportCount = std::min<uint32_t>(pass.viewportCount, static_cast<uint32_t>(pass.firstViewports.size()));
         for (uint32_t vp = 0; vp < viewportCount; ++vp) {
             summary += L" " + DescribeViewport(pass.firstViewports[vp]);
+        }
+        const uint32_t scissorCount = std::min<uint32_t>(pass.scissorCount, static_cast<uint32_t>(pass.firstScissors.size()));
+        for (uint32_t sc = 0; sc < scissorCount; ++sc) {
+            summary += L" " + DescribeScissor(pass.firstScissors[sc]);
         }
     }
 
@@ -726,6 +911,24 @@ void TrackViewport(const VkViewport& viewport) {
     pass.viewportCount++;
 }
 
+void TrackScissor(const VkRect2D& scissor) {
+    std::lock_guard<std::mutex> guard(g_frameMutex);
+    if (g_frame.activePass < 0 || static_cast<size_t>(g_frame.activePass) >= g_frame.passes.size()) {
+        return;
+    }
+
+    PassCapture& pass = g_frame.passes[static_cast<size_t>(g_frame.activePass)];
+    if (pass.scissorCount < pass.firstScissors.size()) {
+        pass.firstScissors[pass.scissorCount] = ScissorCapture{
+            scissor.offset.x,
+            scissor.offset.y,
+            scissor.extent.width,
+            scissor.extent.height,
+        };
+    }
+    pass.scissorCount++;
+}
+
 void EndTrackedPass() {
     std::lock_guard<std::mutex> guard(g_frameMutex);
     g_frame.activePass = -1;
@@ -773,9 +976,20 @@ void TrackPresent() {
     g_frame.frameIndex++;
     LogFrameSummaryLocked(L"present");
     g_previousFrameHadBrokenEffectPattern = hadBrokenEffectPattern;
+    const bool finishedDrawCapture = g_captureDrawCalls.exchange(false, std::memory_order_relaxed);
     const uint64_t nextFrame = g_frame.frameIndex;
     g_frame = FrameCapture{};
     g_frame.frameIndex = nextFrame;
+    if (finishedDrawCapture) {
+        g_drawTraceLines.store(0, std::memory_order_relaxed);
+        Log(L"Vulkan draw-call capture ended at present.");
+    }
+    if (g_armCaptureNextFrame.exchange(false, std::memory_order_relaxed)) {
+        g_drawTraceLines.store(0, std::memory_order_relaxed);
+        g_forceNextFrameSummary.store(true, std::memory_order_relaxed);
+        g_captureDrawCalls.store(true, std::memory_order_relaxed);
+        Log(L"Vulkan draw-call capture started on next full frame.");
+    }
 }
 
 template <typename T>
@@ -804,6 +1018,7 @@ void VKAPI_PTR Hook_vkCmdSetViewport(VkCommandBuffer commandBuffer, uint32_t fir
 void VKAPI_PTR Hook_vkCmdSetScissor(VkCommandBuffer commandBuffer, uint32_t firstScissor, uint32_t scissorCount, const VkRect2D* scissors) {
     if (scissors && scissorCount > 0) {
         const VkRect2D& sc = scissors[0];
+        TrackScissor(sc);
         LogLimited(g_scissorCalls, 4,
             L"vkCmdSetScissor first=" + std::to_wstring(firstScissor) +
             L" count=" + std::to_wstring(scissorCount) +
@@ -890,6 +1105,31 @@ VkResult VKAPI_PTR Hook_vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR*
     return g_realQueuePresentKHR(queue, presentInfo);
 }
 
+VkResult VKAPI_PTR Hook_vkCreateImage(VkDevice device, const VkImageCreateInfo* createInfo, const void* allocator, VkImage* image) {
+    VkResult result = g_realCreateImage(device, createInfo, allocator, image);
+    if (result == 0 && createInfo && image && *image) {
+        std::lock_guard<std::mutex> guard(g_resourceMutex);
+        g_images[*image] = ImageInfo{
+            createInfo->extent.width,
+            createInfo->extent.height,
+            createInfo->extent.depth,
+            createInfo->mipLevels,
+            createInfo->arrayLayers,
+            createInfo->format,
+            createInfo->usage,
+        };
+    }
+    return result;
+}
+
+void VKAPI_PTR Hook_vkDestroyImage(VkDevice device, VkImage image, const void* allocator) {
+    {
+        std::lock_guard<std::mutex> guard(g_resourceMutex);
+        g_images.erase(image);
+    }
+    g_realDestroyImage(device, image, allocator);
+}
+
 VkResult VKAPI_PTR Hook_vkCreateImageView(VkDevice device, const VkImageViewCreateInfo* createInfo, const void* allocator, VkImageView* imageView) {
     VkResult result = g_realCreateImageView(device, createInfo, allocator, imageView);
     if (result == 0 && createInfo && imageView && *imageView) {
@@ -897,6 +1137,142 @@ VkResult VKAPI_PTR Hook_vkCreateImageView(VkDevice device, const VkImageViewCrea
         g_imageViews[*imageView] = ImageViewInfo{ createInfo->image, createInfo->format };
     }
     return result;
+}
+
+void VKAPI_PTR Hook_vkUpdateDescriptorSets(VkDevice device, uint32_t writeCount, const VkWriteDescriptorSet* writes, uint32_t copyCount, const void* copies) {
+    if (writes && writeCount > 0) {
+        std::lock_guard<std::mutex> guard(g_resourceMutex);
+        for (uint32_t writeIndex = 0; writeIndex < writeCount; ++writeIndex) {
+            const VkWriteDescriptorSet& write = writes[writeIndex];
+            if (!write.dstSet || !write.pImageInfo || write.descriptorCount == 0) {
+                continue;
+            }
+            if (write.descriptorType != 1 && write.descriptorType != 2 && write.descriptorType != 3 && write.descriptorType != 10) {
+                continue;
+            }
+
+            DescriptorSetInfo& info = g_descriptorSets[write.dstSet];
+            for (uint32_t imageIndex = 0; imageIndex < write.descriptorCount; ++imageIndex) {
+                const VkDescriptorImageInfo& imageInfo = write.pImageInfo[imageIndex];
+                if (!imageInfo.imageView) {
+                    continue;
+                }
+
+                const uint32_t arrayElement = write.dstArrayElement + imageIndex;
+                DescriptorImageBinding* target = nullptr;
+                for (uint32_t existing = 0; existing < info.imageBindingCount; ++existing) {
+                    DescriptorImageBinding& binding = info.imageBindings[existing];
+                    if (binding.binding == write.dstBinding && binding.arrayElement == arrayElement) {
+                        target = &binding;
+                        break;
+                    }
+                }
+                if (!target && info.imageBindingCount < info.imageBindings.size()) {
+                    target = &info.imageBindings[info.imageBindingCount++];
+                }
+                if (target) {
+                    target->binding = write.dstBinding;
+                    target->arrayElement = arrayElement;
+                    target->descriptorType = write.descriptorType;
+                    target->imageLayout = imageInfo.imageLayout;
+                    target->sampler = imageInfo.sampler;
+                    target->imageView = imageInfo.imageView;
+                }
+            }
+        }
+    }
+    g_realUpdateDescriptorSets(device, writeCount, writes, copyCount, copies);
+}
+
+void VKAPI_PTR Hook_vkCmdBindDescriptorSets(
+    VkCommandBuffer commandBuffer,
+    int32_t pipelineBindPoint,
+    VkPipelineLayout layout,
+    uint32_t firstSet,
+    uint32_t descriptorSetCount,
+    const VkDescriptorSet* descriptorSets,
+    uint32_t dynamicOffsetCount,
+    const uint32_t* dynamicOffsets) {
+    if (descriptorSets && descriptorSetCount > 0) {
+        std::lock_guard<std::mutex> guard(g_resourceMutex);
+        BoundCommandState& state = g_boundState[commandBuffer];
+        state.pipelineBindPoint = pipelineBindPoint;
+        state.pipelineLayout = layout;
+        const uint32_t count = std::min<uint32_t>(descriptorSetCount, static_cast<uint32_t>(state.descriptorSets.size()));
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint32_t target = firstSet + i;
+            if (target < state.descriptorSets.size()) {
+                state.descriptorSets[target] = descriptorSets[i];
+            }
+        }
+        state.descriptorSetCount = std::max<uint32_t>(state.descriptorSetCount, std::min<uint32_t>(firstSet + count, static_cast<uint32_t>(state.descriptorSets.size())));
+    }
+    g_realCmdBindDescriptorSets(commandBuffer, pipelineBindPoint, layout, firstSet, descriptorSetCount, descriptorSets, dynamicOffsetCount, dynamicOffsets);
+}
+
+void VKAPI_PTR Hook_vkCmdBindPipeline(VkCommandBuffer commandBuffer, int32_t pipelineBindPoint, VkPipeline pipeline) {
+    {
+        std::lock_guard<std::mutex> guard(g_resourceMutex);
+        BoundCommandState& state = g_boundState[commandBuffer];
+        state.pipeline = pipeline;
+        state.pipelineBindPoint = pipelineBindPoint;
+    }
+    g_realCmdBindPipeline(commandBuffer, pipelineBindPoint, pipeline);
+}
+
+void LogDrawTrace(VkCommandBuffer commandBuffer, const wchar_t* kind, uint32_t indexOrVertexCount, uint32_t instanceCount) {
+    if (!g_captureDrawCalls.load(std::memory_order_relaxed) &&
+        g_armCaptureNextFrame.exchange(false, std::memory_order_relaxed)) {
+        g_drawTraceLines.store(0, std::memory_order_relaxed);
+        g_forceNextFrameSummary.store(true, std::memory_order_relaxed);
+        g_captureDrawCalls.store(true, std::memory_order_relaxed);
+        std::lock_guard<std::mutex> guard(g_logMutex);
+        Log(L"Vulkan draw-call capture started on next draw fallback.");
+    }
+    if (!g_captureDrawCalls.load(std::memory_order_relaxed)) {
+        return;
+    }
+    const uint64_t line = g_drawTraceLines.fetch_add(1, std::memory_order_relaxed);
+    if (line >= 900) {
+        return;
+    }
+
+    PassCapture pass{};
+    if (!SnapshotActivePass(pass)) {
+        return;
+    }
+
+    std::wstring message = L"HUD draw trace " + std::to_wstring(line) +
+        L" " + kind +
+        L" count=" + std::to_wstring(indexOrVertexCount) +
+        L" inst=" + std::to_wstring(instanceCount) +
+        L" pass=" + ClassifyPass(pass) +
+        L" " + std::to_wstring(pass.width) + L"x" + std::to_wstring(pass.height) +
+        L" vpCount=" + std::to_wstring(pass.viewportCount) +
+        L" scCount=" + std::to_wstring(pass.scissorCount);
+
+    const uint32_t viewportCount = std::min<uint32_t>(pass.viewportCount, static_cast<uint32_t>(pass.firstViewports.size()));
+    for (uint32_t i = 0; i < viewportCount; ++i) {
+        message += L" " + DescribeViewport(pass.firstViewports[i]);
+    }
+    const uint32_t scissorCount = std::min<uint32_t>(pass.scissorCount, static_cast<uint32_t>(pass.firstScissors.size()));
+    for (uint32_t i = 0; i < scissorCount; ++i) {
+        message += L" " + DescribeScissor(pass.firstScissors[i]);
+    }
+    message += DescribeBoundDescriptors(commandBuffer);
+
+    std::lock_guard<std::mutex> guard(g_logMutex);
+    Log(message);
+}
+
+void VKAPI_PTR Hook_vkCmdDraw(VkCommandBuffer commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) {
+    LogDrawTrace(commandBuffer, L"draw", vertexCount, instanceCount);
+    g_realCmdDraw(commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
+}
+
+void VKAPI_PTR Hook_vkCmdDrawIndexed(VkCommandBuffer commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance) {
+    LogDrawTrace(commandBuffer, L"drawIndexed", indexCount, instanceCount);
+    g_realCmdDrawIndexed(commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
 }
 
 void VKAPI_PTR Hook_vkDestroyImageView(VkDevice device, VkImageView imageView, const void* allocator) {
@@ -987,6 +1363,14 @@ PFN_vkVoidFunction WrapProc(const char* name, PFN_vkVoidFunction real) {
         StoreReal(g_realQueuePresentKHR, real);
         return reinterpret_cast<PFN_vkVoidFunction>(&Hook_vkQueuePresentKHR);
     }
+    if (std::strcmp(name, "vkCreateImage") == 0) {
+        StoreReal(g_realCreateImage, real);
+        return reinterpret_cast<PFN_vkVoidFunction>(&Hook_vkCreateImage);
+    }
+    if (std::strcmp(name, "vkDestroyImage") == 0) {
+        StoreReal(g_realDestroyImage, real);
+        return reinterpret_cast<PFN_vkVoidFunction>(&Hook_vkDestroyImage);
+    }
     if (std::strcmp(name, "vkCreateImageView") == 0) {
         StoreReal(g_realCreateImageView, real);
         return reinterpret_cast<PFN_vkVoidFunction>(&Hook_vkCreateImageView);
@@ -1002,6 +1386,26 @@ PFN_vkVoidFunction WrapProc(const char* name, PFN_vkVoidFunction real) {
     if (std::strcmp(name, "vkDestroyFramebuffer") == 0) {
         StoreReal(g_realDestroyFramebuffer, real);
         return reinterpret_cast<PFN_vkVoidFunction>(&Hook_vkDestroyFramebuffer);
+    }
+    if (std::strcmp(name, "vkUpdateDescriptorSets") == 0) {
+        StoreReal(g_realUpdateDescriptorSets, real);
+        return reinterpret_cast<PFN_vkVoidFunction>(&Hook_vkUpdateDescriptorSets);
+    }
+    if (std::strcmp(name, "vkCmdBindDescriptorSets") == 0) {
+        StoreReal(g_realCmdBindDescriptorSets, real);
+        return reinterpret_cast<PFN_vkVoidFunction>(&Hook_vkCmdBindDescriptorSets);
+    }
+    if (std::strcmp(name, "vkCmdBindPipeline") == 0) {
+        StoreReal(g_realCmdBindPipeline, real);
+        return reinterpret_cast<PFN_vkVoidFunction>(&Hook_vkCmdBindPipeline);
+    }
+    if (std::strcmp(name, "vkCmdDraw") == 0) {
+        StoreReal(g_realCmdDraw, real);
+        return reinterpret_cast<PFN_vkVoidFunction>(&Hook_vkCmdDraw);
+    }
+    if (std::strcmp(name, "vkCmdDrawIndexed") == 0) {
+        StoreReal(g_realCmdDrawIndexed, real);
+        return reinterpret_cast<PFN_vkVoidFunction>(&Hook_vkCmdDrawIndexed);
     }
 
     return real;
@@ -1241,9 +1645,9 @@ void PollRuntimeControls(const SharedState* shared) {
     const SHORT f7 = GetAsyncKeyState(VK_F7);
     if ((f7 & 0x0001) != 0 && nowMs - lastF7MarkerMs > 500) {
         lastF7MarkerMs = nowMs;
-        g_forceNextFrameSummary = true;
+        g_armCaptureNextFrame.store(true, std::memory_order_relaxed);
         std::lock_guard<std::mutex> guard(g_logMutex);
-        Log(L"Frame summary marker requested with F7.");
+        Log(L"Frame summary and Vulkan draw-call capture armed with F7; waiting for next full frame.");
     }
 }
 
