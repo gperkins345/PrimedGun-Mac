@@ -54,11 +54,13 @@ PrimedGun configures the Dolphin pieces it needs at startup where possible:
 - Sets the GM8E01 Dolphin XR world scale / units-per-meter value used by PrimedGun.
 - Can map Dolphin's Port 1 controls and reset-view hotkey to OpenXR when the setting is enabled.
 
-PrimedGun writes its Dolphin defaults into the GM8E01 profile files it can find:
+PrimedGun picks the active GM8E01 profile it can find, then writes its Dolphin defaults there:
 
 - `C:\Users\<user>\Documents\Dolphin Emulator\GameSettingsVR\GM8E01.ini`
 - `C:\Users\<user>\Documents\Dolphin Emulator\GameSettings\GM8E01.ini`
 - Portable Dolphin profiles beside `Dolphin.exe`, such as `User\GameSettingsVR\GM8E01.ini` and `User\GameSettings\GM8E01.ini`
+
+When Dolphin is running, portable profiles near the running `Dolphin.exe` are preferred. If no existing GM8E01 profile is found, PrimedGun creates the best matching profile for that Dolphin setup.
 
 The VR profile is where PrimedGun saves the GM8E01 VR settings and pre-configured shader overrides. The normal game profile is used to disable unmanaged AR/Gecko enabled-code lists so PrimedGun's app-owned patch set is the one in control.
 

@@ -884,36 +884,45 @@ static void add_dolphin_game_settings_paths(std::vector<fs::path>& paths,
 }
 
 
-static std::vector<fs::path> dolphin_gm8e01_settings_paths() {
-    std::vector<fs::path> paths;
-    add_unique_path(paths, dolphin_gm8e01_settings_path());
+static fs::path select_dolphin_game_settings_path(const wchar_t* folder_name,
+                                                  const fs::path& documents_path) {
+    std::vector<fs::path> candidates;
 
     const std::optional<DWORD> dolphin_pid = find_process_id_by_name(L"Dolphin.exe");
-    if (!dolphin_pid)
-        return paths;
+    if (dolphin_pid) {
+        if (const std::optional<fs::path> dolphin_path = dolphin_process_path(*dolphin_pid))
+            add_dolphin_game_settings_paths(candidates, *dolphin_path, folder_name);
+    }
+    add_unique_path(candidates, documents_path);
 
-    const std::optional<fs::path> dolphin_path = dolphin_process_path(*dolphin_pid);
-    if (!dolphin_path)
-        return paths;
+    for (const fs::path& path : candidates) {
+        std::error_code ec;
+        if (fs::exists(path, ec))
+            return path;
+    }
 
-    add_dolphin_game_settings_paths(paths, *dolphin_path, L"GameSettings");
+    for (const fs::path& path : candidates) {
+        std::error_code ec;
+        if (fs::exists(path.parent_path(), ec))
+            return path;
+    }
+
+    return documents_path;
+}
+
+
+static std::vector<fs::path> dolphin_gm8e01_settings_paths() {
+    std::vector<fs::path> paths;
+    add_unique_path(paths, select_dolphin_game_settings_path(
+                               L"GameSettings", dolphin_gm8e01_settings_path()));
     return paths;
 }
 
 
 static std::vector<fs::path> dolphin_gm8e01_vr_settings_paths() {
     std::vector<fs::path> paths;
-    add_unique_path(paths, dolphin_gm8e01_vr_settings_path());
-
-    const std::optional<DWORD> dolphin_pid = find_process_id_by_name(L"Dolphin.exe");
-    if (!dolphin_pid)
-        return paths;
-
-    const std::optional<fs::path> dolphin_path = dolphin_process_path(*dolphin_pid);
-    if (!dolphin_path)
-        return paths;
-
-    add_dolphin_game_settings_paths(paths, *dolphin_path, L"GameSettingsVR");
+    add_unique_path(paths, select_dolphin_game_settings_path(
+                               L"GameSettingsVR", dolphin_gm8e01_vr_settings_path()));
     return paths;
 }
 
