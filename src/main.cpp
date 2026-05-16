@@ -1363,6 +1363,9 @@ Hash=00000000c06e6c69
 Type=PS
 match_mode=exact_hash
 handling=headlocked
+texture_mode=include
+texture=47382578f2df4238
+texture=e8f3888a8db51c51
 
 $Unnamed Shader 32
 Hash=00000000d8ab2990
@@ -1428,6 +1431,7 @@ Hash=00000000ed33f8c8
 Type=PS
 match_mode=exact_hash
 handling=skip
+
 )ini";
 }
 
