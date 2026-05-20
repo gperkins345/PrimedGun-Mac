@@ -77,7 +77,6 @@ struct AppState {
     std::atomic<bool> reconnect_dolphin_requested = false;
     std::atomic<bool> reconnect_tracking_requested = false;
     std::atomic<bool> remap_dolphin_controls_requested = false;
-    std::atomic<bool> dolphin_performance_apply_requested = false;
     std::atomic<bool> app_patches_apply_requested = false;
     ImTextureID controller_layout_texture = ImTextureID_Invalid;
     int controller_layout_width = 0;
@@ -235,33 +234,11 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Dolphin Settings")) {
-            begin_panel("##dolphin_panel", "Dolphin Profile");
-            const bool old_dolphin_recommended_settings = s.dolphin_recommended_settings;
-            ImGui::Checkbox("Recommended Settings", &s.dolphin_recommended_settings);
-            if (s.dolphin_recommended_settings != old_dolphin_recommended_settings) {
-                app.remap_dolphin_controls_requested.store(true, std::memory_order_relaxed);
-            }
-
-            const bool old_dolphin_60fps_cap = s.dolphin_60fps_cap;
-            ImGui::Checkbox("Limit Dolphin to 60 FPS", &s.dolphin_60fps_cap);
-            if (s.dolphin_60fps_cap != old_dolphin_60fps_cap) {
-                app.dolphin_performance_apply_requested.store(true, std::memory_order_relaxed);
-            }
-
-            ImGui::Spacing();
-            ImGui::TextDisabled("Applied to Dolphin's active GM8E01 VR profile.");
-            end_panel();
-            ImGui::EndTabItem();
-        }
-
         if (ImGui::BeginTabItem("Controller")) {
             begin_panel("##controller_panel", "Controller Mapping");
             if (ImGui::Button("Reset Controller")) {
                 s.use_right_hand = kDefaultUseRightHand;
                 s.auto_dolphin_xr_controls = kDefaultAutoDolphinXrControls;
-                s.dolphin_recommended_settings = kDefaultDolphinRecommendedSettings;
-                s.dolphin_60fps_cap = kDefaultDolphin60FpsCap;
                 s.xr_dpad_enabled = kDefaultXrDpadEnabled;
                 s.xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
                 s.xr_dpad_head_y_below = kDefaultXrDpadHeadYBelow;
@@ -274,7 +251,6 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
                 s.directional_movement_accel = kDefaultDirectionalMovementAccel;
                 s.directional_movement_air_accel = kDefaultDirectionalMovementAirAccel;
                 app.remap_dolphin_controls_requested.store(true, std::memory_order_relaxed);
-                app.dolphin_performance_apply_requested.store(true, std::memory_order_relaxed);
             }
 
             int hand = s.use_right_hand ? 0 : 1;
@@ -284,7 +260,7 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
             s.use_right_hand = (hand == 0);
 
             const bool old_auto_dolphin_xr_controls = s.auto_dolphin_xr_controls;
-            ImGui::Checkbox("Temporarily map Dolphin Port 1 to OpenXR", &s.auto_dolphin_xr_controls);
+            ImGui::Checkbox("Auto set controller bindings", &s.auto_dolphin_xr_controls);
             if (s.auto_dolphin_xr_controls != old_auto_dolphin_xr_controls) {
                 app.remap_dolphin_controls_requested.store(true, std::memory_order_relaxed);
             }
@@ -437,63 +413,6 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Debug")) {
-            begin_panel("##debug_panel", "Debug");
-            ImGui::Checkbox("Show matrix values", &s.show_matrix_debug);
-            ImGui::Checkbox("Show controller pose", &s.show_controller_debug);
-
-            ImGui::SeparatorText("Runtime");
-            metric_float("Tracker poll", app.tracker_poll_ms, " ms");
-            metric_int("Tracker drops", app.tracker_drop_count);
-            metric_float("Writer work", app.writer_work_ms, " ms");
-            metric_float("Writer write", app.writer_write_ms, " ms");
-            metric_int("Writer drops", app.writer_drop_count);
-
-            ImGui::SeparatorText("Input");
-            ImGui::Text("D-pad: %s  dir %d", app.dbg_xr_dpad_active ? "active" : "off", app.dbg_xr_dpad_dir);
-            ImGui::Text("Left stick axis %d: %.2f %.2f", app.dbg_left_stick_axis, app.dbg_left_stick_x, app.dbg_left_stick_y);
-            ImGui::Text("Left-to-head: %.2f m  y %.2f m", app.dbg_left_to_head_dist, app.dbg_left_to_head_y);
-            ImGui::Text("Body yaw: %s  %.1f deg  stick %.2f",
-                        app.dbg_directional_move_active ? "active" : "off",
-                        app.dbg_directional_move_yaw_deg,
-                        app.dbg_directional_move_stick_mag);
-
-            ImGui::SeparatorText("Memory");
-            ImGui::Text("mem_base:  %llX", app.dbg_mem_base);
-            ImGui::Text("state_mgr: %08X", app.dbg_state_mgr);
-            ImGui::Text("player:    %08X", app.dbg_player);
-            ImGui::Text("pitch@:    %08X", app.dbg_pitch_addr);
-            ImGui::Text("cam_mgr:   %08X", app.dbg_cam_mgr);
-            ImGui::Text("gun_ptr:   %08X", app.dbg_gun_ptr);
-            ImGui::Text("gun_xf@:   %08X", app.dbg_gun_xf);
-            ImGui::Text("beam_xf@:  %08X", app.dbg_beam_xf);
-            ImGui::Text("world_xf@: %08X", app.dbg_world_xf);
-            ImGui::Text("local_xf@: %08X", app.dbg_local_xf);
-            ImGui::Text("player yaw: %.2f deg", app.dbg_player_yaw_deg);
-            ImGui::Text("yaw delta:  %.2f deg", app.dbg_player_yaw_delta_deg);
-
-            if (s.show_controller_debug && app.last_pose.valid) {
-                ImGui::SeparatorText("Controller Pose");
-                ImGui::Text("Position: %.3f %.3f %.3f", app.last_pose.px, app.last_pose.py, app.last_pose.pz);
-                ImGui::Text("Rotation: %.3f %.3f %.3f %.3f",
-                            app.last_pose.qx, app.last_pose.qy, app.last_pose.qz, app.last_pose.qw);
-                ImGui::Text("Trigger: %.2f", app.last_pose.trigger);
-            }
-
-            if (s.show_matrix_debug) {
-                auto& m = app.last_matrix;
-                ImGui::SeparatorText("Arm Cannon Matrix");
-                ImGui::Text("[%6.3f %6.3f %6.3f | %8.3f]",
-                    m.at(0,0), m.at(0,1), m.at(0,2), m.at(0,3));
-                ImGui::Text("[%6.3f %6.3f %6.3f | %8.3f]",
-                    m.at(1,0), m.at(1,1), m.at(1,2), m.at(1,3));
-                ImGui::Text("[%6.3f %6.3f %6.3f | %8.3f]",
-                    m.at(2,0), m.at(2,1), m.at(2,2), m.at(2,3));
-            }
-            end_panel();
-            ImGui::EndTabItem();
-        }
-
         ImGui::EndTabBar();
     }
     ImGui::PopStyleVar();
@@ -503,7 +422,6 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
     if (ImGui::Button("Reset All")) {
         s.reset_all();
         app.remap_dolphin_controls_requested.store(true, std::memory_order_relaxed);
-        app.dolphin_performance_apply_requested.store(true, std::memory_order_relaxed);
         app.app_patches_apply_requested.store(true, std::memory_order_relaxed);
     }
     ImGui::SameLine();

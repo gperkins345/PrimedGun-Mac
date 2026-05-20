@@ -7,8 +7,8 @@ namespace PrimedGun {
 inline constexpr wchar_t SharedMemoryName[] = L"Local\\PrimedGunSharedState";
 inline constexpr wchar_t SharedMutexName[] = L"Local\\PrimedGunSharedStateMutex";
 inline constexpr uint32_t SharedStateMagic = 0x50475652; // PGVR
-inline constexpr uint32_t SharedStateVersion = 14;
-inline constexpr uint32_t MaxGamePatches = 128;
+inline constexpr uint32_t SharedStateVersion = 15;
+inline constexpr uint32_t MaxGamePatches = 192;
 inline constexpr uint32_t MaxSharedPathChars = 260;
 inline constexpr uint32_t HookStatusDllAlive = 1u << 0;
 inline constexpr uint32_t HookStatusOpenXrInstalled = 1u << 1;
@@ -69,10 +69,10 @@ struct SettingsState {
     float rotOffsetZ = 0.0f;
     uint32_t gunTargetingEnabled = 1;
     float gunTargetingDistance = 60.0f;
-    float gunTargetingRadius = 2.5f;
+    float gunTargetingRadius = 4.0f;
     uint32_t autoDolphinXrControls = 1;
-    uint32_t dolphinRecommendedSettings = 1;
-    uint32_t dolphin60FpsCap = 1;
+    uint32_t dolphinRecommendedSettings = 0;
+    uint32_t dolphin60FpsCap = 0;
     uint32_t xrDpadEnabled = 1;
     float xrDpadHeadRadius = 0.18f;
     float xrDpadHeadYBelow = 0.14f;

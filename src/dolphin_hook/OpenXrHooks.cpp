@@ -1307,63 +1307,8 @@ void ResolveDisplayRefreshRateFunctions(XrInstance instance) {
 }
 
 void ApplyDolphinDisplayRefreshRatePreference(XrInstance instance, XrSession session) {
-    if (!g_displayRefreshRateExtensionEnabled || session == XR_NULL_HANDLE)
-        return;
-
-    SharedState* shared = g_sharedState.load();
-    const bool limitTo60Hz = !shared || shared->settings.dolphin60FpsCap != 0;
-    const int preference = limitTo60Hz ? 1 : 0;
-    if (g_lastDisplayRefreshRatePreference == preference)
-        return;
-
-    ResolveDisplayRefreshRateFunctions(instance);
-    if (!g_xrRequestDisplayRefreshRateFB) {
-        Log(L"OpenXrHooks: 60 Hz request unavailable; xrRequestDisplayRefreshRateFB was not resolved.");
-        return;
-    }
-
-    float requestedRate = limitTo60Hz ? 60.0f : 0.0f;
-    if (limitTo60Hz && g_xrEnumerateDisplayRefreshRatesFB) {
-        uint32_t count = 0;
-        XrResult result = g_xrEnumerateDisplayRefreshRatesFB(session, 0, &count, nullptr);
-        if (XR_SUCCEEDED(result) && count > 0) {
-            std::vector<float> rates(count, 0.0f);
-            result = g_xrEnumerateDisplayRefreshRatesFB(session, count, &count, rates.data());
-            if (XR_SUCCEEDED(result)) {
-                float bestRate = rates[0];
-                float bestDelta = std::fabs(bestRate - 60.0f);
-                for (float rate : rates) {
-                    const float delta = std::fabs(rate - 60.0f);
-                    if (delta < bestDelta) {
-                        bestRate = rate;
-                        bestDelta = delta;
-                    }
-                }
-                if (bestDelta <= 0.25f) {
-                    requestedRate = bestRate;
-                } else {
-                    Log(L"OpenXrHooks: runtime does not advertise 60 Hz; nearest rate is " +
-                        std::to_wstring(bestRate) + L" Hz.");
-                }
-            }
-        }
-    }
-
-    float beforeRate = 0.0f;
-    if (g_xrGetDisplayRefreshRateFB &&
-        XR_FAILED(g_xrGetDisplayRefreshRateFB(session, &beforeRate))) {
-        beforeRate = 0.0f;
-    }
-
-    const XrResult requestResult = g_xrRequestDisplayRefreshRateFB(session, requestedRate);
-    if (XR_SUCCEEDED(requestResult))
-        g_lastDisplayRefreshRatePreference = preference;
-    Log((limitTo60Hz
-            ? L"OpenXrHooks requested Dolphin OpenXR display refresh rate "
-            : L"OpenXrHooks released Dolphin OpenXR display refresh preference ") +
-        (limitTo60Hz ? std::to_wstring(requestedRate) + L" Hz" : std::wstring{}) +
-        L" result=" + std::to_wstring(requestResult) +
-        (beforeRate > 0.0f ? L" previous=" + std::to_wstring(beforeRate) + L" Hz" : L""));
+    (void)instance;
+    (void)session;
 }
 
 PFN_xrVoidFunction WrapProc(const char* name, PFN_xrVoidFunction proc);

@@ -14,11 +14,9 @@ inline constexpr float kDefaultRotOffsetZ = 0.0f;
 inline constexpr float kDefaultWorldScale = 1.50f;
 inline constexpr bool kDefaultGunTargetingEnabled = true;
 inline constexpr float kDefaultGunTargetingDistance = 60.0f;
-inline constexpr float kDefaultGunTargetingRadius = 2.5f;
+inline constexpr float kDefaultGunTargetingRadius = 4.0f;
 inline constexpr bool kDefaultXrDpadEnabled = true;
 inline constexpr bool kDefaultAutoDolphinXrControls = true;
-inline constexpr bool kDefaultDolphinRecommendedSettings = true;
-inline constexpr bool kDefaultDolphin60FpsCap = false;
 inline constexpr float kDefaultXrDpadHeadRadius = 0.18f;
 inline constexpr float kDefaultXrDpadHeadYBelow = 0.14f;
 inline constexpr float kDefaultXrDpadDeadzone = 0.45f;
@@ -94,8 +92,6 @@ struct Settings {
     float gun_targeting_distance = kDefaultGunTargetingDistance;
     float gun_targeting_radius = kDefaultGunTargetingRadius;
     bool auto_dolphin_xr_controls = kDefaultAutoDolphinXrControls;
-    bool dolphin_recommended_settings = kDefaultDolphinRecommendedSettings;
-    bool dolphin_60fps_cap = kDefaultDolphin60FpsCap;
     bool xr_dpad_enabled = kDefaultXrDpadEnabled;
     float xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
     float xr_dpad_head_y_below = kDefaultXrDpadHeadYBelow;
@@ -140,8 +136,6 @@ struct Settings {
         gun_targeting_distance = kDefaultGunTargetingDistance;
         gun_targeting_radius = kDefaultGunTargetingRadius;
         auto_dolphin_xr_controls = kDefaultAutoDolphinXrControls;
-        dolphin_recommended_settings = kDefaultDolphinRecommendedSettings;
-        dolphin_60fps_cap = kDefaultDolphin60FpsCap;
         xr_dpad_enabled = kDefaultXrDpadEnabled;
         xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
         xr_dpad_head_y_below = kDefaultXrDpadHeadYBelow;
@@ -177,6 +171,18 @@ struct Settings {
         return found == ar_code_toggles.end() || found->enabled;
     }
 
+    bool prune_ar_code_toggles(const std::vector<std::string>& valid_names) {
+        const size_t old_size = ar_code_toggles.size();
+        ar_code_toggles.erase(
+            std::remove_if(ar_code_toggles.begin(), ar_code_toggles.end(),
+                [&](const ArCodeToggle& toggle) {
+                    return std::find(valid_names.begin(), valid_names.end(), toggle.name) ==
+                        valid_names.end();
+                }),
+            ar_code_toggles.end());
+        return ar_code_toggles.size() != old_size;
+    }
+
     void save() const {
         std::ofstream f(filename());
         if (!f) return;
@@ -197,8 +203,6 @@ struct Settings {
         f << "gun_targeting_distance=" << gun_targeting_distance << "\n";
         f << "gun_targeting_radius=" << gun_targeting_radius << "\n";
         f << "auto_dolphin_xr_controls=" << auto_dolphin_xr_controls << "\n";
-        f << "dolphin_recommended_settings=" << dolphin_recommended_settings << "\n";
-        f << "dolphin_60fps_cap=" << dolphin_60fps_cap << "\n";
         f << "xr_dpad_enabled=" << xr_dpad_enabled << "\n";
         f << "xr_dpad_head_radius=" << xr_dpad_head_radius << "\n";
         f << "xr_dpad_head_y_below=" << xr_dpad_head_y_below << "\n";
@@ -241,8 +245,6 @@ struct Settings {
             else if (key == "gun_targeting_distance") gun_targeting_distance = std::stof(val);
             else if (key == "gun_targeting_radius") gun_targeting_radius = std::stof(val);
             else if (key == "auto_dolphin_xr_controls") auto_dolphin_xr_controls = std::stoi(val);
-            else if (key == "dolphin_recommended_settings") dolphin_recommended_settings = std::stoi(val);
-            else if (key == "dolphin_60fps_cap") dolphin_60fps_cap = std::stoi(val);
             else if (key == "xr_dpad_enabled")       xr_dpad_enabled = std::stoi(val);
             else if (key == "xr_dpad_head_radius")   xr_dpad_head_radius = std::stof(val);
             else if (key == "xr_dpad_head_y_below")  xr_dpad_head_y_below = std::stof(val);

@@ -8,7 +8,6 @@ namespace PrimedGun::Hook::GameTimingHooks {
 
 bool Install();
 void SuppressLockCameraPitchForLogicTick();
-void PollFast(SharedState* state);
 void Poll(SharedState* state);
 void Shutdown();
 

@@ -111,6 +111,7 @@ static constexpr uint32_t k_render_hook_expected_gun_addr = k_render_hook_basis_
 static constexpr uint32_t k_projectile_fire_debug_addr = 0x817FE100;
 static constexpr uint32_t k_projectile_probe_debug_addr = 0x817FE300;
 static constexpr uint32_t k_gun_target_hook_addr = 0x817FE400;
+static constexpr uint32_t k_reticle_billboard_basis_addr = 0x817FE500;
 static constexpr uint32_t k_final_input_offset = 0xB54;
 static constexpr uint32_t k_final_input_right_stick_x = k_final_input_offset + 0x10;
 static constexpr uint32_t k_final_input_right_stick_y = k_final_input_offset + 0x14;
@@ -975,25 +976,6 @@ static void apply_dolphin_vr_units_per_meter() {
     request_dolphin_openxr_controller_bindings();
 }
 
-static void apply_dolphin_60fps_cap() {
-    if (!g_settings.dolphin_60fps_cap)
-        return;
-
-    const fs::path path = dolphin_ini_path();
-    if (path.empty())
-        return;
-
-    backup_file_once(path);
-    apply_ini_section_values(path, "Core",
-                             {{"EmulationSpeed", "1."},
-                              {"OverclockEnable", "False"},
-                              {"Overclock", "1."},
-                              {"VIOverclockEnable", "False"},
-                              {"VIOverclock", "1."}},
-                             {});
-    app_hook_log(L"Applied Dolphin 60 FPS cap: normal speed with CPU and VI overclock disabled.");
-}
-
 static void apply_dolphin_required_runtime_config() {
     request_dolphin_openxr_controller_bindings();
 
@@ -1130,6 +1112,7 @@ static std::vector<fs::path> dolphin_gm8e01_vr_settings_paths() {
 
 static std::vector<LoadedPatch> load_app_patch_files() {
     std::vector<LoadedPatch> patches;
+    std::vector<std::string> discovered_groups;
     size_t total_patch_lines = 0;
     size_t skipped_patch_lines = 0;
     const fs::path patchDir = exe_directory() / L"assets" / L"gecko";
@@ -1158,6 +1141,10 @@ static std::vector<LoadedPatch> load_app_patch_files() {
             if (!trimmed.empty() && trimmed.front() == '$') {
                 current_group = patch_group_name_from_header(trimmed);
                 g_settings.ensure_ar_code_toggle(current_group);
+                if (std::find(discovered_groups.begin(), discovered_groups.end(), current_group) ==
+                    discovered_groups.end()) {
+                    discovered_groups.push_back(current_group);
+                }
                 current_group_enabled = g_settings.ar_code_enabled(current_group);
                 continue;
             }
@@ -1167,6 +1154,10 @@ static std::vector<LoadedPatch> load_app_patch_files() {
                 if (current_group.empty()) {
                     current_group = "Ungrouped";
                     g_settings.ensure_ar_code_toggle(current_group);
+                    if (std::find(discovered_groups.begin(), discovered_groups.end(), current_group) ==
+                        discovered_groups.end()) {
+                        discovered_groups.push_back(current_group);
+                    }
                     current_group_enabled = g_settings.ar_code_enabled(current_group);
                 }
                 ++total_patch_lines;
@@ -1176,6 +1167,11 @@ static std::vector<LoadedPatch> load_app_patch_files() {
                 patches.push_back(patch);
             }
         }
+    }
+
+    if (g_settings.prune_ar_code_toggles(discovered_groups)) {
+        g_settings.save();
+        app_hook_log(L"Removed stale app-owned AR code toggles from settings.");
     }
 
     app_hook_log(L"Loaded " + std::to_wstring(patches.size() - skipped_patch_lines) +
@@ -1774,8 +1770,8 @@ static void sync_vr_settings_to_shared(uint32_t generation, bool visible, uint32
     s.gunTargetingDistance = g_settings.gun_targeting_distance;
     s.gunTargetingRadius = g_settings.gun_targeting_radius;
     s.autoDolphinXrControls = g_settings.auto_dolphin_xr_controls ? 1u : 0u;
-    s.dolphinRecommendedSettings = g_settings.dolphin_recommended_settings ? 1u : 0u;
-    s.dolphin60FpsCap = g_settings.dolphin_60fps_cap ? 1u : 0u;
+    s.dolphinRecommendedSettings = 0;
+    s.dolphin60FpsCap = 0;
     s.xrDpadEnabled = g_settings.xr_dpad_enabled ? 1u : 0u;
     s.xrDpadHeadRadius = g_settings.xr_dpad_head_radius;
     s.xrDpadHeadYBelow = g_settings.xr_dpad_head_y_below;
@@ -2962,6 +2958,7 @@ static void disarm_memory_writes() {
         g_dolphin.write_u32(k_render_hook_expected_gun_addr, 0);
         g_dolphin.write_u32(k_gun_target_hook_addr, 0);
         g_dolphin.write_u32(k_gun_target_hook_addr + 4, 0xffffffffu);
+        g_dolphin.write_u32(k_reticle_billboard_basis_addr, 0);
     }
 }
 
@@ -3309,6 +3306,16 @@ static bool actor_is_grapple_point(uint32_t obj) {
     return vtable >= 0x803E0D00u && vtable < 0x803E0D70u; // __vt__19CScriptGrapplePoint
 }
 
+static bool gun_aim_direction_from_matrix(const float* mat, float& dir_x, float& dir_y, float& dir_z) {
+    // Prime transform forward is the Y column. Using this axis directly keeps
+    // target selection tied to aim yaw/pitch while controller roll spins only
+    // the model around the ray.
+    dir_x = mat[1];
+    dir_y = mat[5];
+    dir_z = mat[9];
+    return normalize3(dir_x, dir_y, dir_z);
+}
+
 static bool pick_gun_ray_target(uint32_t state_mgr, uint32_t player, uint32_t gun_ptr,
                                 uint32_t world_xf, const float* mat, bool strict_lock_aim,
                                 GunTargetPick& pick) {
@@ -3332,18 +3339,11 @@ static bool pick_gun_ray_target(uint32_t state_mgr, uint32_t player, uint32_t gu
     if (!read_transform_translation(world_xf, ray_x, ray_y, ray_z))
         return false;
 
-    float dir_x = -mat[4];
-    float dir_y = mat[5];
-    float dir_flat_z = 0.0f;
-    if (!normalize3(dir_x, dir_y, dir_flat_z))
+    float dir_x = 0.0f;
+    float dir_y = 0.0f;
+    float dir_z = 0.0f;
+    if (!gun_aim_direction_from_matrix(mat, dir_x, dir_y, dir_z))
         return false;
-    float dir_z = mat[6] * -dir_y + -mat[2] * dir_x;
-    if (!std::isfinite(dir_z))
-        return false;
-    dir_z = std::clamp(dir_z, -0.98f, 0.98f);
-    const float flat_scale = std::sqrt(std::max(0.0f, 1.0f - dir_z * dir_z));
-    dir_x *= flat_scale;
-    dir_y *= flat_scale;
     pick.ray_x = ray_x;
     pick.ray_y = ray_y;
     pick.ray_z = ray_z;
@@ -3416,36 +3416,36 @@ static bool pick_gun_ray_target(uint32_t state_mgr, uint32_t player, uint32_t gu
         if (!std::isfinite(perp) || perp > max_perp)
             continue;
 
+        float aim_cone_perp = max_perp;
         if (strict_lock_aim) {
-            const float aim_cone_perp = std::min(max_perp, 0.18f + along * (scan_mode ? 0.045f : 0.032f));
+            aim_cone_perp = std::min(max_perp, 0.45f + along * (scan_mode ? 0.085f : 0.075f));
             if (perp > aim_cone_perp)
                 continue;
         }
 
         ++g_app.dbg_gun_target_candidates;
-        float score = perp + along * 0.015f;
-        if (grapple_candidate) {
-            score -= 0.40f;
-        } else if (strict_lock_aim) {
-            score = perp * 4.0f + along * 0.002f;
-            if (scan_mode && has_scan)
-                score -= 0.03f;
-            if (!scan_mode && has_target)
-                score -= 0.03f;
-            if (!has_scan && !has_target && !has_orbit)
-                score += 0.10f;
-        } else if (scan_mode) {
+
+        // Pick by cannon-ray fit, not by the game's center-screen preference.
+        // A normalized cone score keeps edge targets catchable without letting
+        // large material bonuses drag the reticle back to the middle.
+        const float cone_fraction = perp / std::max(aim_cone_perp, 0.001f);
+        float score = cone_fraction * 1.50f + perp * 0.35f + along * 0.003f;
+        if (grapple_candidate)
+            score -= 0.15f;
+        if (scan_mode) {
             if (has_scan)
-                score -= 0.20f;
+                score -= 0.10f;
             else if (!has_character)
-                score += 0.75f;
+                score += 0.10f;
             if (!has_scan && !has_target)
-                score += 1.0f;
+                score += 0.15f;
         } else {
-            if (!has_character)
-                score += has_scan ? 0.35f : 0.75f;
-            if (!has_target)
-                score += has_scan ? 0.75f : 1.25f;
+            if (has_target)
+                score -= 0.10f;
+            else if (has_scan)
+                score += 0.10f;
+            else if (!has_character)
+                score += 0.15f;
         }
         if (!found || score < pick.score) {
             found = true;
@@ -3536,52 +3536,6 @@ static void reset_scan_pitch_after_visor_exit(uint32_t player) {
     g_dolphin.write_float(player + addrs.pitch_offset, 0.0f);
 }
 
-static void suppress_first_person_camera_pitch(uint32_t state_mgr, uint32_t player) {
-    if (player < 0x80000000 || scan_visor_active(player))
-        return;
-
-    if (state_mgr >= 0x80000000 && orbit_lock_button_held(state_mgr))
-        return;
-
-    const uint32_t camera_state = g_dolphin.read_u32(player + 0x2f4);
-    const uint32_t morph_state = g_dolphin.read_u32(player + 0x2f8);
-    if (camera_state != 0 || morph_state != 0)
-        return;
-
-    const uint32_t orbit_state = g_dolphin.read_u32(player + 0x304);
-    if (orbit_state != 0 && orbit_state != 5)
-        return;
-
-    const uint32_t pitch_axis_addr = player + k_player_free_look_pitch_angle_offset;
-    const float pitch_axis = g_dolphin.read_float(pitch_axis_addr);
-    if (!std::isfinite(pitch_axis))
-        return;
-
-    g_smooth_pitch = 0.0f;
-    g_dolphin.write_u8(player + k_player_free_look_state_offset, 0);
-    g_dolphin.write_u8(player + k_player_free_look_state_offset + 1, 0);
-    g_dolphin.write_u8(player + k_player_free_look_state_offset + 2, 0);
-    g_dolphin.write_float(player + k_player_free_look_center_time_offset, 0.0f);
-    g_dolphin.write_float(player + k_player_free_look_pitch_angle_offset, 0.0f);
-    g_dolphin.write_float(player + k_player_free_look_pitch_vel_offset, 0.0f);
-}
-
-static void suppress_lock_camera_pitch(uint32_t state_mgr, uint32_t player);
-
-static void suppress_first_person_camera_pitch_from_state_manager() {
-    if (!g_dolphin.is_connected() || !g_app.dolphin_ok)
-        return;
-
-    const auto addrs = get_addresses();
-    const uint32_t state_mgr = addrs.state_manager;
-    if (state_mgr < 0x80000000)
-        return;
-
-    const uint32_t player = g_dolphin.read_u32(state_mgr + addrs.player_offset);
-    suppress_lock_camera_pitch(state_mgr, player);
-    suppress_first_person_camera_pitch(state_mgr, player);
-}
-
 static void reset_lock_camera_pitch_suppression() {
     g_lock_pitch_have_unlocked = false;
     g_lock_pitch_unlocked = 0.0f;
@@ -3589,20 +3543,15 @@ static void reset_lock_camera_pitch_suppression() {
 }
 
 static void suppress_lock_camera_pitch(uint32_t state_mgr, uint32_t player) {
-    if (player < 0x80000000 || scan_visor_active(player))
-        return;
-
-    const uint32_t pitch_axis_addr = player + k_player_free_look_pitch_angle_offset;
-    const float pitch_axis = g_dolphin.read_float(pitch_axis_addr);
-    if (!std::isfinite(pitch_axis))
+    const auto addrs = get_addresses();
+    const uint32_t pitch_addr = player + addrs.pitch_offset;
+    const float pitch = g_dolphin.read_float(pitch_addr);
+    if (!std::isfinite(pitch))
         return;
 
     constexpr float kMaxFirstPersonPitch = 1.55f;
-    const uint32_t orbit_state = g_dolphin.read_u32(player + 0x304);
-    const bool lock_orbit_active = orbit_lock_button_held(state_mgr) ||
-                                   (orbit_state != 0 && orbit_state != 5);
-    const float clamped_pitch = std::clamp(pitch_axis, -kMaxFirstPersonPitch, kMaxFirstPersonPitch);
-    if (!lock_orbit_active) {
+    const float clamped_pitch = std::clamp(pitch, -kMaxFirstPersonPitch, kMaxFirstPersonPitch);
+    if (!orbit_lock_button_held(state_mgr)) {
         g_lock_pitch_unlocked = clamped_pitch;
         g_lock_pitch_have_unlocked = true;
         return;
@@ -3613,12 +3562,15 @@ static void suppress_lock_camera_pitch(uint32_t state_mgr, uint32_t player) {
         g_lock_pitch_have_unlocked = true;
     }
 
+    g_dolphin.write_float(state_mgr + k_final_input_right_stick_y, 0.0f);
+    g_dolphin.write_u8(state_mgr + k_final_input_right_stick_y_press, 0);
     g_dolphin.write_u8(player + k_player_free_look_state_offset, 0);
     g_dolphin.write_u8(player + k_player_free_look_state_offset + 1, 0);
     g_dolphin.write_u8(player + k_player_free_look_state_offset + 2, 0);
     g_dolphin.write_float(player + k_player_free_look_center_time_offset, 0.0f);
-    g_dolphin.write_float(player + k_player_free_look_pitch_angle_offset, g_lock_pitch_unlocked);
+    g_dolphin.write_float(player + k_player_free_look_pitch_angle_offset, 0.0f);
     g_dolphin.write_float(player + k_player_free_look_pitch_vel_offset, 0.0f);
+    g_dolphin.write_float(pitch_addr, g_lock_pitch_unlocked);
 
 }
 
@@ -3661,6 +3613,7 @@ static void write_gun_targeting(uint32_t state_mgr, uint32_t player, uint32_t gu
     static bool s_last_pick_valid = false;
     static uint32_t s_last_pick_player = 0;
     static uint32_t s_last_pick_gun = 0;
+    static auto s_last_success_time = std::chrono::steady_clock::time_point{};
 
     g_app.dbg_gun_target_uid = 0xffff;
     g_app.dbg_gun_target_obj = 0;
@@ -3699,12 +3652,33 @@ static void write_gun_targeting(uint32_t state_mgr, uint32_t player, uint32_t gu
         pick = s_last_pick;
         found = true;
     } else {
+        const GunTargetPick previous_pick = s_last_pick;
+        const bool previous_valid = s_last_pick_valid;
+        const auto previous_success_time = s_last_success_time;
         found = pick_gun_ray_target(state_mgr, player, gun_ptr, world_xf, mat, lock_held, pick);
         s_last_pick_time = now;
         s_last_pick_player = player;
         s_last_pick_gun = gun_ptr;
-        s_last_pick = pick;
-        s_last_pick_valid = found;
+        if (found) {
+            s_last_pick = pick;
+            s_last_pick_valid = true;
+            s_last_success_time = now;
+        } else if (same_context && previous_valid &&
+                   target_uid_still_exists(state_mgr, previous_pick.uid, previous_pick.obj)) {
+            const int grace_ms = lock_held ? 350 : 180;
+            const auto age_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - previous_success_time).count();
+            if (previous_success_time.time_since_epoch().count() != 0 && age_ms <= grace_ms) {
+                pick = previous_pick;
+                found = true;
+                s_last_pick = pick;
+                s_last_pick_valid = true;
+            } else {
+                s_last_pick_valid = false;
+            }
+        } else {
+            s_last_pick_valid = false;
+        }
         log_gun_targeting_result(found, pick, player);
     }
     if (!found) {
@@ -3741,6 +3715,38 @@ static void write_gun_targeting(uint32_t state_mgr, uint32_t player, uint32_t gu
     g_app.dbg_gun_target_along = pick.along;
     g_app.dbg_gun_target_perp = pick.perp;
     g_app.dbg_gun_target_write = true;
+}
+
+static void write_reticle_billboard_basis(const Pose& hmd_pose, float yaw_delta_deg) {
+    if (!g_dolphin.is_connected())
+        return;
+
+    const auto addrs = get_addresses();
+    const uint32_t state_mgr = addrs.state_manager;
+    const uint32_t player = g_dolphin.read_u32(state_mgr + 0x84C);
+    if (scan_visor_active(player)) {
+        g_dolphin.write_u32(k_reticle_billboard_basis_addr, 0);
+        return;
+    }
+
+    if (!hmd_pose.valid) {
+        g_dolphin.write_u32(k_reticle_billboard_basis_addr, 0);
+        return;
+    }
+
+    Pose adjusted_hmd = hmd_pose;
+    apply_tracking_world_yaw(adjusted_hmd, yaw_delta_deg);
+
+    const Matrix3x4 hmd_mat = pose_to_prime_matrix(
+        adjusted_hmd,
+        0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f,
+        1.0f);
+    float basis[9] = {};
+    extract_basis9(hmd_mat.m, basis);
+
+    g_dolphin.write_u32(k_reticle_billboard_basis_addr, 1);
+    write_contiguous_basis9(k_reticle_billboard_basis_addr + 4, basis);
 }
 
 static void write_gun_matrix(const Matrix3x4& mat) {
@@ -4072,6 +4078,7 @@ static void writer_thread() {
             g_app.last_matrix = mat;
 
             if (g_app.active && g_app.dolphin_ok) {
+                write_reticle_billboard_basis(hmd_pose, player_yaw_delta_deg);
                 write_scan_pitch_from_controller_matrix(mat);
                 const bool should_write = !g_settings.require_trigger ||
                                           pose.trigger >= g_settings.trigger_threshold;
@@ -4164,7 +4171,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     open_app_hook_log();
     apply_dolphin_vr_units_per_meter();
     apply_dolphin_required_runtime_config();
-    apply_dolphin_60fps_cap();
     apply_dolphin_xr_camera_forward_zero();
     disable_unmanaged_dolphin_codes();
     sync_dolphin_xr_gamecube_controls(g_settings.auto_dolphin_xr_controls);
@@ -4277,7 +4283,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             g_dolphin.disconnect();
             apply_dolphin_vr_units_per_meter();
             apply_dolphin_required_runtime_config();
-            apply_dolphin_60fps_cap();
             disable_unmanaged_dolphin_codes();
             sync_dolphin_xr_gamecube_controls(g_settings.auto_dolphin_xr_controls);
             apply_dolphin_xr_camera_forward_zero();
@@ -4290,10 +4295,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         if (g_app.remap_dolphin_controls_requested.exchange(false, std::memory_order_relaxed) ||
             g_settings.auto_dolphin_xr_controls != g_last_auto_dolphin_xr_controls) {
             sync_dolphin_xr_gamecube_controls(g_settings.auto_dolphin_xr_controls);
-            g_settings.save();
-        }
-        if (g_app.dolphin_performance_apply_requested.exchange(false, std::memory_order_relaxed)) {
-            apply_dolphin_60fps_cap();
             g_settings.save();
         }
         if (g_app.app_patches_apply_requested.exchange(false, std::memory_order_relaxed)) {
@@ -4312,7 +4313,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             if (dolphin_pid && *dolphin_pid != last_auto_hook_pid) {
                 apply_dolphin_vr_units_per_meter();
                 apply_dolphin_required_runtime_config();
-                apply_dolphin_60fps_cap();
                 disable_unmanaged_dolphin_codes();
                 sync_dolphin_xr_gamecube_controls(g_settings.auto_dolphin_xr_controls);
                 apply_dolphin_xr_camera_forward_zero();
