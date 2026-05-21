@@ -259,6 +259,170 @@ static std::string patch_group_name_from_header(const std::string& raw_line) {
     return name.empty() ? "Ungrouped" : name;
 }
 
+static constexpr std::string_view kPrimedGunBuiltinPatchIni = R"PGINI(
+$PrimedGun Disable Frustum Culling
+04345200 4BCBC780
+04001980 2C1E0005
+04001984 40800010
+04001988 48343894
+0400198C 60000000
+04001990 60000000
+04001994 7FA3EB78
+04001998 7FE4FB78
+0400199C 48336089
+040019A0 4834386C
+
+$PrimedGun No Idle Sway
+040EA15C 38810044
+0400E538 60000000
+04014820 4E800020
+0400E73C 60000000
+0400F810 48000244
+
+$PrimedGun Disable Arm Cannon Idle Fidget
+0403BDB8 4E800020
+
+$PrimedGun Cannon Rotation Hook
+04040FEC 4BFC0854
+04001840 807C0740
+04001844 3D60817F
+04001848 616BE000
+0400184C 914B0030
+04001850 918B0034
+04001854 818B0038
+04001858 2C0C0000
+0400185C 41820058
+04001860 7C1C6040
+04001864 40820050
+04001868 395C04A8
+0400186C 818B0000
+04001870 918A0000
+04001874 818B0004
+04001878 918A0004
+0400187C 818B0008
+04001880 918A0008
+04001884 818B000C
+04001888 918A0010
+0400188C 818B0010
+04001890 918A0014
+04001894 818B0014
+04001898 918A0018
+0400189C 818B0018
+040018A0 918A0020
+040018A4 818B001C
+040018A8 918A0024
+040018AC 818B0020
+040018B0 918A0028
+040018B4 814B0030
+040018B8 818B0034
+040018BC 48000104
+040019C0 395C03E8
+040019C4 818B0000
+040019C8 918A0000
+040019CC 818B0004
+040019D0 918A0004
+040019D4 818B0008
+040019D8 918A0008
+040019DC 818B000C
+040019E0 918A0010
+040019E4 818B0010
+040019E8 918A0014
+040019EC 818B0014
+040019F0 918A0018
+040019F4 818B0018
+040019F8 918A0020
+040019FC 818B001C
+04001A00 918A0024
+04001A04 818B0020
+04001A08 918A0028
+04001A0C 4803F5E4
+
+$PrimedGun Gun Ray Lock/Scan Target Hook
+0417CC70 4BE84C90
+04001900 3D00817F
+04001904 6108E400
+04001908 81280000
+0400190C 7C092040
+04001910 40820018
+04001914 A1280004
+04001918 2809FFFF
+0400191C 4182000C
+04001920 B1230000
+04001924 4E800020
+04001928 9421FFF0
+0400192C 4817B348
+
+$PrimedGun Reticle Hook
+040BFCD4 4BF41D4C
+04001A20 3D80817F
+04001A24 618CE500
+04001A28 800C0000
+04001A2C 2C000000
+04001A30 41820054
+04001A34 396C0004
+04001A38 3941005C
+04001A3C 800B0000
+04001A40 900A0000
+04001A44 800B0004
+04001A48 900A0004
+04001A4C 800B0008
+04001A50 900A0008
+04001A54 800B000C
+04001A58 900A000C
+04001A5C 800B0010
+04001A60 900A0010
+04001A64 800B0014
+04001A68 900A0014
+04001A6C 800B0018
+04001A70 900A0018
+04001A74 800B001C
+04001A78 900A001C
+04001A7C 800B0020
+04001A80 900A0020
+04001A84 38600000
+04001A88 480BE250
+040BD10C 4BF44984
+04001A90 3D808045
+04001A94 618CA1A8
+04001A98 818C084C
+04001A9C 2C0C0000
+04001AA0 41820018
+04001AA4 816C0330
+04001AA8 2C0B0000
+04001AAC 4182000C
+04001AB0 3D803F80
+04001AB4 48000008
+04001AB8 3D804020
+04001ABC 91810008
+04001AC0 C0010008
+04001AC4 EC3F0032
+04001AC8 480BB648
+
+$PrimedGun Disable Visor Effects
+041133D8 48000040
+04113A98 4E800020
+042BA4B4 4E800020
+042BA7E0 4E800020
+0419697C 4BE6AFC4
+04001940 806300A4
+04001944 2C030000
+04001948 4D820020
+0400194C 38800000
+04001950 38A00001
+04001954 482C8D94
+04194D34 4BE6CC2C
+04001960 80630078
+04001964 2C030000
+04001968 4D820020
+0400196C 38800000
+04001970 38A00001
+04001974 482C8D74
+0411437C C02295D0
+04114380 4E800020
+041143C4 C02295D0
+041143C8 4E800020
+)PGINI";
+
 static void open_app_hook_log() {
     if (!app_logging_enabled())
         return;
@@ -1115,57 +1279,40 @@ static std::vector<LoadedPatch> load_app_patch_files() {
     std::vector<std::string> discovered_groups;
     size_t total_patch_lines = 0;
     size_t skipped_patch_lines = 0;
-    const fs::path patchDir = exe_directory() / L"assets" / L"gecko";
-    if (!fs::exists(patchDir)) {
-        app_hook_log(L"Patch directory not found: " + patchDir.wstring());
-        return patches;
-    }
 
-    for (const fs::directory_entry& entry : fs::directory_iterator(patchDir)) {
-        if (!entry.is_regular_file())
+    std::istringstream file{std::string(kPrimedGunBuiltinPatchIni)};
+    std::string line;
+    std::string current_group;
+    bool current_group_enabled = true;
+    while (std::getline(file, line) && patches.size() < PrimedGun::MaxGamePatches) {
+        const std::string trimmed = trim_ascii(line);
+        if (!trimmed.empty() && trimmed.front() == '$') {
+            current_group = patch_group_name_from_header(trimmed);
+            g_settings.ensure_ar_code_toggle(current_group);
+            if (std::find(discovered_groups.begin(), discovered_groups.end(), current_group) ==
+                discovered_groups.end()) {
+                discovered_groups.push_back(current_group);
+            }
+            current_group_enabled = g_settings.ar_code_enabled(current_group);
             continue;
-        const fs::path path = entry.path();
-        const std::wstring ext = path.extension().wstring();
-        if (_wcsicmp(ext.c_str(), L".ini") != 0 && _wcsicmp(ext.c_str(), L".txt") != 0)
-            continue;
+        }
 
-        std::ifstream file(path);
-        if (!file.is_open())
-            continue;
-
-        std::string line;
-        std::string current_group;
-        bool current_group_enabled = true;
-        while (std::getline(file, line) && patches.size() < PrimedGun::MaxGamePatches) {
-            const std::string trimmed = trim_ascii(line);
-            if (!trimmed.empty() && trimmed.front() == '$') {
-                current_group = patch_group_name_from_header(trimmed);
+        LoadedPatch patch{};
+        if (parse_patch_line(line, patch)) {
+            if (current_group.empty()) {
+                current_group = "Ungrouped";
                 g_settings.ensure_ar_code_toggle(current_group);
                 if (std::find(discovered_groups.begin(), discovered_groups.end(), current_group) ==
                     discovered_groups.end()) {
                     discovered_groups.push_back(current_group);
                 }
                 current_group_enabled = g_settings.ar_code_enabled(current_group);
-                continue;
             }
-
-            LoadedPatch patch{};
-            if (parse_patch_line(line, patch)) {
-                if (current_group.empty()) {
-                    current_group = "Ungrouped";
-                    g_settings.ensure_ar_code_toggle(current_group);
-                    if (std::find(discovered_groups.begin(), discovered_groups.end(), current_group) ==
-                        discovered_groups.end()) {
-                        discovered_groups.push_back(current_group);
-                    }
-                    current_group_enabled = g_settings.ar_code_enabled(current_group);
-                }
-                ++total_patch_lines;
-                patch.enabled = current_group_enabled;
-                if (!patch.enabled)
-                    ++skipped_patch_lines;
-                patches.push_back(patch);
-            }
+            ++total_patch_lines;
+            patch.enabled = current_group_enabled;
+            if (!patch.enabled)
+                ++skipped_patch_lines;
+            patches.push_back(patch);
         }
     }
 
@@ -1175,7 +1322,7 @@ static std::vector<LoadedPatch> load_app_patch_files() {
     }
 
     app_hook_log(L"Loaded " + std::to_wstring(patches.size() - skipped_patch_lines) +
-        L" enabled app patch line(s) from " + patchDir.wstring() +
+        L" enabled built-in app patch line(s)" +
         L" (" + std::to_wstring(skipped_patch_lines) +
         L" disabled of " + std::to_wstring(total_patch_lines) + L").");
     return patches;
