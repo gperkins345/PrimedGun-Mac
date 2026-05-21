@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <sstream>
 #include <tlhelp32.h>
+#include <shellapi.h>
 
 #include "imgui.h"
 #include "backends/imgui_impl_win32.h"
@@ -702,20 +703,21 @@ static fs::path dolphin_gcpad_backup_path_for(const fs::path& profile) {
     return profile.parent_path() / L"GCPadNew.ini.primedgun-gcpad1.bak";
 }
 
-static fs::path dolphin_hotkeys_path() {
-    return active_dolphin_config_path(L"Hotkeys.ini");
-}
-
 static fs::path dolphin_ini_path() {
     return active_dolphin_config_path(L"Dolphin.ini");
 }
 
-static fs::path dolphin_gfx_ini_path() {
-    return active_dolphin_config_path(L"GFX.ini");
+static fs::path fallback_config_directory() {
+    return exe_directory() / L"PrimeGun configs";
 }
 
-static fs::path dolphin_hotkeys_profile_path() {
-    return active_dolphin_config_path(L"Profiles" / fs::path(L"Hotkeys") / L"hotkeys.ini");
+static std::string narrow_path(const fs::path& path) {
+    const std::wstring wide = path.wstring();
+    return std::string(wide.begin(), wide.end());
+}
+
+static fs::path dolphin_gfx_ini_path() {
+    return active_dolphin_config_path(L"GFX.ini");
 }
 
 static fs::path primedgun_backup_path_for(const fs::path& path) {
@@ -4497,6 +4499,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         const bool has_shared_state = open_live_shared_state() && g_shared_state;
         if (has_shared_state) {
             g_shared_state->appHeartbeat++;
+            if (g_shared_state->inputBindingStatus == 4u) {
+                g_app.dolphin_config_fallback_visible = true;
+                g_app.dolphin_config_fallback_path = narrow_path(fallback_config_directory());
+                g_app.dolphin_config_fallback_message =
+                    "Failed to locate local Dolphin configs.";
+            } else if (g_shared_state->inputBindingStatus == 2u) {
+                g_app.dolphin_config_fallback_visible = false;
+                g_app.dolphin_config_fallback_message.clear();
+            }
+            if (g_app.open_config_fallback_requested.exchange(false, std::memory_order_relaxed)) {
+                const fs::path folder = fallback_config_directory();
+                ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            }
             static bool vr_settings_visible = false;
             static bool last_left_thumb_click = false;
             static bool last_right_select = false;

@@ -673,7 +673,6 @@ std::wstring LowerPathText(std::wstring value) {
 bool IsDolphinConfigTracePath(const std::wstring& path) {
     const std::wstring lower = LowerPathText(path);
     return lower.find(L"gcpadnew.ini") != std::wstring::npos ||
-           lower.find(L"hotkeys.ini") != std::wstring::npos ||
            lower.find(L"gamesettings\\gm8e01.ini") != std::wstring::npos ||
            lower.find(L"gamesettingsvr\\gm8e01.ini") != std::wstring::npos ||
            lower.find(L"config\\dolphin.ini") != std::wstring::npos ||
@@ -1278,10 +1277,8 @@ void ProbeDolphinConfigSystems() {
 
     const std::vector<std::string_view> anchors = {
         "GCPadNew",
-        "Hotkeys",
         "GCPad1",
         "OpenXR/0/OpenXR Controller",
-        "VR/Reset VR Position",
         "GameSettingsVR",
         "Graphics.VR",
         "UnitsPerMeter",
@@ -1301,8 +1298,6 @@ void ProbeDolphinConfigSystems() {
 
     for (const fs::path& path : DolphinProfileFiles(L"Config\\GCPadNew.ini", false))
         LogPathState(L"Dolphin config probe GCPad candidate", path);
-    for (const fs::path& path : DolphinProfileFiles(L"Config\\Hotkeys.ini", false))
-        LogPathState(L"Dolphin config probe Hotkeys candidate", path);
     for (const fs::path& path : DolphinProfileFiles(L"GameSettings\\GM8E01.ini", false))
         LogPathState(L"Dolphin config probe GameSettings candidate", path);
     for (const fs::path& path : DolphinProfileFiles(L"GameSettingsVR\\GM8E01.ini", false))
@@ -1320,10 +1315,6 @@ void ProbeDolphinConfigFilesOccasionally() {
     for (const fs::path& path : DolphinActiveProfileFiles(L"Config\\GCPadNew.ini", true)) {
         PublishDolphinConfigRoot(path);
         LogPathStateWithHash(L"Dolphin config watch GCPad", path);
-    }
-    for (const fs::path& path : DolphinProfileFiles(L"Config\\Hotkeys.ini", true)) {
-        PublishDolphinConfigRoot(path);
-        LogPathStateWithHash(L"Dolphin config watch Hotkeys", path);
     }
     for (const fs::path& path : DolphinProfileFiles(L"GameSettings\\GM8E01.ini", true)) {
         PublishDolphinConfigRoot(path);
@@ -1346,7 +1337,6 @@ void ProbeDolphinConfigMemoryOccasionally() {
     const std::vector<std::string_view> anchors = {
         "GCPad1",
         "OpenXR/0/OpenXR Controller",
-        "VR/Reset VR Position",
         "Buttons/A",
         "Main Stick/Up",
         "Right Button Thumbstick",
@@ -1437,15 +1427,6 @@ bool ApplyPrimedGunDolphinSetupFromHook() {
                               {});
         wrote_any = true;
         Log(L"Applied PrimedGun GCPad config to Dolphin active path: " + path.wstring());
-    }
-
-    for (const fs::path& path : DolphinActiveProfileFiles(L"Config\\Hotkeys.ini", true)) {
-        ApplyIniSectionValues(path, "Hotkeys",
-                              {{"Device", "OpenXR/0/OpenXR Controller"},
-                               {"VR/Reset VR Position", "`Right Button Thumbstick`"}},
-                              {});
-        wrote_any = true;
-        Log(L"Applied PrimedGun hotkey config to Dolphin active path: " + path.wstring());
     }
 
     for (const fs::path& path : DolphinActiveProfileFiles(L"Config\\Dolphin.ini", false)) {

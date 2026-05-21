@@ -105,6 +105,7 @@ set(PRIMEDGUN_RUNTIME_TARGETS
 )
 set(D3DCOMPILER_47_DLL "$ENV{SystemRoot}/System32/D3DCompiler_47.dll")
 set(PRIMEDGUN_README "${CMAKE_SOURCE_DIR}/README.md")
+set(PRIMEDGUN_CONFIGS_DIR "${CMAKE_SOURCE_DIR}/PrimeGun configs")
 
 foreach(RUNTIME_TARGET IN LISTS PRIMEDGUN_RUNTIME_TARGETS)
     add_custom_command(TARGET ${RUNTIME_TARGET} POST_BUILD
@@ -120,6 +121,17 @@ foreach(RUNTIME_TARGET IN LISTS PRIMEDGUN_RUNTIME_TARGETS)
                 "${PRIMEDGUN_README}"
                 "$<TARGET_FILE_DIR:${RUNTIME_TARGET}>/README.md"
             COMMENT "Copying README.md for ${RUNTIME_TARGET}"
+        )
+    endif()
+
+    if(EXISTS "${PRIMEDGUN_CONFIGS_DIR}")
+        add_custom_command(TARGET ${RUNTIME_TARGET} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E rm -rf
+                "$<TARGET_FILE_DIR:${RUNTIME_TARGET}>/PrimeGun configs"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PRIMEDGUN_CONFIGS_DIR}"
+                "$<TARGET_FILE_DIR:${RUNTIME_TARGET}>/PrimeGun configs"
+            COMMENT "Copying PrimeGun fallback configs for ${RUNTIME_TARGET}"
         )
     endif()
 
