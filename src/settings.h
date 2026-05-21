@@ -8,6 +8,9 @@ inline constexpr bool kDefaultUseRightHand = true;
 inline constexpr float kDefaultOffsetX = 0.0f;
 inline constexpr float kDefaultOffsetY = 0.0f;
 inline constexpr float kDefaultOffsetZ = 0.0f;
+inline constexpr float kDefaultModelOffsetX = 0.0f;
+inline constexpr float kDefaultModelOffsetY = 0.0f;
+inline constexpr float kDefaultModelOffsetZ = 0.0f;
 inline constexpr float kDefaultRotOffsetX = 0.0f;
 inline constexpr float kDefaultRotOffsetY = 0.0f;
 inline constexpr float kDefaultRotOffsetZ = 0.0f;
@@ -79,6 +82,9 @@ struct Settings {
     float offset_x = kDefaultOffsetX;
     float offset_y = kDefaultOffsetY;
     float offset_z = kDefaultOffsetZ;
+    float model_offset_x = kDefaultModelOffsetX;
+    float model_offset_y = kDefaultModelOffsetY;
+    float model_offset_z = kDefaultModelOffsetZ;
     float rot_offset_x = kDefaultRotOffsetX;
     float rot_offset_y = kDefaultRotOffsetY;
     float rot_offset_z = kDefaultRotOffsetZ;
@@ -123,6 +129,9 @@ struct Settings {
         offset_x = kDefaultOffsetX;
         offset_y = kDefaultOffsetY;
         offset_z = kDefaultOffsetZ;
+        model_offset_x = kDefaultModelOffsetX;
+        model_offset_y = kDefaultModelOffsetY;
+        model_offset_z = kDefaultModelOffsetZ;
         rot_offset_x = kDefaultRotOffsetX;
         rot_offset_y = kDefaultRotOffsetY;
         rot_offset_z = kDefaultRotOffsetZ;
@@ -190,6 +199,9 @@ struct Settings {
         f << "offset_x=" << offset_x << "\n";
         f << "offset_y=" << offset_y << "\n";
         f << "offset_z=" << offset_z << "\n";
+        f << "model_offset_x=" << model_offset_x << "\n";
+        f << "model_offset_y=" << model_offset_y << "\n";
+        f << "model_offset_z=" << model_offset_z << "\n";
         f << "rot_offset_x=" << rot_offset_x << "\n";
         f << "rot_offset_y=" << rot_offset_y << "\n";
         f << "rot_offset_z=" << rot_offset_z << "\n";
@@ -232,6 +244,9 @@ struct Settings {
             else if (key == "offset_x")              offset_x = std::stof(val);
             else if (key == "offset_y")              offset_y = std::stof(val);
             else if (key == "offset_z")              offset_z = std::stof(val);
+            else if (key == "model_offset_x")        model_offset_x = std::stof(val);
+            else if (key == "model_offset_y")        model_offset_y = std::stof(val);
+            else if (key == "model_offset_z")        model_offset_z = std::stof(val);
             else if (key == "rot_offset_x")          rot_offset_x = std::stof(val);
             else if (key == "rot_offset_y")          rot_offset_y = std::stof(val);
             else if (key == "rot_offset_z")          rot_offset_z = std::stof(val);
@@ -279,5 +294,8 @@ struct Settings {
         gun_targeting_distance = std::clamp(gun_targeting_distance, 10.0f, 120.0f);
         gun_targeting_radius = std::clamp(gun_targeting_radius, 0.5f, 8.0f);
         view_height_meters = std::clamp(view_height_meters, 0.4f, 2.4f);
+        model_offset_x = std::clamp(model_offset_x, -2.0f, 2.0f);
+        model_offset_y = std::clamp(model_offset_y, -2.0f, 2.0f);
+        model_offset_z = std::clamp(model_offset_z, -2.0f, 2.0f);
     }
 };

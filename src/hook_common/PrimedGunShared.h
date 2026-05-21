@@ -7,7 +7,7 @@ namespace PrimedGun {
 inline constexpr wchar_t SharedMemoryName[] = L"Local\\PrimedGunSharedState";
 inline constexpr wchar_t SharedMutexName[] = L"Local\\PrimedGunSharedStateMutex";
 inline constexpr uint32_t SharedStateMagic = 0x50475652; // PGVR
-inline constexpr uint32_t SharedStateVersion = 15;
+inline constexpr uint32_t SharedStateVersion = 16;
 inline constexpr uint32_t MaxGamePatches = 192;
 inline constexpr uint32_t MaxSharedPathChars = 260;
 inline constexpr uint32_t HookStatusDllAlive = 1u << 0;
@@ -53,6 +53,7 @@ struct SettingsState {
     uint32_t vrMenuGeneration = 0;
     uint32_t vrMenuSelectedIndex = 0;
     uint32_t vrMenuItemCount = 0;
+    uint32_t vrMenuTab = 0;
     uint32_t vrMenuPointerActive = 0;
     uint32_t vrMenuSavedNotice = 0;
     float vrMenuPointerX = 0.5f;
@@ -64,6 +65,9 @@ struct SettingsState {
     float offsetX = 0.0f;
     float offsetY = 0.0f;
     float offsetZ = 0.0f;
+    float modelOffsetX = 0.0f;
+    float modelOffsetY = 0.0f;
+    float modelOffsetZ = 0.0f;
     float rotOffsetX = 0.0f;
     float rotOffsetY = 0.0f;
     float rotOffsetZ = 0.0f;

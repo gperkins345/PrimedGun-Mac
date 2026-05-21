@@ -337,10 +337,15 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
 
         if (ImGui::BeginTabItem("Calibration")) {
             begin_panel("##calibration_panel", "Offset Tuning");
-            ImGui::TextDisabled("Position");
+            ImGui::SeparatorText("Position");
             slider_input("Left / right", &s.offset_x, -2, 2, 0.01f, 0.1f, "%.3f");
             slider_input("Up / down", &s.offset_y, -2, 2, 0.01f, 0.1f, "%.3f");
             slider_input("Forward / back", &s.offset_z, -2, 2, 0.01f, 0.1f, "%.3f");
+
+            ImGui::SeparatorText("Model Offset");
+            slider_input("Model left / right", &s.model_offset_x, -2, 2, 0.01f, 0.1f, "%.3f");
+            slider_input("Model up / down", &s.model_offset_y, -2, 2, 0.01f, 0.1f, "%.3f");
+            slider_input("Model forward / back", &s.model_offset_z, -2, 2, 0.01f, 0.1f, "%.3f");
 
             ImGui::SeparatorText("Rotation");
             slider_input("Pitch offset", &s.rot_offset_x, -180, 180, 0.5f, 5.0f, "%.2f");
@@ -355,6 +360,12 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
                 s.offset_x = kDefaultOffsetX;
                 s.offset_y = kDefaultOffsetY;
                 s.offset_z = kDefaultOffsetZ;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset Model")) {
+                s.model_offset_x = kDefaultModelOffsetX;
+                s.model_offset_y = kDefaultModelOffsetY;
+                s.model_offset_z = kDefaultModelOffsetZ;
             }
             ImGui::SameLine();
             if (ImGui::Button("Reset Rotation")) {

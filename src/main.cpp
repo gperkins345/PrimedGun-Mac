@@ -63,9 +63,8 @@ static constexpr uint32_t kButtonA = 1u << 2;
 static constexpr uint32_t kButtonB = 1u << 3;
 
 static float g_smooth_mat[12] = {1,0,0,0, 0,1,0,0, 0,0,1,0};
+static float g_smooth_pivot_mat[12] = {1,0,0,0, 0,1,0,0, 0,0,1,0};
 static float g_smooth_pitch = 0.0f;
-static bool g_lock_pitch_have_unlocked = false;
-static float g_lock_pitch_unlocked = 0.0f;
 static std::atomic<bool> g_running = true;
 static std::atomic<uint64_t> g_last_cannon_transform_write_ms = 0;
 static std::atomic<uint32_t> g_last_cannon_transform_player = 0;
@@ -109,6 +108,7 @@ static bool g_last_desired_basis_valid = false;
 static float g_directional_move_speed = 0.0f;
 static constexpr uint32_t k_render_hook_basis_addr = 0x817FE000;
 static constexpr uint32_t k_render_hook_expected_gun_addr = k_render_hook_basis_addr + 0x38;
+static constexpr uint32_t k_render_hook_model_offset_world_addr = k_render_hook_basis_addr + 0x40;
 static constexpr uint32_t k_projectile_fire_debug_addr = 0x817FE100;
 static constexpr uint32_t k_projectile_probe_debug_addr = 0x817FE300;
 static constexpr uint32_t k_gun_target_hook_addr = 0x817FE400;
@@ -128,7 +128,7 @@ static constexpr uint32_t k_player_free_look_center_time_offset = 0x3E0;
 static constexpr uint32_t k_player_free_look_yaw_angle_offset = 0x3E4;
 static constexpr uint32_t k_player_free_look_yaw_vel_offset = 0x3E8;
 static constexpr uint32_t k_player_free_look_pitch_angle_offset = 0x3EC;
-static constexpr uint32_t k_player_free_look_pitch_vel_offset = 0x3F0;
+static bool scan_visor_active(uint32_t player);
 static constexpr uint32_t k_cannon_rotation_offsets[9] = {
     0x4A8, 0x4AC, 0x4B0,
     0x4B8, 0x4BC, 0x4C0,
@@ -1819,88 +1819,142 @@ static bool vr_settings_pointer_hit(const Pose& left, const Pose& right, float& 
     return x_out >= 0.0f && x_out <= 1.0f && y_out >= 0.0f && y_out <= 1.0f;
 }
 
-static constexpr uint32_t k_vr_settings_item_count = 31;
+enum class VrSettingsTab : uint32_t {
+    Aiming = 0,
+    Calibration = 1,
+    Controller = 2,
+    Movement = 3,
+};
+
+static constexpr uint32_t k_vr_settings_tab_count = 4;
+
+static uint32_t vr_settings_item_count_for_tab(uint32_t tab) {
+    switch (static_cast<VrSettingsTab>(tab)) {
+    case VrSettingsTab::Aiming: return 4;
+    case VrSettingsTab::Calibration: return 13;
+    case VrSettingsTab::Controller: return 9;
+    case VrSettingsTab::Movement: return 7;
+    default: return 0;
+    }
+}
 
 static std::chrono::steady_clock::time_point g_vr_settings_saved_notice_until{};
 
-static void change_vr_setting(uint32_t index, bool increase) {
-    const float sign = increase ? 1.0f : -1.0f;
+static void change_vr_global_setting(uint32_t index) {
     switch (index) {
     case 0:
         g_settings.save();
         g_vr_settings_saved_notice_until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         app_hook_log(L"VR settings saved from in-headset menu.");
-        return;
+        break;
     case 1:
         g_settings.reset_all();
+        g_settings.save();
         break;
-    case 2: g_settings.use_right_hand = !g_settings.use_right_hand; break;
-    case 3: g_settings.require_trigger = !g_settings.require_trigger; break;
-    case 4: g_settings.trigger_threshold = std::clamp(g_settings.trigger_threshold + sign * 0.05f, 0.0f, 1.0f); break;
-    case 5: g_settings.world_scale = std::clamp(g_settings.world_scale + sign * 0.5f, 1.0f, 50.0f); break;
-    case 6: g_settings.offset_x = std::clamp(g_settings.offset_x + sign * 0.01f, -2.0f, 2.0f); break;
-    case 7: g_settings.offset_y = std::clamp(g_settings.offset_y + sign * 0.01f, -2.0f, 2.0f); break;
-    case 8: g_settings.offset_z = std::clamp(g_settings.offset_z + sign * 0.01f, -2.0f, 2.0f); break;
-    case 9:
-        g_settings.offset_x = kDefaultOffsetX;
-        g_settings.offset_y = kDefaultOffsetY;
-        g_settings.offset_z = kDefaultOffsetZ;
+    default:
         break;
-    case 10: g_settings.rot_offset_x = std::clamp(g_settings.rot_offset_x + sign * 0.5f, -180.0f, 180.0f); break;
-    case 11: g_settings.rot_offset_y = std::clamp(g_settings.rot_offset_y + sign * 0.5f, -180.0f, 180.0f); break;
-    case 12: g_settings.rot_offset_z = std::clamp(g_settings.rot_offset_z + sign * 0.5f, -180.0f, 180.0f); break;
-    case 13:
-        g_settings.rot_offset_x = kDefaultRotOffsetX;
-        g_settings.rot_offset_y = kDefaultRotOffsetY;
-        g_settings.rot_offset_z = kDefaultRotOffsetZ;
+    }
+}
+
+static void change_vr_setting(uint32_t tab, uint32_t index, bool increase) {
+    const float sign = increase ? 1.0f : -1.0f;
+    switch (static_cast<VrSettingsTab>(tab)) {
+    case VrSettingsTab::Aiming:
+        switch (index) {
+        case 0: g_settings.gun_targeting_enabled = !g_settings.gun_targeting_enabled; break;
+        case 1: g_settings.gun_targeting_distance = std::clamp(g_settings.gun_targeting_distance + sign * 1.0f, 10.0f, 120.0f); break;
+        case 2: g_settings.gun_targeting_radius = std::clamp(g_settings.gun_targeting_radius + sign * 0.1f, 0.5f, 8.0f); break;
+        case 3:
+            g_settings.gun_targeting_enabled = kDefaultGunTargetingEnabled;
+            g_settings.gun_targeting_distance = kDefaultGunTargetingDistance;
+            g_settings.gun_targeting_radius = kDefaultGunTargetingRadius;
+            break;
+        default: break;
+        }
         break;
-    case 14: g_settings.gun_targeting_enabled = !g_settings.gun_targeting_enabled; break;
-    case 15: g_settings.gun_targeting_distance = std::clamp(g_settings.gun_targeting_distance + sign * 1.0f, 10.0f, 120.0f); break;
-    case 16: g_settings.gun_targeting_radius = std::clamp(g_settings.gun_targeting_radius + sign * 0.1f, 0.5f, 8.0f); break;
-    case 17:
-        g_settings.gun_targeting_enabled = kDefaultGunTargetingEnabled;
-        g_settings.gun_targeting_distance = kDefaultGunTargetingDistance;
-        g_settings.gun_targeting_radius = kDefaultGunTargetingRadius;
+    case VrSettingsTab::Calibration:
+        switch (index) {
+        case 0: g_settings.world_scale = std::clamp(g_settings.world_scale + sign * 0.5f, 1.0f, 50.0f); break;
+        case 1: g_settings.offset_x = std::clamp(g_settings.offset_x + sign * 0.01f, -2.0f, 2.0f); break;
+        case 2: g_settings.offset_y = std::clamp(g_settings.offset_y + sign * 0.01f, -2.0f, 2.0f); break;
+        case 3: g_settings.offset_z = std::clamp(g_settings.offset_z + sign * 0.01f, -2.0f, 2.0f); break;
+        case 4:
+            g_settings.offset_x = kDefaultOffsetX;
+            g_settings.offset_y = kDefaultOffsetY;
+            g_settings.offset_z = kDefaultOffsetZ;
+            break;
+        case 5: g_settings.model_offset_x = std::clamp(g_settings.model_offset_x + sign * 0.01f, -2.0f, 2.0f); break;
+        case 6: g_settings.model_offset_y = std::clamp(g_settings.model_offset_y + sign * 0.01f, -2.0f, 2.0f); break;
+        case 7: g_settings.model_offset_z = std::clamp(g_settings.model_offset_z + sign * 0.01f, -2.0f, 2.0f); break;
+        case 8:
+            g_settings.model_offset_x = kDefaultModelOffsetX;
+            g_settings.model_offset_y = kDefaultModelOffsetY;
+            g_settings.model_offset_z = kDefaultModelOffsetZ;
+            break;
+        case 9: g_settings.rot_offset_x = std::clamp(g_settings.rot_offset_x + sign * 0.5f, -180.0f, 180.0f); break;
+        case 10: g_settings.rot_offset_y = std::clamp(g_settings.rot_offset_y + sign * 0.5f, -180.0f, 180.0f); break;
+        case 11: g_settings.rot_offset_z = std::clamp(g_settings.rot_offset_z + sign * 0.5f, -180.0f, 180.0f); break;
+        case 12:
+            g_settings.rot_offset_x = kDefaultRotOffsetX;
+            g_settings.rot_offset_y = kDefaultRotOffsetY;
+            g_settings.rot_offset_z = kDefaultRotOffsetZ;
+            break;
+        default: break;
+        }
         break;
-    case 18: g_settings.auto_dolphin_xr_controls = !g_settings.auto_dolphin_xr_controls; break;
-    case 19: g_settings.xr_dpad_enabled = !g_settings.xr_dpad_enabled; break;
-    case 20: g_settings.xr_dpad_head_radius = std::clamp(g_settings.xr_dpad_head_radius + sign * 0.01f, 0.08f, 0.28f); break;
-    case 21: g_settings.xr_dpad_head_y_below = std::clamp(g_settings.xr_dpad_head_y_below + sign * 0.01f, 0.02f, 0.25f); break;
-    case 22: g_settings.xr_dpad_deadzone = std::clamp(g_settings.xr_dpad_deadzone + sign * 0.01f, 0.20f, 0.80f); break;
-    case 23:
-        g_settings.xr_dpad_enabled = kDefaultXrDpadEnabled;
-        g_settings.xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
-        g_settings.xr_dpad_head_y_below = kDefaultXrDpadHeadYBelow;
-        g_settings.xr_dpad_deadzone = kDefaultXrDpadDeadzone;
-        g_settings.xr_dpad_stick_axis = kDefaultXrDpadStickAxis;
+    case VrSettingsTab::Controller:
+        switch (index) {
+        case 0: g_settings.use_right_hand = !g_settings.use_right_hand; break;
+        case 1: g_settings.require_trigger = !g_settings.require_trigger; break;
+        case 2: g_settings.trigger_threshold = std::clamp(g_settings.trigger_threshold + sign * 0.05f, 0.0f, 1.0f); break;
+        case 3: g_settings.auto_dolphin_xr_controls = !g_settings.auto_dolphin_xr_controls; break;
+        case 4: g_settings.xr_dpad_enabled = !g_settings.xr_dpad_enabled; break;
+        case 5: g_settings.xr_dpad_head_radius = std::clamp(g_settings.xr_dpad_head_radius + sign * 0.01f, 0.08f, 0.28f); break;
+        case 6: g_settings.xr_dpad_head_y_below = std::clamp(g_settings.xr_dpad_head_y_below + sign * 0.01f, 0.02f, 0.25f); break;
+        case 7: g_settings.xr_dpad_deadzone = std::clamp(g_settings.xr_dpad_deadzone + sign * 0.01f, 0.20f, 0.80f); break;
+        case 8:
+            g_settings.xr_dpad_enabled = kDefaultXrDpadEnabled;
+            g_settings.xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
+            g_settings.xr_dpad_head_y_below = kDefaultXrDpadHeadYBelow;
+            g_settings.xr_dpad_deadzone = kDefaultXrDpadDeadzone;
+            g_settings.xr_dpad_stick_axis = kDefaultXrDpadStickAxis;
+            break;
+        default: break;
+        }
         break;
-    case 24: g_settings.directional_movement_enabled = !g_settings.directional_movement_enabled; break;
-    case 25: g_settings.directional_movement_use_right_stick = !g_settings.directional_movement_use_right_stick; break;
-    case 26: g_settings.directional_movement_deadzone = std::clamp(g_settings.directional_movement_deadzone + sign * 0.01f, 0.05f, 0.80f); break;
-    case 27: g_settings.directional_movement_speed = std::clamp(g_settings.directional_movement_speed + sign * 0.25f, 4.0f, 30.0f); break;
-    case 28: g_settings.directional_movement_accel = std::clamp(g_settings.directional_movement_accel + sign * 1.0f, 5.0f, 120.0f); break;
-    case 29: g_settings.directional_movement_air_accel = std::clamp(g_settings.directional_movement_air_accel + sign * 0.5f, 0.0f, 60.0f); break;
-    case 30:
-        g_settings.directional_movement_enabled = kDefaultDirectionalMovementEnabled;
-        g_settings.directional_movement_use_right_stick = kDefaultDirectionalMovementUseRightStick;
-        g_settings.directional_movement_deadzone = kDefaultDirectionalMovementDeadzone;
-        g_settings.directional_movement_speed = kDefaultDirectionalMovementSpeed;
-        g_settings.directional_movement_accel = kDefaultDirectionalMovementAccel;
-        g_settings.directional_movement_air_accel = kDefaultDirectionalMovementAirAccel;
+    case VrSettingsTab::Movement:
+        switch (index) {
+        case 0: g_settings.directional_movement_enabled = !g_settings.directional_movement_enabled; break;
+        case 1: g_settings.directional_movement_use_right_stick = !g_settings.directional_movement_use_right_stick; break;
+        case 2: g_settings.directional_movement_deadzone = std::clamp(g_settings.directional_movement_deadzone + sign * 0.01f, 0.05f, 0.80f); break;
+        case 3: g_settings.directional_movement_speed = std::clamp(g_settings.directional_movement_speed + sign * 0.25f, 4.0f, 30.0f); break;
+        case 4: g_settings.directional_movement_accel = std::clamp(g_settings.directional_movement_accel + sign * 1.0f, 5.0f, 120.0f); break;
+        case 5: g_settings.directional_movement_air_accel = std::clamp(g_settings.directional_movement_air_accel + sign * 0.5f, 0.0f, 60.0f); break;
+        case 6:
+            g_settings.directional_movement_enabled = kDefaultDirectionalMovementEnabled;
+            g_settings.directional_movement_use_right_stick = kDefaultDirectionalMovementUseRightStick;
+            g_settings.directional_movement_deadzone = kDefaultDirectionalMovementDeadzone;
+            g_settings.directional_movement_speed = kDefaultDirectionalMovementSpeed;
+            g_settings.directional_movement_accel = kDefaultDirectionalMovementAccel;
+            g_settings.directional_movement_air_accel = kDefaultDirectionalMovementAirAccel;
+            break;
+        default: break;
+        }
         break;
     default: break;
     }
     g_settings.save();
 }
 
-static void sync_vr_settings_to_shared(uint32_t generation, bool visible, uint32_t selected, bool pointerActive, float pointerX, float pointerY) {
+static void sync_vr_settings_to_shared(uint32_t generation, bool visible, uint32_t tab, uint32_t selected, bool pointerActive, float pointerX, float pointerY) {
     if (!g_shared_state)
         return;
     auto& s = g_shared_state->settings;
     s.vrMenuVisible = visible ? 1u : 0u;
     s.vrMenuGeneration = generation;
     s.vrMenuSelectedIndex = selected;
-    s.vrMenuItemCount = k_vr_settings_item_count;
+    s.vrMenuItemCount = vr_settings_item_count_for_tab(tab);
+    s.vrMenuTab = tab;
     s.vrMenuPointerActive = pointerActive ? 1u : 0u;
     s.vrMenuSavedNotice = std::chrono::steady_clock::now() < g_vr_settings_saved_notice_until ? 1u : 0u;
     s.vrMenuPointerX = pointerX;
@@ -1912,6 +1966,9 @@ static void sync_vr_settings_to_shared(uint32_t generation, bool visible, uint32
     s.offsetX = g_settings.offset_x;
     s.offsetY = g_settings.offset_y;
     s.offsetZ = g_settings.offset_z;
+    s.modelOffsetX = g_settings.model_offset_x;
+    s.modelOffsetY = g_settings.model_offset_y;
+    s.modelOffsetZ = g_settings.model_offset_z;
     s.rotOffsetX = g_settings.rot_offset_x;
     s.rotOffsetY = g_settings.rot_offset_y;
     s.rotOffsetZ = g_settings.rot_offset_z;
@@ -2280,15 +2337,18 @@ static void set_player_input_disabled_for_dpad(uint32_t state_mgr, bool disabled
 }
 
 static void suppress_c_stick_for_dpad(uint32_t state_mgr) {
-    g_dolphin.write_float(state_mgr + k_final_input_right_stick_x, 0.0f);
-    g_dolphin.write_float(state_mgr + k_final_input_right_stick_y, 0.0f);
-    g_dolphin.write_u8(state_mgr + k_final_input_right_stick_x_press, 0);
-    g_dolphin.write_u8(state_mgr + k_final_input_right_stick_y_press, 0);
-
     const auto addrs = get_addresses();
     const uint32_t player = g_dolphin.read_u32(state_mgr + addrs.player_offset);
     if (player < 0x80000000)
         return;
+
+    if (scan_visor_active(player))
+        return;
+
+    g_dolphin.write_float(state_mgr + k_final_input_right_stick_x, 0.0f);
+    g_dolphin.write_float(state_mgr + k_final_input_right_stick_y, 0.0f);
+    g_dolphin.write_u8(state_mgr + k_final_input_right_stick_x_press, 0);
+    g_dolphin.write_u8(state_mgr + k_final_input_right_stick_y_press, 0);
 
     g_dolphin.write_u8(player + k_player_free_look_state_offset, 0);
     g_dolphin.write_u8(player + k_player_free_look_state_offset + 1, 0);
@@ -2297,7 +2357,6 @@ static void suppress_c_stick_for_dpad(uint32_t state_mgr) {
     g_dolphin.write_float(player + k_player_free_look_yaw_angle_offset, 0.0f);
     g_dolphin.write_float(player + k_player_free_look_yaw_vel_offset, 0.0f);
     g_dolphin.write_float(player + k_player_free_look_pitch_angle_offset, 0.0f);
-    g_dolphin.write_float(player + k_player_free_look_pitch_vel_offset, 0.0f);
 }
 
 static bool apply_xr_dpad_input(const Pose& left, const Pose& hmd) {
@@ -2924,7 +2983,6 @@ static void log_gameplay_candidate_profile(uint32_t state_mgr,
        << L" axisA=" << g_dolphin.read_float(player + k_player_free_look_yaw_angle_offset)
        << L" axisAVel=" << g_dolphin.read_float(player + k_player_free_look_yaw_vel_offset)
        << L" axisB=" << g_dolphin.read_float(player + addrs.pitch_offset)
-       << L" axisBVel=" << g_dolphin.read_float(player + k_player_free_look_pitch_vel_offset)
        << L" alpha=" << g_dolphin.read_float(player + 0x494)
        << L" holster=" << g_dolphin.read_u32(player + 0x498)
        << L" flags=" << hex32(g_dolphin.read_u8(player + k_player_disable_input_flags_offset))
@@ -3105,6 +3163,9 @@ static void disarm_memory_writes() {
     reset_gun_target_switch_state();
     if (g_dolphin.is_connected()) {
         g_dolphin.write_u32(k_render_hook_expected_gun_addr, 0);
+        g_dolphin.write_float(k_render_hook_model_offset_world_addr + 0, 0.0f);
+        g_dolphin.write_float(k_render_hook_model_offset_world_addr + 4, 0.0f);
+        g_dolphin.write_float(k_render_hook_model_offset_world_addr + 8, 0.0f);
         g_dolphin.write_u32(k_gun_target_hook_addr, 0);
         g_dolphin.write_u32(k_gun_target_hook_addr + 4, 0xffffffffu);
         g_dolphin.write_u32(k_reticle_billboard_basis_addr, 0);
@@ -3507,7 +3568,7 @@ static bool pick_gun_ray_target(uint32_t state_mgr, uint32_t player, uint32_t gu
     const uint16_t player_uid = static_cast<uint16_t>(g_dolphin.read_u32(player + 0x8) >> 16);
     const float max_along = g_settings.gun_targeting_distance;
     const float max_perp = g_settings.gun_targeting_radius;
-    const bool scan_mode = g_dolphin.read_u32(player + 0x330) == 1;
+    const bool scan_mode = scan_visor_active(player);
     bool found = false;
 
     for (uint32_t i = 0; i < k_max_objects; ++i) {
@@ -3667,7 +3728,7 @@ static void write_scan_pitch_from_matrix(uint32_t player, const float* mat) {
     if (!gun_pitch_from_matrix(mat, pitch))
         return;
 
-    constexpr float kMaxScanPitch = 1.35f;
+    constexpr float kMaxScanPitch = 1.2217305f;
     pitch = std::clamp(pitch, -kMaxScanPitch, kMaxScanPitch);
     constexpr float kPitchSmooth = 0.45f;
     g_smooth_pitch = g_smooth_pitch * kPitchSmooth + pitch * (1.0f - kPitchSmooth);
@@ -3685,42 +3746,8 @@ static void reset_scan_pitch_after_visor_exit(uint32_t player) {
     g_dolphin.write_float(player + addrs.pitch_offset, 0.0f);
 }
 
-static void reset_lock_camera_pitch_suppression() {
-    g_lock_pitch_have_unlocked = false;
-    g_lock_pitch_unlocked = 0.0f;
+static void reset_scan_pitch_smoothing() {
     g_smooth_pitch = 0.0f;
-}
-
-static void suppress_lock_camera_pitch(uint32_t state_mgr, uint32_t player) {
-    const auto addrs = get_addresses();
-    const uint32_t pitch_addr = player + addrs.pitch_offset;
-    const float pitch = g_dolphin.read_float(pitch_addr);
-    if (!std::isfinite(pitch))
-        return;
-
-    constexpr float kMaxFirstPersonPitch = 1.55f;
-    const float clamped_pitch = std::clamp(pitch, -kMaxFirstPersonPitch, kMaxFirstPersonPitch);
-    if (!orbit_lock_button_held(state_mgr)) {
-        g_lock_pitch_unlocked = clamped_pitch;
-        g_lock_pitch_have_unlocked = true;
-        return;
-    }
-
-    if (!g_lock_pitch_have_unlocked) {
-        g_lock_pitch_unlocked = clamped_pitch;
-        g_lock_pitch_have_unlocked = true;
-    }
-
-    g_dolphin.write_float(state_mgr + k_final_input_right_stick_y, 0.0f);
-    g_dolphin.write_u8(state_mgr + k_final_input_right_stick_y_press, 0);
-    g_dolphin.write_u8(player + k_player_free_look_state_offset, 0);
-    g_dolphin.write_u8(player + k_player_free_look_state_offset + 1, 0);
-    g_dolphin.write_u8(player + k_player_free_look_state_offset + 2, 0);
-    g_dolphin.write_float(player + k_player_free_look_center_time_offset, 0.0f);
-    g_dolphin.write_float(player + k_player_free_look_pitch_angle_offset, 0.0f);
-    g_dolphin.write_float(player + k_player_free_look_pitch_vel_offset, 0.0f);
-    g_dolphin.write_float(pitch_addr, g_lock_pitch_unlocked);
-
 }
 
 static bool target_uid_still_exists(uint32_t state_mgr, uint16_t uid, uint32_t expected_obj) {
@@ -3774,6 +3801,13 @@ static void write_gun_targeting(uint32_t state_mgr, uint32_t player, uint32_t gu
     if (!g_settings.gun_targeting_enabled || player < 0x80000000) {
         s_last_pick_valid = false;
         reset_gun_target_switch_state();
+        return;
+    }
+
+    if (scan_visor_active(player)) {
+        s_last_pick_valid = false;
+        reset_gun_target_switch_state();
+        write_gun_target_hook_scratch(0, 0xffff);
         return;
     }
 
@@ -3903,6 +3937,7 @@ static void write_gun_matrix(const Matrix3x4& mat) {
     constexpr float s = 0.0f;
 
     for (int i = 0; i < 12; ++i) {
+        g_smooth_pivot_mat[i] = g_smooth_pivot_mat[i] * s + mat.m[i] * (1.0f - s);
         g_smooth_mat[i] = g_smooth_mat[i] * s + mat.m[i] * (1.0f - s);
     }
     g_app.last_matrix = *reinterpret_cast<Matrix3x4*>(g_smooth_mat);
@@ -3918,7 +3953,7 @@ static void write_gun_matrix(const Matrix3x4& mat) {
     g_app.dbg_player = player;
     if (player < 0x80000000) {
         mark_cannon_transform_not_ready();
-        reset_lock_camera_pitch_suppression();
+        reset_scan_pitch_smoothing();
         return;
     }
 
@@ -3934,7 +3969,7 @@ static void write_gun_matrix(const Matrix3x4& mat) {
     g_app.dbg_gun_target_write = false;
     if (!player_is_first_person_gun_ready(player)) {
         mark_cannon_transform_not_ready();
-        reset_lock_camera_pitch_suppression();
+        reset_scan_pitch_smoothing();
         disarm_memory_writes();
         return;
     }
@@ -3973,7 +4008,7 @@ static void write_gun_matrix(const Matrix3x4& mat) {
             g_dolphin.write_float(addrs.gun_pos + 4, g_smooth_mat[7]);
             g_dolphin.write_float(addrs.gun_pos + 8, g_smooth_mat[11]);
         }
-        write_gun_targeting(state_mgr, player, gun_ptr, world_xf, g_smooth_mat);
+        write_gun_targeting(state_mgr, player, gun_ptr, world_xf, g_smooth_pivot_mat);
 
         static bool projectile_debug_cleared = false;
         if (!projectile_debug_cleared) {
@@ -3982,13 +4017,31 @@ static void write_gun_matrix(const Matrix3x4& mat) {
             clear_u32_range(k_projectile_probe_debug_addr, 0x80);
             projectile_debug_cleared = true;
         }
-        log_player_owned_projectiles(state_mgr, player, gun_ptr, g_smooth_mat);
+        log_player_owned_projectiles(state_mgr, player, gun_ptr, g_smooth_pivot_mat);
         if (g_settings.log_cannon_rotation_debug)
             update_cannon_rotation_debug(gun_ptr, g_smooth_mat, false);
 
         float render_hook_basis[9] = {};
         extract_basis9(g_smooth_mat, render_hook_basis);
         write_contiguous_basis9(k_render_hook_basis_addr, render_hook_basis);
+        const float model_local_x = g_settings.model_offset_x * g_settings.world_scale;
+        const float model_local_y = g_settings.model_offset_y * g_settings.world_scale;
+        const float model_local_z = g_settings.model_offset_z * g_settings.world_scale;
+        const float model_world_x =
+            g_smooth_mat[0] * model_local_x +
+            g_smooth_mat[1] * model_local_y +
+            g_smooth_mat[2] * model_local_z;
+        const float model_world_y =
+            g_smooth_mat[4] * model_local_x +
+            g_smooth_mat[5] * model_local_y +
+            g_smooth_mat[6] * model_local_z;
+        const float model_world_z =
+            g_smooth_mat[8] * model_local_x +
+            g_smooth_mat[9] * model_local_y +
+            g_smooth_mat[10] * model_local_z;
+        g_dolphin.write_float(k_render_hook_model_offset_world_addr + 0, model_world_x);
+        g_dolphin.write_float(k_render_hook_model_offset_world_addr + 4, model_world_y);
+        g_dolphin.write_float(k_render_hook_model_offset_world_addr + 8, model_world_z);
         g_dolphin.write_u32(k_render_hook_expected_gun_addr, gun_ptr);
 
         extract_basis9(g_smooth_mat, g_last_written_basis);
@@ -4042,6 +4095,8 @@ static void tracking_thread() {
     }
 }
 
+
+static void write_scan_pitch_from_controller_matrix(const Matrix3x4& mat);
 
 static void dpad_thread() {
     constexpr auto k_tick = std::chrono::milliseconds(1);
@@ -4515,6 +4570,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             static bool vr_settings_visible = false;
             static bool last_left_thumb_click = false;
             static bool last_right_select = false;
+            static uint32_t vr_settings_tab = 0;
             static uint32_t vr_settings_selected = 0;
             static uint32_t vr_settings_generation = 1;
             static auto last_vr_menu_toggle_time = std::chrono::steady_clock::time_point{};
@@ -4561,17 +4617,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             const bool menu_pointer_active = vr_settings_visible &&
                 vr_settings_pointer_hit(vr_left_pose, vr_right_pose, menu_pointer_x, menu_pointer_y);
             if (menu_pointer_active) {
-                constexpr float firstY = 86.0f / 512.0f;
+                constexpr float firstY = 154.0f / 512.0f;
                 constexpr float stepY = 25.0f / 512.0f;
-                constexpr int rowsPerColumn = 16;
-                const int column = menu_pointer_x >= 0.5f ? 1 : 0;
-                int row = static_cast<int>((menu_pointer_y - firstY + stepY * 0.5f) / stepY);
-                row = std::clamp(row, 0, rowsPerColumn - 1);
-                int hovered = column * rowsPerColumn + row;
-                hovered = std::clamp(hovered, 0, static_cast<int>(k_vr_settings_item_count) - 1);
-                if (vr_settings_selected != static_cast<uint32_t>(hovered)) {
-                    vr_settings_selected = static_cast<uint32_t>(hovered);
-                    ++vr_settings_generation;
+                const uint32_t item_count = vr_settings_item_count_for_tab(vr_settings_tab);
+                if (item_count > 0 && menu_pointer_y >= firstY) {
+                    int hovered = static_cast<int>((menu_pointer_y - firstY + stepY * 0.5f) / stepY);
+                    hovered = std::clamp(hovered, 0, static_cast<int>(item_count) - 1);
+                    if (vr_settings_selected != static_cast<uint32_t>(hovered)) {
+                        vr_settings_selected = static_cast<uint32_t>(hovered);
+                        ++vr_settings_generation;
+                    }
                 }
             }
             
@@ -4579,22 +4634,56 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                 (vr_right_pose.button_a || vr_right_pose.trigger_click);
             if (vr_settings_visible && menu_pointer_active && right_select && !last_right_select) {
                 constexpr float textureWidth = 1024.0f;
-                constexpr float leftX = 28.0f;
-                constexpr float rightX = 524.0f;
-                constexpr float rowWidth = 472.0f;
-                constexpr float valueWidth = 126.0f;
-                constexpr float valueBoxOffset = rowWidth - valueWidth - 10.0f;
                 const float pointerX = std::clamp(menu_pointer_x, 0.0f, 1.0f) * textureWidth;
-                const float columnX = vr_settings_selected >= 16 ? rightX : leftX;
-                const float valueBoxX = columnX + valueBoxOffset;
-                if (pointerX >= valueBoxX && pointerX <= valueBoxX + valueWidth) {
-                    change_vr_setting(vr_settings_selected, pointerX >= valueBoxX + valueWidth * 0.5f);
+                const float pointerY = std::clamp(menu_pointer_y, 0.0f, 1.0f) * 512.0f;
+                constexpr float tabY = 64.0f;
+                constexpr float tabH = 38.0f;
+                constexpr float tabX = 36.0f;
+                constexpr float tabW = 232.0f;
+                constexpr float tabGap = 10.0f;
+                if (pointerY >= tabY && pointerY <= tabY + tabH) {
+                    const int tab = static_cast<int>((pointerX - tabX) / (tabW + tabGap));
+                    const float tabLocalX = pointerX - (tabX + tab * (tabW + tabGap));
+                    if (tab >= 0 && tab < static_cast<int>(k_vr_settings_tab_count) &&
+                        tabLocalX >= 0.0f && tabLocalX <= tabW &&
+                        vr_settings_tab != static_cast<uint32_t>(tab)) {
+                        vr_settings_tab = static_cast<uint32_t>(tab);
+                        vr_settings_selected = 0;
+                        ++vr_settings_generation;
+                    }
+                } else if (pointerY >= 108.0f && pointerY <= 136.0f) {
+                    constexpr float buttonY = 108.0f;
+                    constexpr float buttonH = 28.0f;
+                    constexpr float saveX = 52.0f;
+                    constexpr float resetX = 300.0f;
+                    constexpr float buttonW = 220.0f;
+                    (void)buttonY;
+                    (void)buttonH;
+                    if (pointerX >= saveX && pointerX <= saveX + buttonW) {
+                        change_vr_global_setting(0);
+                        ++vr_settings_generation;
+                    } else if (pointerX >= resetX && pointerX <= resetX + buttonW) {
+                        change_vr_global_setting(1);
+                        ++vr_settings_generation;
+                    }
+                } else {
+                    constexpr float rowX = 52.0f;
+                    constexpr float rowWidth = 920.0f;
+                    constexpr float valueWidth = 150.0f;
+                    constexpr float valueBoxOffset = rowWidth - valueWidth - 12.0f;
+                    const float valueBoxX = rowX + valueBoxOffset;
+                    if (pointerY >= 154.0f &&
+                        pointerX >= valueBoxX && pointerX <= valueBoxX + valueWidth) {
+                        change_vr_setting(vr_settings_tab, vr_settings_selected, pointerX >= valueBoxX + valueWidth * 0.5f);
+                        vr_settings_selected = std::min(vr_settings_selected, vr_settings_item_count_for_tab(vr_settings_tab) - 1);
+                    }
                     ++vr_settings_generation;
                 }
             }
             
             last_right_select = right_select;
-            sync_vr_settings_to_shared(vr_settings_generation, vr_settings_visible, vr_settings_selected,
+            vr_settings_selected = std::min(vr_settings_selected, vr_settings_item_count_for_tab(vr_settings_tab) - 1);
+            sync_vr_settings_to_shared(vr_settings_generation, vr_settings_visible, vr_settings_tab, vr_settings_selected,
                                        menu_pointer_active, menu_pointer_x, menu_pointer_y);
 
             static auto gameplay_ready_since = std::chrono::steady_clock::time_point{};

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
-project(PrimedGun VERSION 0.9.5)
+project(PrimedGun VERSION 0.9.6)
 
-set(PRIMEDGUN_VERSION_STRING "0.9.5")
+set(PRIMEDGUN_VERSION_STRING "0.9.6")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

@@ -54,6 +54,10 @@ constexpr uint32_t kOrbitStateOffset = 0x304u;
 constexpr uint32_t kFirstPersonPitchOffset = 0x3ECu;
 constexpr uint32_t kFirstPersonPitchVelOffset = 0x3F0u;
 constexpr uint32_t kOrbitStateGrapple = 5u;
+constexpr uint32_t kCPlayerGunRenderStart = 0x80041A8Cu;
+constexpr uint32_t kCPlayerGunRenderModelOffsetCave = 0x80001C00u;
+constexpr uint32_t kRenderHookModelOffsetWorldScratch = 0x817FE040u;
+constexpr uint32_t kRenderHookAdjustedGunPosScratch = 0x817FE050u;
 
 std::atomic<bool> g_installed = false;
 uintptr_t g_memBase = 0;
@@ -189,28 +193,34 @@ struct DynamicPpcPatch {
     uint32_t address;
     uint32_t original;
     uint32_t replacement;
+    uint32_t cave;
     const wchar_t* description;
+    bool applied;
+    bool loggedWaiting;
 };
 
 DynamicPpcPatch g_combatPitchPatches[] = {
-    {0x8000E7B4u, 0xEC21E828u, kLoadZeroToF1,
-     L"CFirstPersonCamera lock target Z delta A"},
-    {0x8000E808u, 0xEC21E828u, kLoadZeroToF1,
-     L"CFirstPersonCamera lock target Z delta B"},
-    {0x8000E83Cu, 0xEC21E828u, kLoadZeroToF1,
-     L"CFirstPersonCamera lock target Z delta C"},
-    {0x8000F050u, 0xC05F01B4u, kLoadZeroToF2,
-     L"CFirstPersonCamera combat orbit transition current camera Z"},
-    {0x8000EB44u, 0xC041086Cu, kLoadZeroToF2,
-     L"CFirstPersonCamera pre-orbit current camera Z"},
-    {0x8000EF44u, 0xC041086Cu, kLoadZeroToF2,
-     L"CFirstPersonCamera normal orbit current camera Z"},
-    {0x8000F50Cu, 0xC041086Cu, kLoadZeroToF2,
-     L"CFirstPersonCamera early follow current camera Z"},
+    {0x8000E7B4u, 0xEC21E828u, kLoadZeroToF1, 0x80001AD0u,
+     L"CFirstPersonCamera lock target Z delta A", false, false},
+    {0x8000E808u, 0xEC21E828u, kLoadZeroToF1, 0x80001B00u,
+     L"CFirstPersonCamera lock target Z delta B", false, false},
+    {0x8000E83Cu, 0xEC21E828u, kLoadZeroToF1, 0x80001B30u,
+     L"CFirstPersonCamera lock target Z delta C", false, false},
 };
 
 bool g_combatPitchPatchActive = false;
 uint64_t g_lastCombatPitchPatchLogTick = 0;
+
+struct RenderModelOffsetPatch {
+    uint32_t address;
+    uint32_t cave;
+    uint32_t original;
+    bool applied;
+    bool loggedWaiting;
+};
+
+RenderModelOffsetPatch g_renderModelOffsetPatch = {
+    kCPlayerGunRenderStart, kCPlayerGunRenderModelOffsetCave, 0, false, false};
 
 bool IsMem1Range(uint32_t gcAddr, size_t size) {
     if (gcAddr < kMem1Start || gcAddr >= kMem1Start + kMem1Size) {
@@ -1542,6 +1552,88 @@ bool WriteU32(uint32_t gcAddr, uint32_t value) {
     return true;
 }
 
+bool ResolveMemBase();
+
+bool RestoreRenderModelOffsetPatch() {
+    if (!g_memBase || g_renderModelOffsetPatch.original == 0) {
+        return false;
+    }
+
+    const uint32_t branch =
+        PpcBranch(g_renderModelOffsetPatch.address, g_renderModelOffsetPatch.cave);
+    const uint32_t current = ReadU32(g_renderModelOffsetPatch.address);
+    if (current == branch && WriteU32(g_renderModelOffsetPatch.address,
+                                      g_renderModelOffsetPatch.original)) {
+        g_renderModelOffsetPatch.applied = false;
+        return true;
+    }
+    return current == g_renderModelOffsetPatch.original;
+}
+
+bool ApplyRenderModelOffsetPatch() {
+    if (!g_installed.load() || !ResolveMemBase()) {
+        return false;
+    }
+
+    RenderModelOffsetPatch& patch = g_renderModelOffsetPatch;
+    if (patch.applied) {
+        return true;
+    }
+
+    const uint32_t branch = PpcBranch(patch.address, patch.cave);
+    const uint32_t current = ReadU32(patch.address);
+    if (current == branch) {
+        patch.original = ReadU32(patch.cave + 0x44u);
+        patch.applied = patch.original != 0;
+        return patch.applied;
+    }
+
+    if ((current & 0xFFFF0000u) != 0x94210000u) {
+        if (current != 0 && !patch.loggedWaiting) {
+            patch.loggedWaiting = true;
+            Log(L"GameTimingHooks waiting to patch CPlayerGun::Render model offset; current "
+                L"instruction did not look like a function prologue.");
+        }
+        return false;
+    }
+
+    patch.original = current;
+    constexpr uint32_t kPosScratchHi = (kRenderHookAdjustedGunPosScratch >> 16) & 0xffffu;
+    constexpr uint32_t kPosScratchLo = kRenderHookAdjustedGunPosScratch & 0xffffu;
+    constexpr uint32_t kOffsetScratchHi = (kRenderHookModelOffsetWorldScratch >> 16) & 0xffffu;
+    constexpr uint32_t kOffsetScratchLo = kRenderHookModelOffsetWorldScratch & 0xffffu;
+    const uint32_t returnAddr = patch.address + 4u;
+
+    WriteU32(patch.cave + 0x00u, 0x3D800000u | kPosScratchHi);      // lis r12, pos scratch hi
+    WriteU32(patch.cave + 0x04u, 0x618C0000u | kPosScratchLo);      // ori r12, r12, pos scratch lo
+    WriteU32(patch.cave + 0x08u, 0x3D600000u | kOffsetScratchHi);   // lis r11, offset scratch hi
+    WriteU32(patch.cave + 0x0Cu, 0x616B0000u | kOffsetScratchLo);   // ori r11, r11, offset scratch lo
+    WriteU32(patch.cave + 0x10u, 0xC0050000u);                      // lfs f0, 0(r5)
+    WriteU32(patch.cave + 0x14u, 0xC02B0000u);                      // lfs f1, 0(r11)
+    WriteU32(patch.cave + 0x18u, 0xEC00082Au);                      // fadds f0, f0, f1
+    WriteU32(patch.cave + 0x1Cu, 0xD00C0000u);                      // stfs f0, 0(r12)
+    WriteU32(patch.cave + 0x20u, 0xC0450004u);                      // lfs f2, 4(r5)
+    WriteU32(patch.cave + 0x24u, 0xC06B0004u);                      // lfs f3, 4(r11)
+    WriteU32(patch.cave + 0x28u, 0xEC42182Au);                      // fadds f2, f2, f3
+    WriteU32(patch.cave + 0x2Cu, 0xD04C0004u);                      // stfs f2, 4(r12)
+    WriteU32(patch.cave + 0x30u, 0xC0850008u);                      // lfs f4, 8(r5)
+    WriteU32(patch.cave + 0x34u, 0xC0AB0008u);                      // lfs f5, 8(r11)
+    WriteU32(patch.cave + 0x38u, 0xEC84282Au);                      // fadds f4, f4, f5
+    WriteU32(patch.cave + 0x3Cu, 0xD08C0008u);                      // stfs f4, 8(r12)
+    WriteU32(patch.cave + 0x40u, 0x7D856378u);                      // mr r5, r12
+    WriteU32(patch.cave + 0x44u, patch.original);
+    WriteU32(patch.cave + 0x48u, PpcBranch(patch.cave + 0x48u, returnAddr));
+
+    if (WriteU32(patch.address, branch)) {
+        patch.applied = true;
+        Log(L"GameTimingHooks patched CPlayerGun::Render for render-only model offsets.");
+        return true;
+    }
+
+    patch.original = 0;
+    return false;
+}
+
 bool ResolveMemBase() {
     const uint64_t now = GetTickCount64();
     if (g_memBase && now - g_lastResolveTick < 1000) {
@@ -1699,27 +1791,6 @@ void PatchOrbitCode() {
     }
 }
 
-bool ShouldFlattenCombatPitch(uint32_t stateMgr, uint32_t player) {
-    if (player < kMem1Start) {
-        return false;
-    }
-
-    const uint32_t scanState = ReadU32(player + 0x330);
-    if (scanState != 0) {
-        return false;
-    }
-
-    const uint32_t orbitState = ReadU32(player + kOrbitStateOffset);
-    const uint8_t held0 = ReadU8(stateMgr + kFinalInputOffset + 0x2c);
-    const uint32_t scratchPlayer = ReadU32(kGunTargetHookScratch);
-    const uint16_t scratchUid = ReadU16(kGunTargetHookScratch + 4);
-
-    const bool buttonLock = (held0 & 0x04u) != 0;
-    const bool scratchLock = scratchPlayer == player && scratchUid != 0xffffu;
-    const bool orbitActive = orbitState != 0 && orbitState != kOrbitStateGrapple;
-    return buttonLock || scratchLock || orbitActive;
-}
-
 void PatchFirstPersonPitchLoad() {
     if (!g_memBase || g_firstPersonPitchLoadPatch.applied) {
         return;
@@ -1763,19 +1834,64 @@ void PatchFirstPersonPitchLoad() {
     }
 }
 
-bool SetDynamicPatchState(const DynamicPpcPatch& patch, bool active) {
+bool RestoreDynamicPatchState(const DynamicPpcPatch& patch) {
     const uint32_t current = ReadU32(patch.address);
-    const uint32_t desired = active ? patch.replacement : patch.original;
-    if (current == desired) {
+    const uint32_t branch = PpcBranch(patch.address, patch.cave);
+    if (current == patch.original) {
+        return true;
+    }
+    if (current == patch.replacement || current == branch) {
+        return WriteU32(patch.address, patch.original);
+    }
+    return false;
+}
+
+bool ApplyConditionalCombatPitchPatch(DynamicPpcPatch& patch) {
+    if (patch.applied) {
         return true;
     }
 
-    const uint32_t expected = active ? patch.original : patch.replacement;
-    if (current != expected) {
+    const uint32_t current = ReadU32(patch.address);
+    const uint32_t branch = PpcBranch(patch.address, patch.cave);
+    if (current == branch) {
+        patch.applied = true;
+        return true;
+    }
+
+    if (current != patch.original && current != patch.replacement) {
+        if (current != 0 && !patch.loggedWaiting) {
+            patch.loggedWaiting = true;
+            Log(L"GameTimingHooks waiting to patch combat orbit pitch at 0x" +
+                std::to_wstring(patch.address) + L"; current instruction did not match.");
+        }
         return false;
     }
 
-    return WriteU32(patch.address, desired);
+    const uint32_t originalLabel = patch.cave + 0x20u;
+    const uint32_t zeroLabel = patch.cave + 0x28u;
+    const uint32_t returnAddr = patch.address + 4u;
+
+    WriteU32(patch.cave + 0x00u, 0x3D808045u);                      // lis r12, 0x8045
+    WriteU32(patch.cave + 0x04u, 0x618CA1A8u);                      // ori r12, r12, 0xA1A8
+    WriteU32(patch.cave + 0x08u, 0x818C084Cu);                      // lwz r12, 0x84C(r12)
+    WriteU32(patch.cave + 0x0Cu, 0x2C0C0000u);                      // cmpwi r12, 0
+    WriteU32(patch.cave + 0x10u, PpcBeq(patch.cave + 0x10u, originalLabel));
+    WriteU32(patch.cave + 0x14u, 0x818C0330u);                      // lwz r12, 0x330(r12)
+    WriteU32(patch.cave + 0x18u, 0x2C0C0000u);                      // cmpwi r12, 0
+    WriteU32(patch.cave + 0x1Cu, PpcBeq(patch.cave + 0x1Cu, zeroLabel));
+    WriteU32(patch.cave + 0x20u, patch.original);
+    WriteU32(patch.cave + 0x24u, PpcBranch(patch.cave + 0x24u, returnAddr));
+    WriteU32(patch.cave + 0x28u, patch.replacement);
+    WriteU32(patch.cave + 0x2Cu, PpcBranch(patch.cave + 0x2Cu, returnAddr));
+
+    if (WriteU32(patch.address, branch)) {
+        patch.applied = true;
+        Log(L"GameTimingHooks patched scan-conditional combat orbit pitch at 0x" +
+            std::to_wstring(patch.address) + L": " + patch.description + L".");
+        return true;
+    }
+
+    return false;
 }
 
 void UpdateCombatPitchPatchForLogicTick() {
@@ -1783,22 +1899,17 @@ void UpdateCombatPitchPatchForLogicTick() {
         return;
     }
 
-    const uint32_t stateMgr = kStateManager;
-    const uint32_t player = ReadU32(stateMgr + kPlayerOffset);
-    const bool shouldBeActive = ShouldFlattenCombatPitch(stateMgr, player);
-
     bool allOk = true;
-    for (const DynamicPpcPatch& patch : g_combatPitchPatches) {
-        allOk = SetDynamicPatchState(patch, shouldBeActive) && allOk;
+    for (DynamicPpcPatch& patch : g_combatPitchPatches) {
+        allOk = ApplyConditionalCombatPitchPatch(patch) && allOk;
     }
 
-    if (allOk && shouldBeActive != g_combatPitchPatchActive) {
-        g_combatPitchPatchActive = shouldBeActive;
+    if (allOk && !g_combatPitchPatchActive) {
+        g_combatPitchPatchActive = true;
         const uint64_t now = GetTickCount64();
         if (LoggingEnabled() && now - g_lastCombatPitchPatchLogTick >= 100) {
             g_lastCombatPitchPatchLogTick = now;
-            Log(std::wstring(L"GameTimingHooks combat pitch patch ") +
-                (shouldBeActive ? L"enabled" : L"disabled"));
+            Log(L"GameTimingHooks scan-conditional combat orbit target pitch zero patch enabled.");
         }
     }
 }
@@ -2227,6 +2338,7 @@ void SuppressLockCameraPitchForLogicTick() {
 
 void PollFast(SharedState*) {
     UpdateCombatPitchPatchForLogicTick();
+    ApplyRenderModelOffsetPatch();
     TraceOrbitLockForLogicTick();
 }
 
@@ -2246,6 +2358,7 @@ void Poll(SharedState* state) {
             DumpFirstPersonCameraCodeOnce();
             ApplySharedPatches(state);
             PatchOrbitCode();
+            ApplyRenderModelOffsetPatch();
         }
     }
 }
@@ -2253,8 +2366,9 @@ void Poll(SharedState* state) {
 void Shutdown() {
     if (ResolveMemBase()) {
         for (const DynamicPpcPatch& patch : g_combatPitchPatches) {
-            SetDynamicPatchState(patch, false);
+            RestoreDynamicPatchState(patch);
         }
+        RestoreRenderModelOffsetPatch();
     }
     if (g_installed.exchange(false)) {
         if (g_symbolsInitialized) {

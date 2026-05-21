@@ -28,6 +28,9 @@ For distribution/share, the useful files are:
 
 - `PrimedGun.exe`
 - `PrimedGun_DolphinHook.dll`
+- `assets/`
+- `PrimeGun configs/`
+- `D3DCompiler_47.dll`
 - `libgcc_s_seh-1.dll`
 - `libstdc++-6.dll`
 - `libwinpthread-1.dll`
@@ -40,17 +43,22 @@ For distribution/share, the useful files are:
 - Visor hand gesture input: the app reads the control stick as visor D-pad input when the controller is near your head.
 - Improved gun-based lock/scan targeting.
 - VR arm cannon tracking through Dolphin-side OpenXR.
-- In-headset settings menu anchored to the left controller.
-- Dolphin-side hook bridge for app-owned game patches, OpenXR tracking, overlays, and diagnostics.
+- One-click height calibration.
+- Position, rotation, scale, and render-only model offset calibration.
+- In-headset settings menu.
+- Dolphin-side hook bridge for app-owned game patches, OpenXR tracking, and overlays.
 - Automatic Dolphin XR setup for the GM8E01 VR settings PrimedGun expects.
 
 ## Dolphin Setup
 
 PrimedGun applies the Dolphin settings it needs automatically on startup:
 
+- Enables Dolphin VR/OpenXR.
 - Sets the GM8E01 Dolphin XR world scale / units-per-meter value to `1.50`.
 - Sets the GM8E01 Dolphin XR camera forward offset to `0`.
 - Maps Dolphin's Port 1 controls to OpenXR.
+
+If PrimedGun cannot find Dolphin's active config location, it shows a warning in the app.
 
 ## App-Owned Patches
 

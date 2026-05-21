@@ -708,7 +708,7 @@ void DrawValueText(std::vector<uint32_t>& pixels, uint32_t width, uint32_t heigh
     FillRect(pixels, width, height, x, y - 9, 6, 31, accent);
     DrawOverlayText(pixels, width, height, label, x + 16, y, 2, text);
 
-    const int valueWidth = 126;
+    const int valueWidth = 150;
     const int valueBoxX = x + rowWidth - valueWidth - 10;
     FillRect(pixels, width, height, valueBoxX, y - 5, valueWidth, 23,
              selected ? 0xD030180Cu : 0x9030180Cu);
@@ -729,6 +729,61 @@ std::string FloatText(float value, int precision = 2) {
     return buffer;
 }
 
+struct VrMenuRow {
+    const char* label;
+    std::string value;
+};
+
+std::vector<VrMenuRow> BuildSettingsRows(const SettingsState& s) {
+    switch (s.vrMenuTab) {
+    case 1:
+        return {
+            {"WORLD SCALE", FloatText(s.worldScale, 2)},
+            {"POSITION LEFT RIGHT", FloatText(s.offsetX, 3)},
+            {"POSITION UP DOWN", FloatText(s.offsetY, 3)},
+            {"POSITION FORWARD BACK", FloatText(s.offsetZ, 3)},
+            {"RESET POSITION", "RESET"},
+            {"MODEL OFFSET LEFT RIGHT", FloatText(s.modelOffsetX, 3)},
+            {"MODEL OFFSET UP DOWN", FloatText(s.modelOffsetY, 3)},
+            {"MODEL OFFSET FORWARD BACK", FloatText(s.modelOffsetZ, 3)},
+            {"RESET MODEL OFFSET", "RESET"},
+            {"ROTATION PITCH", FloatText(s.rotOffsetX, 1)},
+            {"ROTATION YAW", FloatText(s.rotOffsetY, 1)},
+            {"ROTATION ROLL", FloatText(s.rotOffsetZ, 1)},
+            {"RESET ROTATION", "RESET"},
+        };
+    case 2:
+        return {
+            {"RIGHT HAND", s.useRightHand ? "ON" : "OFF"},
+            {"REQUIRE TRIGGER", s.requireTrigger ? "ON" : "OFF"},
+            {"TRIGGER THRESHOLD", FloatText(s.triggerThreshold, 2)},
+            {"AUTO SET CONTROLLER BINDINGS", s.autoDolphinXrControls ? "ON" : "OFF"},
+            {"VISOR GESTURE", s.xrDpadEnabled ? "ON" : "OFF"},
+            {"HEAD RADIUS", FloatText(s.xrDpadHeadRadius, 2)},
+            {"HEAD BELOW AMOUNT", FloatText(s.xrDpadHeadYBelow, 2)},
+            {"STICK DEADZONE", FloatText(s.xrDpadDeadzone, 2)},
+            {"RESET VISOR", "RESET"},
+        };
+    case 3:
+        return {
+            {"DIRECTIONAL MOVE", s.directionalMovementEnabled ? "ON" : "OFF"},
+            {"MOVEMENT STICK", s.directionalMovementUseRightStick ? "RIGHT" : "LEFT"},
+            {"MOVE DEADZONE", FloatText(s.directionalMovementDeadzone, 2)},
+            {"MOVE SPEED", FloatText(s.directionalMovementSpeed, 1)},
+            {"MOVE ACCELERATION", FloatText(s.directionalMovementAccel, 1)},
+            {"AIR ACCELERATION", FloatText(s.directionalMovementAirAccel, 1)},
+            {"RESET MOVEMENT", "RESET"},
+        };
+    default:
+        return {
+            {"TARGETING", s.gunTargetingEnabled ? "ON" : "OFF"},
+            {"TARGET DISTANCE", FloatText(s.gunTargetingDistance, 1)},
+            {"TARGET RADIUS", FloatText(s.gunTargetingRadius, 1)},
+            {"RESET TARGETING", "RESET"},
+        };
+    }
+}
+
 std::vector<uint32_t> BuildSettingsMenuPixels(uint32_t width, uint32_t height, const SettingsState& s) {
     std::vector<uint32_t> pixels(static_cast<size_t>(width) * height, 0x00000000u);
     FillRect(pixels, width, height, 0, 0, static_cast<int>(width), static_cast<int>(height), 0xD0100804u);
@@ -742,52 +797,40 @@ std::vector<uint32_t> BuildSettingsMenuPixels(uint32_t width, uint32_t height, c
                         34, 2, 0xFFFFE6B8u);
     }
 
-    struct Row { const char* label; std::string value; };
-    const Row rows[] = {
-        {"SAVE SETTINGS", "SAVE"},
-        {"RESET ALL SETTINGS", "RESET"},
-        {"RIGHT HAND", s.useRightHand ? "ON" : "OFF"},
-        {"REQUIRE TRIGGER", s.requireTrigger ? "ON" : "OFF"},
-        {"TRIGGER THRESHOLD", FloatText(s.triggerThreshold, 2)},
-        {"WORLD SCALE", FloatText(s.worldScale, 2)},
-        {"POSITION LEFT RIGHT", FloatText(s.offsetX, 3)},
-        {"POSITION UP DOWN", FloatText(s.offsetY, 3)},
-        {"POSITION FORWARD BACK", FloatText(s.offsetZ, 3)},
-        {"RESET POSITION", "RESET"},
-        {"ROTATION PITCH", FloatText(s.rotOffsetX, 1)},
-        {"ROTATION YAW", FloatText(s.rotOffsetY, 1)},
-        {"ROTATION ROLL", FloatText(s.rotOffsetZ, 1)},
-        {"RESET ROTATION", "RESET"},
-        {"TARGETING", s.gunTargetingEnabled ? "ON" : "OFF"},
-        {"TARGET DISTANCE", FloatText(s.gunTargetingDistance, 1)},
-        {"TARGET RADIUS", FloatText(s.gunTargetingRadius, 1)},
-        {"RESET TARGETING", "RESET"},
-        {"DOLPHIN CONTROLS", s.autoDolphinXrControls ? "ON" : "OFF"},
-        {"VISOR GESTURE", s.xrDpadEnabled ? "ON" : "OFF"},
-        {"HEAD RADIUS", FloatText(s.xrDpadHeadRadius, 2)},
-        {"HEAD BELOW AMOUNT", FloatText(s.xrDpadHeadYBelow, 2)},
-        {"STICK DEADZONE", FloatText(s.xrDpadDeadzone, 2)},
-        {"RESET VISOR", "RESET"},
-        {"DIRECTIONAL MOVE", s.directionalMovementEnabled ? "ON" : "OFF"},
-        {"MOVEMENT STICK", s.directionalMovementUseRightStick ? "RIGHT" : "LEFT"},
-        {"MOVE DEADZONE", FloatText(s.directionalMovementDeadzone, 2)},
-        {"MOVE SPEED", FloatText(s.directionalMovementSpeed, 1)},
-        {"MOVE ACCELERATION", FloatText(s.directionalMovementAccel, 1)},
-        {"AIR ACCELERATION", FloatText(s.directionalMovementAirAccel, 1)},
-        {"RESET MOVEMENT", "RESET"},
+    constexpr const char* tabs[] = {"AIMING", "CALIBRATION", "CONTROLLER", "MOVEMENT"};
+    const int tabY = 64;
+    const int tabH = 38;
+    const int tabX = 36;
+    const int tabW = 232;
+    const int tabGap = 10;
+    for (int i = 0; i < static_cast<int>(std::size(tabs)); ++i) {
+        const bool active = i == static_cast<int>(s.vrMenuTab);
+        const int x = tabX + i * (tabW + tabGap);
+        FillRect(pixels, width, height, x, tabY, tabW, tabH, active ? 0xD04A2C12u : 0x7030180Cu);
+        FillRect(pixels, width, height, x, tabY + tabH - 4, tabW, 4, active ? 0xFFFFB030u : 0x604A2C12u);
+        const int textX = x + (tabW - OverlayTextWidth(tabs[i], 2)) / 2;
+        DrawOverlayText(pixels, width, height, tabs[i], textX, tabY + 11, 2,
+                        active ? 0xFFFFE6B8u : 0xFFD8C0A0u);
+    }
+
+    auto drawButton = [&](const char* label, int x, int y, int w) {
+        FillRect(pixels, width, height, x, y, w, 28, 0x9030180Cu);
+        FillRect(pixels, width, height, x, y, 5, 28, 0x80FFB030u);
+        const int textX = x + (w - OverlayTextWidth(label, 2)) / 2;
+        DrawOverlayText(pixels, width, height, label, textX, y + 7, 2, 0xFFFFE6B8u);
     };
-    const int count = static_cast<int>(std::size(rows));
-    const int firstY = 86;
+    drawButton("SAVE SETTINGS", 52, 108, 220);
+    drawButton("RESET ALL", 300, 108, 220);
+
+    const std::vector<VrMenuRow> rows = BuildSettingsRows(s);
+    const int count = static_cast<int>(rows.size());
+    const int firstY = 154;
     const int step = 25;
-    const int rowsPerColumn = 16;
-    const int leftX = 28;
-    const int rightX = static_cast<int>(width) / 2 + 12;
-    const int rowWidth = static_cast<int>(width) / 2 - 40;
+    const int rowX = 52;
+    const int rowWidth = static_cast<int>(width) - 104;
     for (int i = 0; i < count; ++i) {
-        const int column = i / rowsPerColumn;
-        const int row = i % rowsPerColumn;
         DrawValueText(pixels, width, height, rows[i].label, rows[i].value.c_str(),
-                      column == 0 ? leftX : rightX, firstY + row * step, rowWidth,
+                      rowX, firstY + i * step, rowWidth,
                       i == static_cast<int>(s.vrMenuSelectedIndex));
     }
     if (s.vrMenuPointerActive) {
