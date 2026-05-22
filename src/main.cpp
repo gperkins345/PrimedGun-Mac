@@ -1957,7 +1957,6 @@ static void change_vr_global_setting(uint32_t index) {
         break;
     case 1:
         g_settings.reset_all();
-        g_settings.save();
         break;
     default:
         break;
@@ -4607,11 +4606,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         if (g_app.remap_dolphin_controls_requested.exchange(false, std::memory_order_relaxed) ||
             g_settings.auto_dolphin_xr_controls != g_last_auto_dolphin_xr_controls) {
             sync_dolphin_xr_gamecube_controls(g_settings.auto_dolphin_xr_controls);
-            g_settings.save();
         }
         if (g_app.app_patches_apply_requested.exchange(false, std::memory_order_relaxed)) {
             ensure_shared_state();
-            g_settings.save();
             app_hook_log(L"App-owned AR code toggles changed; patch set republished.");
         }
         static auto last_dolphin_auto_connect = std::chrono::steady_clock::time_point{};
@@ -4989,7 +4986,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
              std::chrono::duration_cast<std::chrono::milliseconds>(now - last_forced_control_remap).count() >= 2500)) {
             last_forced_control_remap = now;
             sync_dolphin_xr_gamecube_controls(true);
-            g_settings.save();
             app_hook_log(L"Dolphin controller remap forced during game-load window.");
         }
 
@@ -5029,7 +5025,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     if (dpad.joinable()) dpad.join();
     if (writer.joinable()) writer.join();
 
-    g_settings.save();
     close_live_shared_state();
     g_dolphin.disconnect();
     restore_dolphin_borrowed_controls();
