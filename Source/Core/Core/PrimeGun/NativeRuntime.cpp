@@ -544,6 +544,15 @@ bool PlayerIsFirstPersonUnmorphed(const Core::CPUThreadGuard& guard, u32 player)
   if (player < 0x80000000u)
     return false;
 
+  u32 camera_state = 0xffffffffu;
+  u32 morph_state = 0xffffffffu;
+  if (!TryReadU32(guard, player + 0x2F4u, &camera_state) ||
+      !TryReadU32(guard, player + 0x2F8u, &morph_state) ||
+      camera_state != 0 || morph_state != 0)
+  {
+    return false;
+  }
+
   u8 input_flags = 0;
   if (!TryReadU8(guard, player + PLAYER_DISABLE_INPUT_FLAGS_OFFSET, &input_flags) ||
       (input_flags & PLAYER_DISABLE_INPUT_MASK) != 0)
