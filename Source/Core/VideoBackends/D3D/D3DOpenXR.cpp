@@ -17,6 +17,10 @@
 #include <vector>
 
 #include "Common/Assert.h"
+#include "Common/CommonPaths.h"
+#include "Common/FileUtil.h"
+#include "Common/Image.h"
+#include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 
 #include "VideoBackends/D3D/D3DBase.h"
@@ -119,6 +123,139 @@ std::string FloatText(float value, int precision)
   std::snprintf(buffer, sizeof(buffer), precision == 3 ? "%.3f" : precision == 1 ? "%.1f" : "%.2f",
                 value);
   return buffer;
+}
+
+struct PrimeGunPng
+{
+  Common::UniqueBuffer<u8> data;
+  u32 width = 0;
+  u32 height = 0;
+  bool tried = false;
+};
+
+bool LoadPrimeGunPngFromPath(const std::string& path, PrimeGunPng* image)
+{
+  File::IOFile file(path, "rb", File::SharedAccess::Read);
+  if (!file.IsOpen())
+    return false;
+
+  const u64 size = file.GetSize();
+  if (size == 0)
+    return false;
+
+  Common::UniqueBuffer<u8> buffer(size);
+  if (!file.ReadBytes(buffer.data(), size))
+    return false;
+
+  Common::UniqueBuffer<u8> pixels;
+  u32 width = 0;
+  u32 height = 0;
+  if (!Common::LoadPNG(std::span<const u8>(buffer.data(), static_cast<size_t>(size)), &pixels,
+                       &width, &height) ||
+      pixels.empty() || width == 0 || height == 0)
+  {
+    return false;
+  }
+
+  image->data = std::move(pixels);
+  image->width = width;
+  image->height = height;
+  return true;
+}
+
+const PrimeGunPng& LoadPrimeGunPng(const char* filename)
+{
+  static PrimeGunPng power;
+  static PrimeGunPng wave;
+  static PrimeGunPng ice;
+  static PrimeGunPng plasma;
+
+  PrimeGunPng* image = &power;
+  if (std::strcmp(filename, "wave.png") == 0)
+    image = &wave;
+  else if (std::strcmp(filename, "ice.png") == 0)
+    image = &ice;
+  else if (std::strcmp(filename, "plasma.png") == 0)
+    image = &plasma;
+
+  if (!image->tried)
+  {
+    image->tried = true;
+    const std::string path = File::GetExeDirectory() + DIR_SEP "assets" DIR_SEP + filename;
+    if (!LoadPrimeGunPngFromPath(path, image))
+      WARN_LOG_FMT(VIDEO, "PrimeGun: Failed to load weapon panel asset '{}'.", path);
+  }
+
+  return *image;
+}
+
+void BlendPixel(std::vector<uint32_t>& pixels, uint32_t width, uint32_t height, int x, int y,
+                uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+  if (x < 0 || y < 0 || x >= static_cast<int>(width) || y >= static_cast<int>(height) || a == 0)
+    return;
+
+  const size_t dst_index = static_cast<size_t>(y) * width + x;
+  const uint32_t dst = pixels[dst_index];
+  const uint8_t da = static_cast<uint8_t>(dst >> 24);
+  const uint8_t dr = static_cast<uint8_t>(dst >> 16);
+  const uint8_t dg = static_cast<uint8_t>(dst >> 8);
+  const uint8_t db = static_cast<uint8_t>(dst);
+  const uint32_t inv_a = 255u - a;
+  const uint8_t out_a = static_cast<uint8_t>(std::min(255u, static_cast<uint32_t>(a) +
+                                                            (static_cast<uint32_t>(da) * inv_a) /
+                                                                255u));
+  const uint8_t out_r =
+      static_cast<uint8_t>((static_cast<uint32_t>(r) * a + static_cast<uint32_t>(dr) * inv_a) /
+                           255u);
+  const uint8_t out_g =
+      static_cast<uint8_t>((static_cast<uint32_t>(g) * a + static_cast<uint32_t>(dg) * inv_a) /
+                           255u);
+  const uint8_t out_b =
+      static_cast<uint8_t>((static_cast<uint32_t>(b) * a + static_cast<uint32_t>(db) * inv_a) /
+                           255u);
+  pixels[dst_index] = (static_cast<uint32_t>(out_a) << 24) |
+                      (static_cast<uint32_t>(out_r) << 16) |
+                      (static_cast<uint32_t>(out_g) << 8) | static_cast<uint32_t>(out_b);
+}
+
+void DrawPngFit(std::vector<uint32_t>& pixels, uint32_t width, uint32_t height,
+                const PrimeGunPng& image, int x, int y, int w, int h, bool selected)
+{
+  if (selected)
+  {
+    FillRect(pixels, width, height, x - 10, y - 10, w + 20, 5, 0xE0FFB030u);
+    FillRect(pixels, width, height, x - 10, y + h + 5, w + 20, 5, 0xE0FFB030u);
+    FillRect(pixels, width, height, x - 10, y - 10, 5, h + 20, 0xE0FFB030u);
+    FillRect(pixels, width, height, x + w + 5, y - 10, 5, h + 20, 0xE0FFB030u);
+  }
+
+  if (image.data.empty() || image.width == 0 || image.height == 0)
+    return;
+
+  const float scale =
+      std::min(static_cast<float>(w) / static_cast<float>(image.width),
+               static_cast<float>(h) / static_cast<float>(image.height));
+  const int draw_w = std::max(1, static_cast<int>(std::lround(image.width * scale)));
+  const int draw_h = std::max(1, static_cast<int>(std::lround(image.height * scale)));
+  const int dst_x = x + (w - draw_w) / 2;
+  const int dst_y = y + (h - draw_h) / 2;
+
+  for (int py = 0; py < draw_h; ++py)
+  {
+    const u32 sy =
+        std::min(image.height - 1, static_cast<u32>((static_cast<int64_t>(py) * image.height) /
+                                                    std::max(1, draw_h)));
+    for (int px = 0; px < draw_w; ++px)
+    {
+      const u32 sx =
+          std::min(image.width - 1, static_cast<u32>((static_cast<int64_t>(px) * image.width) /
+                                                     std::max(1, draw_w)));
+      const size_t src = (static_cast<size_t>(sy) * image.width + sx) * 4;
+      BlendPixel(pixels, width, height, dst_x + px, dst_y + py, image.data[src + 2],
+                 image.data[src + 1], image.data[src + 0], image.data[src + 3]);
+    }
+  }
 }
 
 struct MenuRow
@@ -259,6 +396,23 @@ std::vector<uint32_t> BuildMenuPixels(uint32_t width, uint32_t height,
     DrawText(pixels, width, height, rows[i].value.c_str(),
              value_x + (170 - TextWidth(rows[i].value.c_str(), 2)) / 2, y, 2, 0xFFFFF0C8u);
   }
+  return pixels;
+}
+
+std::vector<uint32_t> BuildWeaponPanelPixels(uint32_t width, uint32_t height,
+                                             const Common::VR::PrimeGunVrOverlayState& s)
+{
+  std::vector<uint32_t> pixels(static_cast<size_t>(width) * height, 0);
+
+  auto draw_slot = [&](uint32_t index, const char* filename, int x, int y, int w, int h) {
+    DrawPngFit(pixels, width, height, LoadPrimeGunPng(filename), x, y, w, h,
+               s.weapon_selected_index == index);
+  };
+
+  draw_slot(1, "power.png", 184, 32, 144, 144);
+  draw_slot(4, "plasma.png", 32, 184, 144, 144);
+  draw_slot(2, "wave.png", 336, 184, 144, 144);
+  draw_slot(3, "ice.png", 184, 336, 144, 144);
   return pixels;
 }
 
@@ -774,7 +928,7 @@ bool D3DOpenXR::AppendPrimeGunOverlayLayers(std::vector<XrCompositionLayerBaseHe
     return false;
 
   const auto overlay = Common::VR::OpenXRInputState::GetPrimeGunOverlay();
-  if (!overlay.menu_visible && !overlay.prompt_visible)
+  if (!overlay.menu_visible && !overlay.prompt_visible && !overlay.weapon_panel_visible)
     return false;
 
   const Common::VR::OpenXRInputSnapshot snapshot = Common::VR::OpenXRInputState::GetSnapshot();
@@ -782,12 +936,16 @@ bool D3DOpenXR::AppendPrimeGunOverlayLayers(std::vector<XrCompositionLayerBaseHe
     return false;
 
   const bool menu = overlay.menu_visible;
-  const uint32_t content_kind = menu ? 2u : 1u;
-  const uint32_t width = 1024;
-  const uint32_t height = menu ? 512 : 384;
-  const uint32_t generation = menu ? overlay.generation : 1u;
-  const std::vector<uint32_t> pixels =
-      menu ? BuildMenuPixels(width, height, overlay) : BuildPromptPixels(width, height);
+  const bool weapon_panel = !menu && overlay.weapon_panel_visible;
+  const uint32_t content_kind = menu ? 2u : weapon_panel ? 3u : 1u;
+  const uint32_t width = menu ? 1024 : weapon_panel ? 512 : 1024;
+  const uint32_t height = menu ? 512 : weapon_panel ? 512 : 384;
+  const uint32_t generation = menu ? overlay.generation :
+                              weapon_panel ? (100u + overlay.weapon_selected_index) :
+                                             1u;
+  const std::vector<uint32_t> pixels = menu        ? BuildMenuPixels(width, height, overlay) :
+                                       weapon_panel ? BuildWeaponPanelPixels(width, height, overlay) :
+                                                      BuildPromptPixels(width, height);
   if (!EnsurePrimeGunOverlaySwapchain(content_kind, generation, width, height, pixels))
     return false;
 
@@ -816,6 +974,20 @@ bool D3DOpenXR::AppendPrimeGunOverlayLayers(std::vector<XrCompositionLayerBaseHe
                                               left_pose.position.y + offset.y,
                                               left_pose.position.z + offset.z};
     m_primegun_overlay_layer.size = {1.05f, 0.72f};
+  }
+  else if (weapon_panel)
+  {
+    m_primegun_overlay_layer.pose.orientation = {overlay.weapon_panel_orientation[0],
+                                                 overlay.weapon_panel_orientation[1],
+                                                 overlay.weapon_panel_orientation[2],
+                                                 overlay.weapon_panel_orientation[3]};
+    const XrVector3f offset =
+        RotateVector(m_primegun_overlay_layer.pose.orientation, {0.0f, 0.08f, -0.26f});
+    m_primegun_overlay_layer.pose.position = {
+        overlay.weapon_panel_position[0] + snapshot.tracking_origin_position[0] + offset.x,
+        overlay.weapon_panel_position[1] + snapshot.tracking_origin_position[1] + offset.y,
+        overlay.weapon_panel_position[2] + snapshot.tracking_origin_position[2] + offset.z};
+    m_primegun_overlay_layer.size = {0.42f, 0.42f};
   }
   else if (snapshot.head_pose.valid)
   {

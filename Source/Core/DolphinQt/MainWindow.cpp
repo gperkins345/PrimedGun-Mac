@@ -27,6 +27,7 @@
 #include <QPixmap>
 #include <QRadioButton>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -234,6 +235,41 @@ static std::vector<std::string> StringListToStdVector(QStringList list)
 }
 
 static constexpr const char* SELECTED_METROID_GAME_SETTING = "mainwindow/selected_metroid_prime_path";
+
+class PrimeGunScaledImageLabel final : public QLabel
+{
+public:
+  explicit PrimeGunScaledImageLabel(QWidget* parent = nullptr) : QLabel(parent)
+  {
+    setAlignment(Qt::AlignCenter);
+    setMinimumSize(240, 160);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+  }
+
+  void SetSourcePixmap(const QPixmap& pixmap)
+  {
+    m_source = pixmap;
+    UpdateScaledPixmap();
+  }
+
+protected:
+  void resizeEvent(QResizeEvent* event) override
+  {
+    QLabel::resizeEvent(event);
+    UpdateScaledPixmap();
+  }
+
+private:
+  void UpdateScaledPixmap()
+  {
+    if (m_source.isNull() || width() <= 0 || height() <= 0)
+      return;
+
+    setPixmap(m_source.scaled(size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+  }
+
+  QPixmap m_source;
+};
 
 MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boot_parameters,
                        const std::string& movie_path)
@@ -1070,7 +1106,7 @@ void MainWindow::ConnectStack()
   header_layout->setContentsMargins(14, 12, 14, 12);
   auto* brand = new QLabel(tr("PrimedGun"), header);
   brand->setObjectName(QStringLiteral("PrimeGunTitle"));
-  auto* version = new QLabel(tr("v0.9.9"), header);
+  auto* version = new QLabel(tr("v0.9.9b"), header);
   version->setObjectName(QStringLiteral("PrimeGunMuted"));
   auto* status_tracking = new QLabel(tr("Waiting for DolphinXR OpenXR"), header);
   status_tracking->setObjectName(QStringLiteral("PrimeGunBad"));
@@ -1291,7 +1327,7 @@ void MainWindow::ConnectStack()
                     [runtime](float v) { runtime->xr_dpad_deadzone = v; });
   separator(controller_layout);
   controller_layout->addWidget(section_label(tr("Directional Movement"), game_tab));
-  auto* movement_enabled = new QCheckBox(tr("Offhand yaw strafing"), game_tab);
+  auto* movement_enabled = new QCheckBox(tr("Modern left-stick movement"), game_tab);
   movement_enabled->setChecked(runtime->directional_movement_enabled);
   controller_layout->addWidget(movement_enabled);
   auto* left_stick = new QRadioButton(tr("Left stick"), game_tab);
@@ -1386,10 +1422,8 @@ void MainWindow::ConnectStack()
   layout_tab_layout->setContentsMargins(14, 10, 14, 10);
   auto* layout_title = section_label(tr("Controller Layout"), layout_tab);
   layout_tab_layout->addWidget(layout_title);
-  auto* controller_map = new QLabel(layout_tab);
-  controller_map->setAlignment(Qt::AlignCenter);
-  controller_map->setPixmap(QPixmap(assets_dir + QStringLiteral("controller layout.png"))
-                                .scaled(640, 380, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+  auto* controller_map = new PrimeGunScaledImageLabel(layout_tab);
+  controller_map->SetSourcePixmap(QPixmap(assets_dir + QStringLiteral("controller layout.png")));
   layout_tab_layout->addWidget(controller_map, 1);
   tabs->addTab(layout_tab, tr("Layout"));
 
@@ -1424,7 +1458,7 @@ void MainWindow::ConnectStack()
   auto* footer = new QHBoxLayout;
   auto* reset_all = new QPushButton(tr("Reset All"), game_tab);
   auto* save_settings_button = new QPushButton(tr("Save Settings"), game_tab);
-  auto* credit = new QLabel(tr("By Nobbie   v0.9.9"), game_tab);
+  auto* credit = new QLabel(tr("By Nobbie   v0.9.9b"), game_tab);
   credit->setObjectName(QStringLiteral("PrimeGunMuted"));
   footer->addWidget(reset_all);
   footer->addWidget(save_settings_button);

@@ -4,6 +4,7 @@
 #include "Core/PrimeGun/NativeRuntime.h"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <charconv>
 #include <cmath>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
+#include "Common/Logging/Log.h"
 #include "Common/MathUtil.h"
 #ifdef ENABLE_VR
 #include "Common/VR/OpenXRInputState.h"
@@ -88,6 +90,7 @@ constexpr u32 ADJUSTED_GUN_POS_SCRATCH = SCRATCH_BASE + 0x050u;
 constexpr u32 GUN_TARGET_SCRATCH = SCRATCH_BASE + 0x400u;
 constexpr u32 RETICLE_BILLBOARD_SCRATCH = SCRATCH_BASE + 0x500u;
 constexpr u32 DPAD_PRESS_SCRATCH = SCRATCH_BASE + 0x680u;
+constexpr u32 GAMEFLOW_MENU_SCRATCH = SCRATCH_BASE + 0x690u;
 
 constexpr u32 FIRST_PERSON_PITCH_LOAD_CAVE = 0x80001B70u;
 constexpr u32 RENDER_MODEL_OFFSET_CAVE = 0x80001C00u;
@@ -98,6 +101,12 @@ constexpr u32 COMBAT_PITCH_CAVE_2 = 0x80001E80u;
 constexpr u32 COMBAT_ELEVATION_PITCH_CAVE = 0x80001EC0u;
 constexpr u32 WAVE_PROJECTILE_TRANSFORM_CAVE = 0x80001F00u;
 constexpr u32 MISSILE_PROJECTILE_TRANSFORM_CAVE = 0x80001FA0u;
+constexpr u32 GAMEFLOW_UNPAUSE_CAVE = 0x80002040u;
+constexpr u32 GAMEFLOW_MESSAGE_CAVE = 0x80002070u;
+constexpr u32 GAMEFLOW_SAVE_CAVE = 0x800020A0u;
+constexpr u32 GAMEFLOW_LOGBOOK_CAVE = 0x800020D0u;
+constexpr u32 GAMEFLOW_PAUSE_CAVE = 0x80002100u;
+constexpr u32 GAMEFLOW_MAP_CAVE = 0x80002130u;
 constexpr u32 LOAD_ZERO_TO_F1 = 0xC02280B0u;
 constexpr u32 LOAD_ZERO_TO_F31 = 0xC3E280B0u;
 
@@ -164,20 +173,34 @@ u32 s_vr_menu_tab = 0;
 u32 s_vr_menu_selected_index = 0;
 u32 s_vr_menu_generation = 1;
 u64 s_vr_menu_saved_notice_until_frame = 0;
+u64 s_vr_menu_input_suppress_until_frame = 0;
 bool s_vr_settings_save_requested = false;
 u64 s_height_prompt_until_frame = 0;
 u64 s_prompt_gameplay_ready_since_frame = 0;
 u64 s_prompt_first_ready_timeout_frame = 0;
-u64 s_prompt_game_unloaded_since_frame = 0;
 bool s_prompt_skipped_first_ready = false;
 bool s_prompt_waiting_for_second_ready = false;
 bool s_prompt_shown_this_session = false;
-bool s_prompt_game_loaded = false;
 bool s_dpad_forced_input_disabled = false;
 bool s_dpad_input_was_disabled = false;
 u32 s_dpad_input_flags_addr = 0;
 u64 s_dpad_last_disable_refresh_frame = 0;
 float s_directional_move_speed = 0.0f;
+std::atomic_bool s_gameplay_input_active{false};
+std::atomic_bool s_orbit_lock_active{false};
+bool s_last_logged_gameplay_input_active = false;
+bool s_have_logged_gameplay_input_active = false;
+u64 s_last_mode_probe_frame = 0;
+u32 s_last_mode_probe_camera_state = 0xffffffffu;
+u32 s_last_mode_probe_morph_state = 0xffffffffu;
+u32 s_last_mode_probe_movement_state = 0xffffffffu;
+u32 s_last_mode_probe_visor_state = 0xffffffffu;
+u32 s_last_mode_probe_holster_state = 0xffffffffu;
+u8 s_last_mode_probe_input_flags = 0xffu;
+float s_last_mode_probe_gun_alpha = -1.0f;
+std::array<u32, 16> s_last_mode_probe_state_words{};
+std::array<u32, 16> s_last_mode_probe_game_words{};
+bool s_have_mode_probe_words = false;
 u32 s_last_validated_gun = 0;
 bool s_smooth_matrix_valid = false;
 float s_smooth_matrix[12] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
@@ -209,6 +232,15 @@ struct ProjectileTransformPatch
   bool applied = false;
 };
 
+struct GameFlowFlagPatch
+{
+  u32 address = 0;
+  u32 original = 0;
+  u32 cave = 0;
+  u32 menu_flag = 0;
+  bool applied = false;
+};
+
 ConditionalPitchLoadPatch s_first_person_pitch_load_patch{
     0x8000E548u, 0xC3FE03ECu, FIRST_PERSON_PITCH_LOAD_CAVE, false};
 
@@ -227,6 +259,15 @@ DynamicPpcPatch s_combat_elevation_pitch_patch{
 ProjectileTransformPatch s_projectile_transform_patches[] = {
     {0x800E0434u, 0, WAVE_PROJECTILE_TRANSFORM_CAVE, 6, false},
     {0x801B9070u, 0, MISSILE_PROJECTILE_TRANSFORM_CAVE, 8, false},
+};
+
+GameFlowFlagPatch s_game_flow_flag_patches[] = {
+    {0x800243CCu, 0, GAMEFLOW_UNPAUSE_CAVE, 0, false},
+    {0x80024414u, 0, GAMEFLOW_MESSAGE_CAVE, 1, false},
+    {0x80024450u, 0, GAMEFLOW_SAVE_CAVE, 1, false},
+    {0x8002448Cu, 0, GAMEFLOW_LOGBOOK_CAVE, 1, false},
+    {0x800244C8u, 0, GAMEFLOW_PAUSE_CAVE, 1, false},
+    {0x80024504u, 0, GAMEFLOW_MAP_CAVE, 1, false},
 };
 
 enum DpadDir
@@ -546,6 +587,10 @@ bool PlayerIsFirstPersonUnmorphed(const Core::CPUThreadGuard& guard, u32 player)
   if (player < 0x80000000u)
     return false;
 
+  u32 gameflow_menu = 0;
+  if (TryReadU32(guard, GAMEFLOW_MENU_SCRATCH, &gameflow_menu) && gameflow_menu == 1)
+    return false;
+
   u32 camera_state = 0xffffffffu;
   u32 morph_state = 0xffffffffu;
   if (!TryReadU32(guard, player + 0x2F4u, &camera_state) ||
@@ -553,6 +598,14 @@ bool PlayerIsFirstPersonUnmorphed(const Core::CPUThreadGuard& guard, u32 player)
       camera_state != 0 || morph_state != 0)
   {
     return false;
+  }
+
+  const bool scan_active = ScanVisorActive(guard, player);
+  if (scan_active)
+  {
+    u32 movement_state = 0xffffffffu;
+    return TryReadU32(guard, player + PLAYER_MOVEMENT_STATE_OFFSET, &movement_state) &&
+           movement_state <= 6;
   }
 
   u8 input_flags = 0;
@@ -586,6 +639,120 @@ bool PlayerIsFirstPersonGunReady(const Core::CPUThreadGuard& guard, u32 player)
 
   return camera_state == 0 && morph_state == 0 && std::isfinite(gun_alpha) &&
          gun_alpha >= 0.95f && holster_state == 2;
+}
+
+void LogModeProbe(const Core::CPUThreadGuard& guard, u32 player, bool force)
+{
+  u32 camera_state = 0xffffffffu;
+  u32 morph_state = 0xffffffffu;
+  u32 movement_state = 0xffffffffu;
+  u32 visor_state = 0xffffffffu;
+  u32 holster_state = 0xffffffffu;
+  u8 input_flags = 0xffu;
+  float gun_alpha = -1.0f;
+  u32 gameflow_menu = 0xffffffffu;
+
+  if (player >= 0x80000000u)
+  {
+    TryReadU32(guard, player + 0x2F4u, &camera_state);
+    TryReadU32(guard, player + 0x2F8u, &morph_state);
+    TryReadU32(guard, player + PLAYER_MOVEMENT_STATE_OFFSET, &movement_state);
+    TryReadU32(guard, player + PLAYER_VISOR_STATE_OFFSET, &visor_state);
+    TryReadU32(guard, player + 0x498u, &holster_state);
+    TryReadU8(guard, player + PLAYER_DISABLE_INPUT_FLAGS_OFFSET, &input_flags);
+    TryReadFloat(guard, player + 0x494u, &gun_alpha);
+  }
+
+  u32 game_state = 0;
+  u32 camera_manager = 0;
+  TryReadU32(guard, GAMEFLOW_MENU_SCRATCH, &gameflow_menu);
+  TryReadU32(guard, GP_GAME_STATE, &game_state);
+  TryReadU32(guard, ADDRESS.state_manager + ADDRESS.camera_manager_offset, &camera_manager);
+
+  std::array<u32, 8> player_words{};
+  std::array<u32, 8> state_words{};
+  std::array<u32, 8> game_words_0{};
+  std::array<u32, 8> game_words_80{};
+  std::array<u32, 8> game_words_100{};
+  std::array<u32, 8> camera_words{};
+
+  if (player >= 0x80000000u)
+  {
+    for (u32 i = 0; i < player_words.size(); ++i)
+      TryReadU32(guard, player + 0x2E0u + i * 4u, &player_words[i]);
+  }
+
+  for (u32 i = 0; i < state_words.size(); ++i)
+    TryReadU32(guard, ADDRESS.state_manager + 0x800u + i * 4u, &state_words[i]);
+
+  if (game_state >= 0x80000000u)
+  {
+    for (u32 i = 0; i < game_words_0.size(); ++i)
+      TryReadU32(guard, game_state + i * 4u, &game_words_0[i]);
+    for (u32 i = 0; i < game_words_80.size(); ++i)
+      TryReadU32(guard, game_state + 0x80u + i * 4u, &game_words_80[i]);
+    for (u32 i = 0; i < game_words_100.size(); ++i)
+      TryReadU32(guard, game_state + 0x100u + i * 4u, &game_words_100[i]);
+  }
+
+  if (camera_manager >= 0x80000000u)
+  {
+    for (u32 i = 0; i < camera_words.size(); ++i)
+      TryReadU32(guard, camera_manager + i * 4u, &camera_words[i]);
+  }
+
+  bool changed = camera_state != s_last_mode_probe_camera_state ||
+                 morph_state != s_last_mode_probe_morph_state ||
+                 movement_state != s_last_mode_probe_movement_state ||
+                 visor_state != s_last_mode_probe_visor_state ||
+                 holster_state != s_last_mode_probe_holster_state ||
+                 input_flags != s_last_mode_probe_input_flags ||
+                 std::fabs(gun_alpha - s_last_mode_probe_gun_alpha) > 0.001f;
+  if (!s_have_mode_probe_words)
+    changed = true;
+
+  if (!force && !changed && s_frame_counter < s_last_mode_probe_frame + 60)
+    return;
+
+  s_last_mode_probe_frame = s_frame_counter;
+  s_last_mode_probe_camera_state = camera_state;
+  s_last_mode_probe_morph_state = morph_state;
+  s_last_mode_probe_movement_state = movement_state;
+  s_last_mode_probe_visor_state = visor_state;
+  s_last_mode_probe_holster_state = holster_state;
+  s_last_mode_probe_input_flags = input_flags;
+  s_last_mode_probe_gun_alpha = gun_alpha;
+  s_have_mode_probe_words = true;
+
+  NOTICE_LOG_FMT(CORE,
+                 "PrimeGun mode_probe player={:08X} menu={} camera={} morph={} input_flags={:02X} "
+                 "move={} visor={} gun_alpha={:.3f} holster={} game_state={:08X} camera_mgr={:08X}",
+                 player, gameflow_menu, camera_state, morph_state, input_flags, movement_state,
+                 visor_state, gun_alpha, holster_state, game_state, camera_manager);
+  NOTICE_LOG_FMT(CORE,
+                 "PrimeGun mode_probe player+2E0: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 player_words[0], player_words[1], player_words[2], player_words[3],
+                 player_words[4], player_words[5], player_words[6], player_words[7]);
+  NOTICE_LOG_FMT(CORE,
+                 "PrimeGun mode_probe state+800: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 state_words[0], state_words[1], state_words[2], state_words[3], state_words[4],
+                 state_words[5], state_words[6], state_words[7]);
+  NOTICE_LOG_FMT(CORE,
+                 "PrimeGun mode_probe game+000: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 game_words_0[0], game_words_0[1], game_words_0[2], game_words_0[3],
+                 game_words_0[4], game_words_0[5], game_words_0[6], game_words_0[7]);
+  NOTICE_LOG_FMT(CORE,
+                 "PrimeGun mode_probe game+080: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 game_words_80[0], game_words_80[1], game_words_80[2], game_words_80[3],
+                 game_words_80[4], game_words_80[5], game_words_80[6], game_words_80[7]);
+  NOTICE_LOG_FMT(CORE,
+                 "PrimeGun mode_probe game+100: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 game_words_100[0], game_words_100[1], game_words_100[2], game_words_100[3],
+                 game_words_100[4], game_words_100[5], game_words_100[6], game_words_100[7]);
+  NOTICE_LOG_FMT(CORE,
+                 "PrimeGun mode_probe camera+000: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 camera_words[0], camera_words[1], camera_words[2], camera_words[3],
+                 camera_words[4], camera_words[5], camera_words[6], camera_words[7]);
 }
 
 void ApplyHelmetOpacityZero(const Core::CPUThreadGuard& guard)
@@ -1512,17 +1679,15 @@ void UpdateDirectionalMovement(const Core::CPUThreadGuard& guard,
                                const Common::VR::OpenXRInputSnapshot& snapshot,
                                const RuntimeSettings& settings, float yaw_delta_deg)
 {
-  if (!settings.directional_movement_enabled || !snapshot.runtime_active || !snapshot.head_pose.valid)
+  if (!settings.directional_movement_enabled || !snapshot.runtime_active || !snapshot.head_pose.valid ||
+      s_frame_counter < s_vr_menu_input_suppress_until_frame)
   {
     s_directional_move_speed = 0.0f;
     return;
   }
 
-  const int aim_hand = settings.use_right_hand ? 1 : 0;
-  const int move_hand = settings.directional_movement_use_right_stick ? aim_hand : 1 - aim_hand;
-  const int yaw_hand = 1 - aim_hand;
+  const int move_hand = 0;
   const Common::VR::OpenXRControllerState& controller = snapshot.controllers[move_hand];
-  const Common::VR::OpenXRControllerState& yaw_controller = snapshot.controllers[yaw_hand];
   if (!controller.connected || !controller.aim_pose.valid)
   {
     s_directional_move_speed = 0.0f;
@@ -1546,9 +1711,8 @@ void UpdateDirectionalMovement(const Core::CPUThreadGuard& guard,
     return;
   }
 
-  const float move_axis = stick_y;
-  const float move_mag = std::fabs(move_axis);
-  if (move_mag < settings.directional_movement_deadzone || std::fabs(stick_x) > move_mag)
+  const float move_mag = std::min(stick_mag, 1.0f);
+  if (move_mag < settings.directional_movement_deadzone)
   {
     s_directional_move_speed = 0.0f;
     return;
@@ -1557,6 +1721,12 @@ void UpdateDirectionalMovement(const Core::CPUThreadGuard& guard,
   u32 player = 0;
   if (!TryReadU32(guard, ADDRESS.state_manager + ADDRESS.player_offset, &player) ||
       !PlayerIsFirstPersonUnmorphed(guard, player))
+  {
+    s_directional_move_speed = 0.0f;
+    return;
+  }
+
+  if (OrbitLockButtonHeld(guard, ADDRESS.state_manager))
   {
     s_directional_move_speed = 0.0f;
     return;
@@ -1574,42 +1744,47 @@ void UpdateDirectionalMovement(const Core::CPUThreadGuard& guard,
   }
 
   const float flat_speed = std::sqrt(vx * vx + vy * vy);
-  if (flat_speed < 0.001f)
+  float base_yaw = yaw_delta_deg * (static_cast<float>(MathUtil::PI) / 180.0f);
+  if (!PosePrimeYaw(move_pose, yaw_delta_deg, &base_yaw))
   {
     s_directional_move_speed = 0.0f;
     return;
   }
+  float forward_x = 0.0f;
+  float forward_y = 0.0f;
+  float right_x = 0.0f;
+  float right_y = 0.0f;
+  PrimeXYFromYaw(WrapRadians(base_yaw + static_cast<float>(MathUtil::PI)), &forward_x,
+                 &forward_y);
+  PrimeXYFromYaw(WrapRadians(base_yaw + static_cast<float>(MathUtil::PI) * 0.5f), &right_x,
+                 &right_y);
 
-  float yaw = yaw_delta_deg * (static_cast<float>(MathUtil::PI) / 180.0f);
-  if (!yaw_controller.connected || !yaw_controller.aim_pose.valid ||
-      !PosePrimeYaw(PoseFromOpenXR(yaw_controller.aim_pose), yaw_delta_deg, &yaw))
+  float dir_x = forward_x * stick_y - right_x * stick_x;
+  float dir_y = forward_y * stick_y - right_y * stick_x;
+  const float dir_len = std::sqrt(dir_x * dir_x + dir_y * dir_y);
+  if (!std::isfinite(dir_len) || dir_len < 0.0001f)
   {
     s_directional_move_speed = 0.0f;
     return;
   }
-  if (move_axis > 0.0f)
-    yaw = WrapRadians(yaw + static_cast<float>(MathUtil::PI));
-
-  float dir_x = 0.0f;
-  float dir_y = 0.0f;
-  PrimeXYFromYaw(yaw, &dir_x, &dir_y);
+  dir_x /= dir_len;
+  dir_y /= dir_len;
 
   u32 movement_state = 0xffffffffu;
   const bool on_ground =
       TryReadU32(guard, player + PLAYER_MOVEMENT_STATE_OFFSET, &movement_state) &&
       movement_state == 0;
   if (s_directional_move_speed <= 0.0f ||
-      s_directional_move_speed > settings.directional_movement_speed * std::min(move_mag, 1.0f))
+      s_directional_move_speed > settings.directional_movement_speed * move_mag)
   {
     s_directional_move_speed =
-        std::min(std::max(flat_speed, 0.0f),
-                 settings.directional_movement_speed * std::min(move_mag, 1.0f));
+        std::min(std::max(flat_speed, 0.0f), settings.directional_movement_speed * move_mag);
   }
 
   const float accel = on_ground ? settings.directional_movement_accel :
                                   settings.directional_movement_air_accel;
   constexpr float frame_dt = 1.0f / 60.0f;
-  const float target_speed = settings.directional_movement_speed * std::min(move_mag, 1.0f);
+  const float target_speed = settings.directional_movement_speed * move_mag;
   const float max_delta = accel * frame_dt;
   if (s_directional_move_speed < target_speed)
     s_directional_move_speed = std::min(target_speed, s_directional_move_speed + max_delta);
@@ -1979,6 +2154,8 @@ void SaveVrMenuSettingsNotice()
 
 void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
 {
+  const Common::VR::PrimeGunVrOverlayState previous =
+      Common::VR::OpenXRInputState::GetPrimeGunOverlay();
   Common::VR::PrimeGunVrOverlayState overlay{};
   overlay.prompt_visible = prompt_visible;
   overlay.menu_visible = s_vr_menu_visible;
@@ -1988,6 +2165,10 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.tab = s_vr_menu_tab;
   overlay.selected_index = s_vr_menu_selected_index;
   overlay.item_count = VrMenuItemCountForTab(s_vr_menu_tab);
+  overlay.weapon_panel_visible = previous.weapon_panel_visible;
+  overlay.weapon_selected_index = previous.weapon_selected_index;
+  overlay.weapon_panel_position = previous.weapon_panel_position;
+  overlay.weapon_panel_orientation = previous.weapon_panel_orientation;
   overlay.world_scale = settings.world_scale;
   overlay.use_right_hand = settings.use_right_hand;
   overlay.require_trigger = settings.require_trigger;
@@ -2028,7 +2209,7 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
 
   const auto& left = snapshot.controllers[0];
   const auto& right = snapshot.controllers[1];
-  const bool menu_toggle = left.connected && left.thumbstick_button;
+  const bool menu_toggle = left.connected && (left.thumbstick_button || left.menu_button);
   if (menu_toggle && !s_last_vr_menu_thumbstick)
   {
     s_vr_menu_visible = !s_vr_menu_visible;
@@ -2215,25 +2396,8 @@ bool UpdateHeightPromptGate(const Core::CPUThreadGuard& guard,
   {
     s_prompt_gameplay_ready_since_frame = 0;
     s_height_prompt_until_frame = 0;
-    if (s_prompt_game_loaded)
-    {
-      if (s_prompt_game_unloaded_since_frame == 0)
-        s_prompt_game_unloaded_since_frame = s_frame_counter;
-
-      constexpr u64 game_unload_rearm_frames = 120;
-      if (s_frame_counter >= s_prompt_game_unloaded_since_frame + game_unload_rearm_frames)
-      {
-        s_prompt_first_ready_timeout_frame = 0;
-        s_prompt_skipped_first_ready = false;
-        s_prompt_waiting_for_second_ready = false;
-        s_prompt_shown_this_session = false;
-        s_prompt_game_loaded = false;
-      }
-    }
     return false;
   }
-  s_prompt_game_loaded = true;
-  s_prompt_game_unloaded_since_frame = 0;
 
   u32 gun = 0;
   const bool gameplay_ready = PlayerIsFirstPersonGunReady(guard, player) &&
@@ -2618,6 +2782,42 @@ bool ApplyProjectileTransformPatches(const Core::CPUThreadGuard& guard)
   return wrote;
 }
 
+bool ApplyGameFlowFlagPatch(const Core::CPUThreadGuard& guard, GameFlowFlagPatch& patch)
+{
+  u32 current = 0;
+  if (!TryReadU32(guard, patch.address, &current))
+    return false;
+
+  const u32 branch = PpcBranch(patch.address, patch.cave);
+  if (current == branch)
+  {
+    patch.applied = true;
+    return false;
+  }
+
+  patch.original = current;
+  constexpr u32 menu_scratch_hi = (GAMEFLOW_MENU_SCRATCH >> 16) & 0xffffu;
+  constexpr u32 menu_scratch_lo = GAMEFLOW_MENU_SCRATCH & 0xffffu;
+  const u32 return_addr = patch.address + 4u;
+
+  TryWriteInstruction(guard, patch.cave + 0x00u, 0x3D800000u | menu_scratch_hi);
+  TryWriteInstruction(guard, patch.cave + 0x04u, 0x618C0000u | menu_scratch_lo);
+  TryWriteInstruction(guard, patch.cave + 0x08u, 0x39600000u | (patch.menu_flag & 0xffffu));
+  TryWriteInstruction(guard, patch.cave + 0x0Cu, 0x916C0000u);
+  TryWriteInstruction(guard, patch.cave + 0x10u, patch.original);
+  TryWriteInstruction(guard, patch.cave + 0x14u, PpcBranch(patch.cave + 0x14u, return_addr));
+  patch.applied = TryWriteInstruction(guard, patch.address, branch);
+  return patch.applied;
+}
+
+bool ApplyGameFlowFlagPatches(const Core::CPUThreadGuard& guard)
+{
+  bool wrote = false;
+  for (GameFlowFlagPatch& patch : s_game_flow_flag_patches)
+    wrote = ApplyGameFlowFlagPatch(guard, patch) || wrote;
+  return wrote;
+}
+
 bool ApplyConditionalCombatPitchPatch(const Core::CPUThreadGuard& guard, DynamicPpcPatch& patch)
 {
   u32 current = 0;
@@ -2698,6 +2898,7 @@ bool ApplyConditionalElevationPitchPatch(const Core::CPUThreadGuard& guard, Dyna
 bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
 {
   bool wrote = false;
+  wrote = ApplyGameFlowFlagPatches(guard) || wrote;
   wrote = ApplyRenderModelOffsetPatch(guard) || wrote;
   wrote = ApplyFirstPersonPitchLoadPatch(guard) || wrote;
 
@@ -2742,17 +2943,25 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
 
   const RuntimeSettings settings = GetRuntimeSettings();
   if (!settings.enabled)
+  {
+    s_gameplay_input_active.store(false, std::memory_order_relaxed);
+    s_orbit_lock_active.store(false, std::memory_order_relaxed);
     return;
+  }
 
   const bool game_active = Core::IsRunning(system) && IsMetroidPrimeRev0(guard);
   if (!game_active)
   {
+    s_gameplay_input_active.store(false, std::memory_order_relaxed);
+    s_orbit_lock_active.store(false, std::memory_order_relaxed);
     if (s_game_was_active)
       ResetNativeRuntime();
     s_game_was_active = false;
     return;
   }
 
+  if (!s_game_was_active)
+    TryWriteU32(guard, GAMEFLOW_MENU_SCRATCH, 0);
   s_game_was_active = true;
 
   bool dynamic_patch_applied = false;
@@ -2776,7 +2985,56 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   if ((s_frame_counter % 60) == 1)
     ApplyHelmetOpacityZero(guard);
 
+  u32 player = 0;
+  const bool have_player =
+      TryReadU32(guard, ADDRESS.state_manager + ADDRESS.player_offset, &player) &&
+      player >= 0x80000000u;
+  const bool gameplay_input_active = have_player && PlayerIsFirstPersonUnmorphed(guard, player);
+  const bool orbit_lock_active = gameplay_input_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager);
+  s_gameplay_input_active.store(gameplay_input_active, std::memory_order_relaxed);
+  s_orbit_lock_active.store(orbit_lock_active, std::memory_order_relaxed);
+  if (have_player)
+    LogModeProbe(guard, player, gameplay_input_active != s_last_logged_gameplay_input_active);
+  if (!s_have_logged_gameplay_input_active ||
+      gameplay_input_active != s_last_logged_gameplay_input_active)
+  {
+    u32 camera_state = 0xffffffffu;
+    u32 morph_state = 0xffffffffu;
+    u32 movement_state = 0xffffffffu;
+    u32 visor_state = 0xffffffffu;
+    u32 holster_state = 0xffffffffu;
+    u8 input_flags = 0xffu;
+    float gun_alpha = -1.0f;
+    if (have_player)
+    {
+      TryReadU32(guard, player + 0x2F4u, &camera_state);
+      TryReadU32(guard, player + 0x2F8u, &morph_state);
+      TryReadU32(guard, player + PLAYER_MOVEMENT_STATE_OFFSET, &movement_state);
+      TryReadU32(guard, player + PLAYER_VISOR_STATE_OFFSET, &visor_state);
+      TryReadU32(guard, player + 0x498u, &holster_state);
+      TryReadU8(guard, player + PLAYER_DISABLE_INPUT_FLAGS_OFFSET, &input_flags);
+      TryReadFloat(guard, player + 0x494u, &gun_alpha);
+    }
+    NOTICE_LOG_FMT(CORE,
+                   "PrimeGun gameplay_input={} player={:08X} camera={} morph={} "
+                   "input_flags={:02X} move={} visor={} gun_alpha={:.3f} holster={}",
+                   gameplay_input_active, player, camera_state, morph_state, input_flags,
+                   movement_state, visor_state, gun_alpha, holster_state);
+    s_have_logged_gameplay_input_active = true;
+    s_last_logged_gameplay_input_active = gameplay_input_active;
+  }
+
   UpdateCannonTracking(guard);
+}
+
+bool IsGameplayInputActive()
+{
+  return s_gameplay_input_active.load(std::memory_order_relaxed);
+}
+
+bool IsOrbitLockActive()
+{
+  return s_orbit_lock_active.load(std::memory_order_relaxed);
 }
 
 void ResetNativeRuntime()
@@ -2793,6 +3051,21 @@ void ResetNativeRuntime()
   s_dpad_input_flags_addr = 0;
   s_dpad_last_disable_refresh_frame = 0;
   s_directional_move_speed = 0.0f;
+  s_gameplay_input_active.store(false, std::memory_order_relaxed);
+  s_orbit_lock_active.store(false, std::memory_order_relaxed);
+  s_last_logged_gameplay_input_active = false;
+  s_have_logged_gameplay_input_active = false;
+  s_last_mode_probe_frame = 0;
+  s_last_mode_probe_camera_state = 0xffffffffu;
+  s_last_mode_probe_morph_state = 0xffffffffu;
+  s_last_mode_probe_movement_state = 0xffffffffu;
+  s_last_mode_probe_visor_state = 0xffffffffu;
+  s_last_mode_probe_holster_state = 0xffffffffu;
+  s_last_mode_probe_input_flags = 0xffu;
+  s_last_mode_probe_gun_alpha = -1.0f;
+  s_last_mode_probe_state_words = {};
+  s_last_mode_probe_game_words = {};
+  s_have_mode_probe_words = false;
   s_last_validated_gun = 0;
   s_smooth_matrix_valid = false;
   s_controller_base_x = 0.0f;
@@ -2815,11 +3088,8 @@ void ResetNativeRuntime()
   s_height_prompt_until_frame = 0;
   s_prompt_gameplay_ready_since_frame = 0;
   s_prompt_first_ready_timeout_frame = 0;
-  s_prompt_game_unloaded_since_frame = 0;
   s_prompt_skipped_first_ready = false;
   s_prompt_waiting_for_second_ready = false;
-  s_prompt_shown_this_session = false;
-  s_prompt_game_loaded = false;
 #ifdef ENABLE_VR
   Common::VR::OpenXRInputState::SetPrimeGunOverlay({});
 #endif
@@ -2830,6 +3100,11 @@ void ResetNativeRuntime()
     patch.applied = false;
   s_combat_elevation_pitch_patch.applied = false;
   for (ProjectileTransformPatch& patch : s_projectile_transform_patches)
+  {
+    patch.applied = false;
+    patch.original = 0;
+  }
+  for (GameFlowFlagPatch& patch : s_game_flow_flag_patches)
   {
     patch.applied = false;
     patch.original = 0;

@@ -57,6 +57,8 @@ void ResetCalibrationOffsets();
 void ApplySamusArmPreset();
 bool ConsumeVrSettingsSaveRequest();
 void MarkVrSettingsSaved();
+bool IsGameplayInputActive();
+bool IsOrbitLockActive();
 void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard);
 void ResetNativeRuntime();
 }  // namespace PrimeGun

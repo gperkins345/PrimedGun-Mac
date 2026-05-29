@@ -67,12 +67,16 @@ struct PrimeGunVrOverlayState
 {
   bool prompt_visible = false;
   bool menu_visible = false;
+  bool weapon_panel_visible = false;
   bool menu_pointer_active = false;
   bool saved_notice = false;
   uint32_t generation = 0;
   uint32_t tab = 0;
   uint32_t selected_index = 0;
   uint32_t item_count = 0;
+  uint32_t weapon_selected_index = 0;
+  std::array<float, 3> weapon_panel_position{};
+  std::array<float, 4> weapon_panel_orientation{0.0f, 0.0f, 0.0f, 1.0f};
   float pointer_x = 0.5f;
   float pointer_y = 0.5f;
   float world_scale = 1.5f;

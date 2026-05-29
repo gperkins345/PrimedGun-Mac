@@ -36,10 +36,10 @@ For distribution, use the contents of `Binary\x64`. The important runtime pieces
 ## Features
 
 - Full directional movement.
-- Offhand controller yaw controls directional strafing.
-- Visor hand gesture input: the app reads the control stick as visor D-pad input when the controller is near your head.
+- Modern VR control scheme.
+- Visor hand gesture input.
 - Improved gun-based lock/scan targeting.
-- VR arm cannon tracking through Dolphin-side OpenXR.
+- VR arm cannon tracking.
 - One-click height calibration.
 - Position, rotation, scale calibration.
 - In-headset settings menu.
