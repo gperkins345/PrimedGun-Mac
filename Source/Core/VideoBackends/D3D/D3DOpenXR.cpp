@@ -304,7 +304,7 @@ std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimeGunVrOverlayState& s)
             {"STICK DEADZONE", FloatText(s.xr_dpad_deadzone, 2)},
             {"RESET CONTROLLER", "PRESS"}};
   case 3:
-    return {{"DIRECTIONAL MOVE", s.directional_movement_enabled ? "ON" : "OFF"},
+    return {{"LEFT STICK STRAFE", s.directional_movement_enabled ? "ON" : "OFF"},
             {"MOVEMENT STICK", s.directional_movement_use_right_stick ? "RIGHT" : "LEFT"},
             {"MOVE DIRECTION", s.directional_movement_use_hmd_direction ? "HMD" : "CONTROLLER"},
             {"MOVE DEADZONE", FloatText(s.directional_movement_deadzone, 2)},

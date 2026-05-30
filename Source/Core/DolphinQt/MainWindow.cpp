@@ -1333,7 +1333,7 @@ void MainWindow::ConnectStack()
                     [runtime](float v) { runtime->xr_dpad_deadzone = v; });
   separator(controller_layout);
   controller_layout->addWidget(section_label(tr("Directional Movement"), game_tab));
-  auto* movement_enabled = new QCheckBox(tr("Modern left-stick movement"), game_tab);
+  auto* movement_enabled = new QCheckBox(tr("Left stick strafe movement"), game_tab);
   movement_enabled->setChecked(runtime->directional_movement_enabled);
   controller_layout->addWidget(movement_enabled);
   auto* left_stick = new QRadioButton(tr("Left stick"), game_tab);
