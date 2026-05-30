@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -31,7 +32,21 @@
 #include "VideoCommon/VR/OpenXRManager.h"
 #include "VideoCommon/VR/PrimeGunOverlayCommon.h"
 
-static bool SelectPrimeGunOverlaySwapchainFormat(XrSession session, int64_t* out_format)
+#ifdef _WIN32
+#include <windows.h>  // for SEH __try/__except
+#endif
+
+#if defined(ANDROID)
+#include <android/log.h>
+#endif
+
+namespace Vulkan
+{
+std::unique_ptr<VulkanOpenXR> g_openxr_vk;
+
+namespace
+{
+bool SelectPrimeGunOverlaySwapchainFormat(XrSession session, int64_t* out_format)
 {
   uint32_t format_count = 0;
   XrResult result = xrEnumerateSwapchainFormats(session, 0, &format_count, nullptr);
@@ -51,6 +66,9 @@ static bool SelectPrimeGunOverlaySwapchainFormat(XrSession session, int64_t* out
     return false;
   }
 
+  // PrimeGun's overlay builder matches the existing D3D path, which uploads these bytes into an
+  // R8G8B8A8 swapchain. Prefer the same Vulkan format and only swizzle when the runtime requires
+  // BGRA.
   static constexpr std::array<VkFormat, 4> preferred_formats = {
       VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_UNORM,
       VK_FORMAT_B8G8R8A8_SRGB};
@@ -69,20 +87,34 @@ static bool SelectPrimeGunOverlaySwapchainFormat(XrSession session, int64_t* out
   return false;
 }
 
-#ifdef _WIN32
-#include <windows.h>  // for SEH __try/__except
-#endif
-
-#if defined(ANDROID)
-#include <android/log.h>
-#endif
-
-namespace Vulkan
+bool PrimeGunOverlayFormatIsBgra(VkFormat format)
 {
-std::unique_ptr<VulkanOpenXR> g_openxr_vk;
+  return format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
+}
 
-namespace
+std::vector<uint32_t> ConvertPrimeGunOverlayPixelsForVkFormat(const uint32_t* pixels,
+                                                              size_t pixel_count,
+                                                              VkFormat format)
 {
+  std::vector<uint32_t> converted(pixel_count);
+  if (!PrimeGunOverlayFormatIsBgra(format))
+  {
+    std::copy_n(pixels, pixel_count, converted.begin());
+    return converted;
+  }
+
+  for (size_t i = 0; i < pixel_count; ++i)
+  {
+    const uint32_t argb = pixels[i];
+    const uint32_t a = argb & 0xFF000000u;
+    const uint32_t r = (argb >> 16) & 0xFFu;
+    const uint32_t g = (argb >> 8) & 0xFFu;
+    const uint32_t b = argb & 0xFFu;
+    converted[i] = a | (b << 16) | (g << 8) | r;
+  }
+  return converted;
+}
+
 uint64_t ElapsedUs(uint64_t start_us, uint64_t end_us)
 {
   if (start_us == 0 || end_us <= start_us)
@@ -1221,12 +1253,17 @@ bool VulkanOpenXR::EnsurePrimeGunLaserSwapchain()
   for (int y = 3; y < 7; ++y)
     for (int x = 0; x < 16; ++x)
       pixels[static_cast<size_t>(y * 16 + x)] = 0xE080D8FFu;
+  const std::vector<uint32_t> upload_pixels =
+      ConvertPrimeGunOverlayPixelsForVkFormat(pixels.data(), pixels.size(), vk_format);
 
   for (uint32_t i = 0; i < image_count; ++i)
   {
     uint32_t acquired = 0;
     XrSwapchainImageAcquireInfo acquire_info{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    result = xrAcquireSwapchainImage(laser.swapchain, &acquire_info, &acquired);
+    {
+      auto queue_lock = AcquireGraphicsQueueLock();
+      result = xrAcquireSwapchainImage(laser.swapchain, &acquire_info, &acquired);
+    }
     if (XR_FAILED(result))
     {
       DestroyPrimeGunLaserSwapchain();
@@ -1239,15 +1276,21 @@ bool VulkanOpenXR::EnsurePrimeGunLaserSwapchain()
     if (XR_SUCCEEDED(result) && acquired < laser.textures.size())
     {
       StateTracker::GetInstance()->EndRenderPass();
-      laser.textures[acquired]->Load(0, 16, 10, 16, reinterpret_cast<const u8*>(pixels.data()),
-                                     pixels.size() * sizeof(uint32_t), 0);
+      laser.textures[acquired]->OverrideImageLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+      laser.textures[acquired]->Load(0, 16, 10, 16,
+                                     reinterpret_cast<const u8*>(upload_pixels.data()),
+                                     upload_pixels.size() * sizeof(uint32_t), 0);
       g_command_buffer_mgr->SubmitCommandBuffer(false, true);
       StateTracker::GetInstance()->InvalidateCachedState();
     }
 
     XrSwapchainImageReleaseInfo release_info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    xrReleaseSwapchainImage(laser.swapchain, &release_info);
-    if (XR_FAILED(result))
+    XrResult release_result = XR_SUCCESS;
+    {
+      auto queue_lock = AcquireGraphicsQueueLock();
+      release_result = xrReleaseSwapchainImage(laser.swapchain, &release_info);
+    }
+    if (XR_FAILED(result) || XR_FAILED(release_result))
     {
       DestroyPrimeGunLaserSwapchain();
       return false;
@@ -1331,11 +1374,17 @@ bool VulkanOpenXR::EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_
     }
   }
 
+  const std::vector<uint32_t> upload_pixels =
+      ConvertPrimeGunOverlayPixelsForVkFormat(pixels.data(), pixels.size(), vk_format);
+
   for (uint32_t i = 0; i < image_count; ++i)
   {
     uint32_t acquired = 0;
     XrSwapchainImageAcquireInfo acquire_info{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    result = xrAcquireSwapchainImage(overlay.swapchain, &acquire_info, &acquired);
+    {
+      auto queue_lock = AcquireGraphicsQueueLock();
+      result = xrAcquireSwapchainImage(overlay.swapchain, &acquire_info, &acquired);
+    }
     if (XR_FAILED(result))
     {
       DestroyPrimeGunOverlaySwapchain();
@@ -1348,16 +1397,21 @@ bool VulkanOpenXR::EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_
     if (XR_SUCCEEDED(result) && acquired < overlay.textures.size())
     {
       StateTracker::GetInstance()->EndRenderPass();
+      overlay.textures[acquired]->OverrideImageLayout(VK_IMAGE_LAYOUT_UNDEFINED);
       overlay.textures[acquired]->Load(0, width, height, width,
-                                       reinterpret_cast<const u8*>(pixels.data()),
-                                       pixels.size() * sizeof(uint32_t), 0);
+                                       reinterpret_cast<const u8*>(upload_pixels.data()),
+                                       upload_pixels.size() * sizeof(uint32_t), 0);
       g_command_buffer_mgr->SubmitCommandBuffer(false, true);
       StateTracker::GetInstance()->InvalidateCachedState();
     }
 
     XrSwapchainImageReleaseInfo release_info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    xrReleaseSwapchainImage(overlay.swapchain, &release_info);
-    if (XR_FAILED(result))
+    XrResult release_result = XR_SUCCESS;
+    {
+      auto queue_lock = AcquireGraphicsQueueLock();
+      release_result = xrReleaseSwapchainImage(overlay.swapchain, &release_info);
+    }
+    if (XR_FAILED(result) || XR_FAILED(release_result))
     {
       DestroyPrimeGunOverlaySwapchain();
       return false;
