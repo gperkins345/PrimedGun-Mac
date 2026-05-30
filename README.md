@@ -64,11 +64,13 @@ The local build places the app under the build directory's `Binaries` folder.
 
 ## Build - Android APK
 
-The Android project lives in `Source/Android`. Android apps are built with Gradle, and the native Dolphin/PrimedGun component is built by CMake during the Gradle build. Install Android Studio, JDK 17, CMake, Ninja, Android SDK 36, and Android NDK `29.0.14206865`. Android Studio can install the SDK, CMake, and NDK components automatically when the project is opened.
+The Android project lives in `Source/Android`. Android apps are built with Gradle, and the native Dolphin/PrimedGun component is built by CMake during the Gradle build.
 
-If you do not have an Android development environment set up yet, see `AndroidSetup.md`.
+Install Android Studio, JDK 17, CMake, Ninja, Android SDK 36, and Android NDK `29.0.14206865`. Android Studio can install most SDK components automatically when the project is opened.
 
-Make sure submodules are available before building:
+For Quest APK notes, caveats, and the exact debug APK command, see `docs/Building-Quest-APK.md`.
+
+Make sure submodules and Android externals are available before building:
 
 ```bash
 git submodule update --init --recursive
@@ -84,7 +86,7 @@ To build a standard debug APK from the command line:
 
 ```bat
 cd Source\Android
-gradlew.bat app:assembleDebug
+gradlew.bat :app:assembleDebug
 ```
 
 For a standard signed release APK, provide Gradle signing properties and run:
@@ -94,7 +96,7 @@ cd Source\Android
 .\gradlew.bat app:assembleRelease -Pkeystore=C:\path\release.jks -Pstorepass=<password> -Pkeyalias=<alias> -Pkeypass=<password>
 ```
 
-APK outputs are written under `Source\Android\app\build\outputs\apk`. The Quest helper scripts in `Source\Android` are experimental and should be checked against the Gradle tasks before use.
+APK outputs are written under `Source\Android\app\build\outputs\apk`. Debug APKs are signed with Android's debug key and can be sideloaded for testing.
 
 ## Runtime Files
 
