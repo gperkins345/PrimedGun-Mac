@@ -16,87 +16,51 @@ cmake --build build\Release --target dolphin-emu
 
 The built app is written to `Binary\x64\PrimedGun.exe`.
 
-## Build - Linux
+## Build - Linux Flatpak
 
-PrimedGun is based on Dolphin, so Linux builds follow Dolphin's CMake flow. Install a recent GCC or Clang with C++23 support, plus CMake, Ninja, Qt 6, SDL2, libevdev, libudev, Vulkan development files, and OpenXR development files. CMake will report any missing packages, and some libraries can be built from the bundled externals.
+The Flatpak package is built from `Flatpak/org.DolphinEmu.dolphin-emu.yml`. The
+manifest builds PrimedGun, installs the launcher wrapper, packages the desktop UI
+images into `/app/bin/assets`, and seeds the bundled Dolphin settings into the
+Flatpak sandbox on first launch.
 
-On Ubuntu/Debian, the dependency list is roughly:
-
-```bash
-sudo apt update
-sudo apt install git cmake ninja-build build-essential pkg-config \
-  qt6-base-dev qt6-base-dev-tools libqt6svg6-dev \
-  libsdl2-dev libevdev-dev libudev-dev libvulkan-dev glslang-tools \
-  libxrandr-dev libxi-dev libx11-dev libxext-dev libbluetooth-dev
-```
-
-Desktop Linux VR requires Vulkan and a working OpenXR runtime such as Monado or SteamVR.
-
-Start by cloning and pulling submodules:
+Install Flatpak Builder and the KDE runtime dependencies, then build from the
+repository root:
 
 ```bash
-git clone --recurse-submodules https://github.com/Nobbie248/PrimedGun.git
-cd PrimedGun
-git submodule update --init --recursive
+flatpak install flathub org.kde.Platform//6.10 org.kde.Sdk//6.10
+flatpak-builder --user --force-clean --repo=flatpak-repo flatpak-build Flatpak/org.DolphinEmu.dolphin-emu.yml
+flatpak build-bundle flatpak-repo PrimedGun.flatpak org.PrimedGun.PrimedGun
 ```
 
-For a normal system install:
+Install or replace the local Flatpak bundle with:
 
 ```bash
-mkdir build
-cd build
-cmake .. -DENABLE_VR=ON -DENABLE_VULKAN=ON
-make -j "$(nproc)"
-sudo make install
+flatpak install --user --reinstall PrimedGun.flatpak
+flatpak run org.PrimedGun.PrimedGun
 ```
 
-For a local development build that does not require root:
+Flatpak user files are not written beside the executable. Dolphin's writable
+Flatpak folders are:
+
+- Config and INI files: `~/.var/app/org.PrimedGun.PrimedGun/config/dolphin-emu/`
+- User data, game settings, textures, resource packs, and memory cards:
+  `~/.var/app/org.PrimedGun.PrimedGun/data/dolphin-emu/`
+
+On first launch, `Flatpak/dolphin-emu-wrapper` copies the bundled defaults from
+`/app/share/dolphin-emu/User` into those writable folders. Config, GameSettings,
+and GameSettingsVR are applied so the included PrimedGun defaults take effect.
+Save data folders such as `GC` are copied without overwriting existing files.
+
+If an older broken Flatpak already created bad default settings, reinstalling the
+bundle may not be enough. To force a clean Flatpak sandbox, run:
 
 ```bash
-mkdir Build
-cd Build
-cmake .. -DLINUX_LOCAL_DEV=true -DENABLE_VR=ON -DENABLE_VULKAN=ON
-make -j "$(nproc)"
-ln -s ../../Data/Sys Binaries/
+flatpak uninstall --delete-data org.PrimedGun.PrimedGun
+flatpak install --user PrimedGun.flatpak
 ```
 
-The local build places the app under the build directory's `Binaries` folder.
-
-## Build - Android APK
-
-The Android project lives in `Source/Android`. Android apps are built with Gradle, and the native Dolphin/PrimedGun component is built by CMake during the Gradle build.
-
-Install Android Studio, JDK 17, CMake, Ninja, Android SDK 36, and Android NDK `29.0.14206865`. Android Studio can install most SDK components automatically when the project is opened.
-
-For Quest APK notes, caveats, and the exact debug APK command, see `docs/Building-Quest-APK.md`.
-
-Make sure submodules and Android externals are available before building:
-
-```bash
-git submodule update --init --recursive
-```
-
-To build from Android Studio:
-
-1. Open `Source/Android`.
-2. Let Gradle sync and download the requested SDK/NDK/CMake components.
-3. Use **Build > Generate App Bundles or APKs > Generate APKs** to produce an APK.
-
-To build a standard debug APK from the command line:
-
-```bat
-cd Source\Android
-gradlew.bat :app:assembleDebug
-```
-
-For a standard signed release APK, provide Gradle signing properties and run:
-
-```powershell
-cd Source\Android
-.\gradlew.bat app:assembleRelease -Pkeystore=C:\path\release.jks -Pstorepass=<password> -Pkeyalias=<alias> -Pkeypass=<password>
-```
-
-APK outputs are written under `Source\Android\app\build\outputs\apk`. Debug APKs are signed with Android's debug key and can be sideloaded for testing.
+This deletes the Flatpak sandbox data for PrimedGun, including saves and local
+settings, so back up memory cards first if needed.
 
 ## Runtime Files
 

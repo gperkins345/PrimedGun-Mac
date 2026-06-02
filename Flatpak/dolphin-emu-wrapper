@@ -8,6 +8,37 @@ done
 
 host_home="/home/$(id -un)"
 
+seed_root="/app/share/dolphin-emu/User"
+data_user="${XDG_DATA_HOME:-$HOME/.local/share}/dolphin-emu"
+config_user="${XDG_CONFIG_HOME:-$HOME/.config}/dolphin-emu"
+seed_marker="$data_user/.primedgun-defaults-seeded"
+
+if [ -d "$seed_root" ] && [ ! -f "$seed_marker" ]; then
+  mkdir -p "$data_user" "$config_user"
+
+  # Settings must land in Dolphin's writable Flatpak XDG paths, not the read-only app prefix.
+  if [ -d "$seed_root/Config" ]; then
+    mkdir -p "$config_user/Config"
+    cp -R "$seed_root/Config/." "$config_user/Config/" 2>/dev/null || true
+  fi
+
+  for dir in GameSettings GameSettingsVR; do
+    if [ -d "$seed_root/$dir" ]; then
+      mkdir -p "$data_user/$dir"
+      cp -R "$seed_root/$dir/." "$data_user/$dir/" 2>/dev/null || true
+    fi
+  done
+
+  for dir in Load ResourcePacks GC Wii; do
+    if [ -d "$seed_root/$dir" ]; then
+      mkdir -p "$data_user/$dir"
+      cp -R -n "$seed_root/$dir/." "$data_user/$dir/" 2>/dev/null || true
+    fi
+  done
+
+  touch "$seed_marker" 2>/dev/null || true
+fi
+
 for runtime_json in \
   "$host_home/.config/openxr/1/active_runtime.json" \
   "$host_home/.var/app/com.valvesoftware.Steam/config/openxr/1/active_runtime.json"

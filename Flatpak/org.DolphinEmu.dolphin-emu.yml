@@ -76,6 +76,8 @@ modules:
       - /share/man
     post-install:
       - install -Dm755 ../Flatpak/dolphin-emu-wrapper ${FLATPAK_DEST}/bin/primedgun-wrapper
+      - install -d ${FLATPAK_DEST}/bin/assets
+      - cp -a ../assets/. ${FLATPAK_DEST}/bin/assets/
       - desktop-file-edit --set-key=Exec --set-value='/app/bin/primedgun-wrapper'
         --set-key=Name --set-value='PrimedGun'
         --set-key=GenericName --set-value='Metroid Prime VR Launcher'
