@@ -123,8 +123,8 @@ constexpr u32 LOAD_ZERO_TO_F31 = 0xC3E280B0u;
 constexpr u32 VR_MENU_TAB_COUNT = 6;
 constexpr u32 VR_MENU_CANNON_TAB = 5;
 constexpr const char* PRIMEGUN_CANNON_GAME_ID = "GM8E01";
-constexpr const char* PRIMEGUN_CANNON_PACK_FOLDER = "000_PrimeGunCannon";
-constexpr const char* PRIMEGUN_CANNON_LIBRARY_FOLDER = "PrimeGun" DIR_SEP "CannonTextures";
+constexpr const char* PRIMEGUN_CANNON_PACK_FOLDER = "000_PrimedGunCannon";
+constexpr const char* PRIMEGUN_CANNON_LIBRARY_FOLDER = "PrimedGun" DIR_SEP "CannonTextures";
 constexpr std::array<const char*, 3> PRIMEGUN_CANNON_TEXTURE_NAMES = {
     "tex1_128x128_m_3c6ded49d64d30f2_14",
     "tex1_128x128_m_bec6d78ea7dd739e_14",

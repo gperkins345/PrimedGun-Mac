@@ -170,8 +170,8 @@
 namespace
 {
 constexpr const char* PRIMEGUN_CANNON_GAME_ID = "GM8E01";
-constexpr const char* PRIMEGUN_CANNON_PACK_FOLDER = "000_PrimeGunCannon";
-constexpr const char* PRIMEGUN_CANNON_LIBRARY_FOLDER = "PrimeGun/CannonTextures";
+constexpr const char* PRIMEGUN_CANNON_PACK_FOLDER = "000_PrimedGunCannon";
+constexpr const char* PRIMEGUN_CANNON_LIBRARY_FOLDER = "PrimedGun/CannonTextures";
 constexpr std::array<const char*, 3> PRIMEGUN_CANNON_TEXTURE_NAMES = {
     "tex1_128x128_m_3c6ded49d64d30f2_14",
     "tex1_128x128_m_bec6d78ea7dd739e_14",
@@ -207,6 +207,11 @@ QString PrimeGunCannonDefaultPreviewDir()
   return QDir::cleanPath(PrimeGunCannonLibraryDir() + QStringLiteral("/default"));
 }
 
+QString PrimeGunCannonCustomDir()
+{
+  return QDir::cleanPath(PrimeGunCannonLibraryDir() + QStringLiteral("/custom"));
+}
+
 QString PrimeGunCannonPresetDir()
 {
   return QDir::cleanPath(PrimeGunCannonLibraryDir() + QStringLiteral("/presets"));
@@ -215,6 +220,13 @@ QString PrimeGunCannonPresetDir()
 QString PrimeGunCannonRemoveShinePresetPath()
 {
   return PrimeGunCannonPresetDir() + QStringLiteral("/remove_shine/") +
+         QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX]) +
+         QStringLiteral(".dds");
+}
+
+QString PrimeGunCannonRestoreShinePresetPath(int slot)
+{
+  return PrimeGunCannonPresetDir() + QStringLiteral("/restore_shine/slot_%1/").arg(slot) +
          QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX]) +
          QStringLiteral(".dds");
 }
@@ -275,7 +287,12 @@ QString PrimeGunCannonSlotSetting(int slot, int texture_index)
 
 QString PrimeGunResolveCannonTextureSource(int slot, int texture_index, const QString& stored_source)
 {
-  if (!stored_source.isEmpty() && QFileInfo(stored_source).isFile())
+  const QString normalized_stored_source = QDir::fromNativeSeparators(stored_source);
+  const bool uses_legacy_primegun_folder =
+      normalized_stored_source.contains(QStringLiteral("/Load/PrimeGun/"));
+
+  if (!stored_source.isEmpty() && !uses_legacy_primegun_folder &&
+      QFileInfo(stored_source).isFile())
     return stored_source;
 
   const QString dds_source =
@@ -315,7 +332,7 @@ bool PrimeGunEnsureCannonPackRegistration()
   {
     if (!game_id_file.open(QIODevice::WriteOnly | QIODevice::Text))
       return false;
-    game_id_file.write("PrimeGun managed cannon texture override\n");
+    game_id_file.write("PrimedGun managed cannon texture override\n");
   }
 
   return true;
@@ -348,6 +365,41 @@ bool PrimeGunEnsureRemoveShinePreset(QString* error)
   {
     if (error)
       *error = QObject::tr("Could not save the remove-shine DDS into:\n%1").arg(preset_path);
+    return false;
+  }
+
+  return true;
+}
+
+bool PrimeGunBackupSlotShinePreset(int slot, QString* error)
+{
+  const QString backup_path = PrimeGunCannonRestoreShinePresetPath(slot);
+  if (QFileInfo(backup_path).isFile())
+    return true;
+
+  const QString source = PrimeGunResolveCannonTextureSource(
+      slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX, QString());
+  if (source.isEmpty())
+    return true;
+
+  const QString remove_shine_path = QDir::cleanPath(PrimeGunCannonRemoveShinePresetPath());
+  if (QDir::cleanPath(source) == remove_shine_path)
+    return true;
+
+  QFileInfo backup_info(backup_path);
+  QDir backup_dir(backup_info.absolutePath());
+  if (!backup_dir.exists() && !backup_dir.mkpath(QStringLiteral(".")))
+  {
+    if (error)
+      *error = QObject::tr("Could not create the restore-shine preset folder.");
+    return false;
+  }
+
+  QFile::remove(backup_path);
+  if (!QFile::copy(source, backup_path))
+  {
+    if (error)
+      *error = QObject::tr("Could not save the current slot shine texture into:\n%1").arg(backup_path);
     return false;
   }
 
@@ -504,7 +556,7 @@ bool PrimeGunApplyCannonTextureSlot(int slot, QString* error)
   if (!PrimeGunEnsureCannonPackRegistration())
   {
     if (error)
-      *error = QObject::tr("Could not create the PrimeGun cannon texture pack folder.");
+      *error = QObject::tr("Could not create the PrimedGun cannon texture pack folder.");
     return false;
   }
 
@@ -1863,8 +1915,8 @@ void MainWindow::ConnectStack()
   auto* cannon_layout = make_scroll_tab(tr("Cannon Textures"));
   cannon_layout->addWidget(section_label(tr("Custom Cannon Textures"), game_tab));
   auto* cannon_note = new QLabel(
-      tr("PrimeGun stores cannon texture slots outside Metroid Prime's GM8E01 texture-pack folder. "
-         "Default disables the PrimeGun override so any installed HD texture pack can supply the "
+      tr("PrimedGun stores cannon texture slots outside Metroid Prime's GM8E01 texture-pack folder. "
+         "Default disables the PrimedGun override so any installed HD texture pack can supply the "
          "cannon textures."),
       game_tab);
   cannon_note->setWordWrap(true);
@@ -1904,6 +1956,7 @@ void MainWindow::ConnectStack()
   cannon_texture_grid->setColumnStretch(2, 1);
   std::array<QLabel*, PRIMEGUN_CANNON_TEXTURE_NAMES.size()> cannon_texture_path_labels{};
   std::array<QLabel*, PRIMEGUN_CANNON_TEXTURE_NAMES.size()> cannon_texture_preview_labels{};
+  std::array<QPushButton*, PRIMEGUN_CANNON_TEXTURE_NAMES.size()> cannon_texture_import_buttons{};
   for (int texture_index = 0;
        texture_index < static_cast<int>(PRIMEGUN_CANNON_TEXTURE_NAMES.size()); ++texture_index)
   {
@@ -1928,20 +1981,25 @@ void MainWindow::ConnectStack()
     cannon_texture_grid->addWidget(import_button, texture_index, 3);
     cannon_texture_path_labels[texture_index] = path_label;
     cannon_texture_preview_labels[texture_index] = preview_label;
+    cannon_texture_import_buttons[texture_index] = import_button;
 
     connect(import_button, &QPushButton::clicked, this,
             [this, cannon_slot_group, texture_index, cannon_texture_path_labels,
              cannon_texture_preview_labels, cannon_status] {
       const int slot = cannon_slot_group->checkedId();
-      if (slot <= 0)
+      if (slot != 5)
       {
         ModalMessageBox::information(this, tr("Cannon Textures"),
-                                     tr("Choose Slot 1-4 or Custom before importing a texture."));
+                                     tr("Choose Custom before importing a texture."));
         return;
       }
 
+      QDir custom_dir(PrimeGunCannonCustomDir());
+      if (!custom_dir.exists())
+        custom_dir.mkpath(QStringLiteral("."));
+
       const QString source = DolphinFileDialog::getOpenFileName(
-          this, tr("Select Cannon Texture"), QString(),
+          this, tr("Select Cannon Texture"), PrimeGunCannonCustomDir(),
           tr("Texture Images (*.png *.dds);;All Files (*)"));
       if (source.isEmpty())
         return;
@@ -1990,16 +2048,18 @@ void MainWindow::ConnectStack()
   cannon_layout->addWidget(cannon_texture_box);
 
   auto refresh_cannon_texture_ui = [cannon_slot_group, cannon_texture_path_labels,
-                                    cannon_texture_preview_labels, cannon_status] {
+                                    cannon_texture_preview_labels, cannon_texture_import_buttons,
+                                    cannon_status] {
     const int slot = cannon_slot_group->checkedId();
     QSettings& settings = Settings::GetQSettings();
     for (int texture_index = 0;
          texture_index < static_cast<int>(PRIMEGUN_CANNON_TEXTURE_NAMES.size()); ++texture_index)
     {
+      cannon_texture_import_buttons[texture_index]->setVisible(slot == 5);
       QLabel* label = cannon_texture_path_labels[texture_index];
       if (slot <= 0)
       {
-        PrimeGunSetCannonPathLabel(label, QObject::tr("Default: no PrimeGun override"));
+        PrimeGunSetCannonPathLabel(label, QObject::tr("Default: no PrimedGun override"));
         PrimeGunSetCannonPreviewLabel(cannon_texture_preview_labels[texture_index],
                                       PrimeGunCannonDefaultPreviewPath(texture_index));
         continue;
@@ -2016,7 +2076,7 @@ void MainWindow::ConnectStack()
     }
 
     cannon_status->setText(slot <= 0 ?
-                               QObject::tr("Default is active. PrimeGun cannon overrides are clear.") :
+                               QObject::tr("Default is active. PrimedGun cannon overrides are clear.") :
                                QObject::tr("%1 is active.").arg(PrimeGunCannonSlotName(slot)));
   };
 
@@ -2081,6 +2141,11 @@ void MainWindow::ConnectStack()
       ModalMessageBox::critical(this, tr("Cannon Textures"), error);
       return;
     }
+    if (!PrimeGunBackupSlotShinePreset(slot, &error))
+    {
+      ModalMessageBox::critical(this, tr("Cannon Textures"), error);
+      return;
+    }
 
     QDir slot_dir(PrimeGunCannonSlotDir(slot));
     if (!slot_dir.exists() && !slot_dir.mkpath(QStringLiteral(".")))
@@ -2133,9 +2198,38 @@ void MainWindow::ConnectStack()
       return;
     }
 
+    const QString source = PrimeGunCannonRestoreShinePresetPath(slot);
+    if (!QFileInfo(source).isFile())
+    {
+      ModalMessageBox::critical(this, tr("Cannon Textures"),
+                                tr("Could not find the saved shine texture for this slot."));
+      return;
+    }
+
+    QDir slot_dir(PrimeGunCannonSlotDir(slot));
+    if (!slot_dir.exists() && !slot_dir.mkpath(QStringLiteral(".")))
+    {
+      ModalMessageBox::critical(this, tr("Cannon Textures"),
+                                tr("Could not create the selected cannon texture slot folder."));
+      return;
+    }
+
+    const QFileInfo source_info(source);
+    const QString suffix = source_info.suffix().toLower();
+    const QString destination = PrimeGunCannonSourcePath(
+        slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX, QLatin1Char('.') + suffix);
     PrimeGunRemoveCannonSlotTextureFiles(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX);
-    Settings::GetQSettings().remove(
-        PrimeGunCannonSlotSetting(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX));
+    if (!QFile::copy(source, destination))
+    {
+      ModalMessageBox::critical(this, tr("Cannon Textures"),
+                                tr("Could not copy the default shine texture into the slot."));
+      return;
+    }
+
+    QSettings& settings = Settings::GetQSettings();
+    settings.setValue(PrimeGunCannonSlotSetting(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX),
+                      destination);
+    settings.setValue(QStringLiteral("primegun/cannon_texture_slot"), slot);
 
     QString error;
     if (!PrimeGunApplyCannonTextureSlot(slot, &error))
@@ -2144,14 +2238,13 @@ void MainWindow::ConnectStack()
       return;
     }
 
-    PrimeGunRemoveActiveCannonTextureFiles(PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX);
     Config::SetBaseOrCurrent(Config::GFX_HIRES_TEXTURES, true);
     PrimeGunRefreshCustomTextureConfig(true);
     refresh_cannon_texture_ui();
     PrimeGunSetCannonPathLabel(cannon_texture_path_labels[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX],
-                               tr("No texture imported"));
+                               QDir::toNativeSeparators(destination));
     PrimeGunSetCannonPreviewLabel(
-        cannon_texture_preview_labels[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX], QString());
+        cannon_texture_preview_labels[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX], destination);
     cannon_status->setText(tr("Restored shine for %1. Cannon base textures are unchanged.")
                                .arg(PrimeGunCannonSlotName(slot)));
   });

@@ -135,7 +135,7 @@ void AppendPrimeGunCannonProbeLog(std::string_view text)
   File::IOFile file(path, "ab");
   if (!file)
   {
-    WARN_LOG_FMT(VIDEO, "PrimeGun cannon probe: failed to open '{}'", path);
+    WARN_LOG_FMT(VIDEO, "PrimedGun cannon probe: failed to open '{}'", path);
     return;
   }
   file.WriteString(text);
@@ -155,10 +155,10 @@ void LogPrimeGunCannonProbeDraw(u32 draw_sequence, u64 vs_hash, u64 ps_hash, u64
     {
       s_primegun_cannon_probe_suppressed_notice = true;
       AppendPrimeGunCannonProbeLog(fmt::format(
-          "\nPrimeGun cannon probe: suppressing further draws after {} matches.\n",
+          "\nPrimedGun cannon probe: suppressing further draws after {} matches.\n",
           PRIMEGUN_CANNON_PROBE_MAX_LOGS));
       INFO_LOG_FMT(VIDEO,
-                   "PrimeGun cannon probe: suppressing further draws after {} matches. Log: {}",
+                   "PrimedGun cannon probe: suppressing further draws after {} matches. Log: {}",
                    PRIMEGUN_CANNON_PROBE_MAX_LOGS, PrimeGunCannonProbeLogPath());
     }
     return;
@@ -167,7 +167,7 @@ void LogPrimeGunCannonProbeDraw(u32 draw_sequence, u64 vs_hash, u64 ps_hash, u64
   ++s_primegun_cannon_probe_log_count;
   std::string out;
   out += fmt::format(
-      "\n[PrimeGun cannon probe #{:03}] draw={} VS={:08x} PS={:08x} GS={:08x}\n",
+      "\n[PrimedGun cannon probe #{:03}] draw={} VS={:08x} PS={:08x} GS={:08x}\n",
       s_primegun_cannon_probe_log_count, draw_sequence, static_cast<u32>(vs_hash),
       static_cast<u32>(ps_hash), static_cast<u32>(gs_hash));
   out += fmt::format(
@@ -251,7 +251,7 @@ void LogPrimeGunCannonProbeDraw(u32 draw_sequence, u64 vs_hash, u64 ps_hash, u64
   AppendPrimeGunCannonProbeLog(out);
   if (s_primegun_cannon_probe_log_count == 1)
   {
-    INFO_LOG_FMT(VIDEO, "PrimeGun cannon probe logging PS {:08x} to {}",
+    INFO_LOG_FMT(VIDEO, "PrimedGun cannon probe logging PS {:08x} to {}",
                  static_cast<u32>(PRIMEGUN_CANNON_PROBE_PS_HASH), PrimeGunCannonProbeLogPath());
   }
 }
