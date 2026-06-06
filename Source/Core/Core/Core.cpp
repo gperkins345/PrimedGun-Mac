@@ -69,7 +69,7 @@
 #include "Core/PowerPC/GDBStub.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
-#include "Core/PrimeGun/NativeRuntime.h"
+#include "Core/PrimedGun/NativeRuntime.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "Core/WiiRoot.h"
@@ -154,7 +154,7 @@ void OnFrameEnd(Core::System& system)
   ASSERT(IsCPUThread());
   const CPUThreadGuard guard(system);
 
-  PrimeGun::OnFrameEnd(system, guard);
+  PrimedGun::OnFrameEnd(system, guard);
 
 #ifdef USE_MEMORYWATCHER
   if (s_memory_watcher)

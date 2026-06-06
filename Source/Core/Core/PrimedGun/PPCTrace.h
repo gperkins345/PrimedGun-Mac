@@ -1,11 +1,11 @@
-// Copyright 2026 PrimeGun
+// Copyright 2026 PrimedGun
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
 #include "Common/CommonTypes.h"
 
-namespace PrimeGun::PPCTrace
+namespace PrimedGun::PPCTrace
 {
 u32* GetActiveFlagAddress();
 bool IsActive();

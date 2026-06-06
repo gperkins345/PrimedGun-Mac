@@ -66,7 +66,7 @@ apksigner verify --verbose "C:\PrimedGun\Binary\PrimedGun Quest 2 debug.apk"
 - The debug APK package name is `org.dolphinemu.dolphinemu.debug`, so it installs separately from a release package.
 - The app label may still show as `Dolphin Debug` unless the Android app resources are renamed.
 - The Android Quest path is Vulkan/OpenXR-focused. The Quest settings code defaults the backend to Vulkan and enables OpenXR launch behavior.
-- Vulkan overlay rendering should use the same PrimeGun overlay path as the recent Vulkan upload fix, but it still needs real Quest hardware testing.
+- Vulkan overlay rendering should use the same PrimedGun overlay path as the recent Vulkan upload fix, but it still needs real Quest hardware testing.
 - The APK includes `arm64-v8a` and `x86_64`; Quest uses `arm64-v8a`.
 - Android RetroAchievements support may be disabled in this configuration. JNI calls are guarded so the build can compile without the RetroAchievements feature.
 

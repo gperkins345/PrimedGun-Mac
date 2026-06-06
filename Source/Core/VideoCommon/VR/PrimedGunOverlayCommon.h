@@ -21,7 +21,7 @@
 
 #include <openxr/openxr.h>
 
-namespace PrimeGun::Overlay
+namespace PrimedGun::Overlay
 {
 inline std::array<uint8_t, 7> Glyph(char ch)
 {
@@ -111,7 +111,7 @@ inline std::string FloatText(float value, int precision)
   return buffer;
 }
 
-struct PrimeGunPng
+struct PrimedGunPng
 {
   Common::UniqueBuffer<u8> data;
   u32 width = 0;
@@ -119,7 +119,7 @@ struct PrimeGunPng
   bool tried = false;
 };
 
-inline bool LoadPrimeGunPngFromPath(const std::string& path, PrimeGunPng* image)
+inline bool LoadPrimedGunPngFromPath(const std::string& path, PrimedGunPng* image)
 {
   File::IOFile file(path, "rb", File::SharedAccess::Read);
   if (!file.IsOpen())
@@ -149,14 +149,14 @@ inline bool LoadPrimeGunPngFromPath(const std::string& path, PrimeGunPng* image)
   return true;
 }
 
-inline const PrimeGunPng& LoadPrimeGunPng(const char* filename)
+inline const PrimedGunPng& LoadPrimedGunPng(const char* filename)
 {
-  static PrimeGunPng power;
-  static PrimeGunPng wave;
-  static PrimeGunPng ice;
-  static PrimeGunPng plasma;
+  static PrimedGunPng power;
+  static PrimedGunPng wave;
+  static PrimedGunPng ice;
+  static PrimedGunPng plasma;
 
-  PrimeGunPng* image = &power;
+  PrimedGunPng* image = &power;
   if (std::strcmp(filename, "wave.png") == 0)
     image = &wave;
   else if (std::strcmp(filename, "ice.png") == 0)
@@ -168,8 +168,8 @@ inline const PrimeGunPng& LoadPrimeGunPng(const char* filename)
   {
     image->tried = true;
     const std::string path = File::GetExeDirectory() + DIR_SEP "assets" DIR_SEP + filename;
-    if (!LoadPrimeGunPngFromPath(path, image))
-      WARN_LOG_FMT(VIDEO, "PrimeGun: Failed to load weapon panel asset '{}'.", path);
+    if (!LoadPrimedGunPngFromPath(path, image))
+      WARN_LOG_FMT(VIDEO, "PrimedGun: Failed to load weapon panel asset '{}'.", path);
   }
 
   return *image;
@@ -205,7 +205,7 @@ inline void BlendPixel(std::vector<uint32_t>& pixels, uint32_t width, uint32_t h
 }
 
 inline void DrawPngFit(std::vector<uint32_t>& pixels, uint32_t width, uint32_t height,
-                       const PrimeGunPng& image, int x, int y, int w, int h, bool selected)
+                       const PrimedGunPng& image, int x, int y, int w, int h, bool selected)
 {
   if (selected)
   {
@@ -265,7 +265,7 @@ inline bool MenuRowIsNumeric(uint32_t tab, int index)
   }
 }
 
-inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimeGunVrOverlayState& s)
+inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlayState& s)
 {
   switch (s.tab)
   {
@@ -334,7 +334,7 @@ inline std::vector<uint32_t> BuildPromptPixels(uint32_t width, uint32_t height)
 }
 
 inline std::vector<uint32_t> BuildMenuPixels(uint32_t width, uint32_t height,
-                                             const Common::VR::PrimeGunVrOverlayState& s)
+                                             const Common::VR::PrimedGunVrOverlayState& s)
 {
   std::vector<uint32_t> pixels(static_cast<size_t>(width) * height, 0);
   FillRect(pixels, width, height, 0, 0, static_cast<int>(width), static_cast<int>(height),
@@ -397,12 +397,12 @@ inline std::vector<uint32_t> BuildMenuPixels(uint32_t width, uint32_t height,
 }
 
 inline std::vector<uint32_t> BuildWeaponPanelPixels(
-    uint32_t width, uint32_t height, const Common::VR::PrimeGunVrOverlayState& s)
+    uint32_t width, uint32_t height, const Common::VR::PrimedGunVrOverlayState& s)
 {
   std::vector<uint32_t> pixels(static_cast<size_t>(width) * height, 0);
 
   auto draw_slot = [&](uint32_t index, const char* filename, int x, int y, int w, int h) {
-    DrawPngFit(pixels, width, height, LoadPrimeGunPng(filename), x, y, w, h,
+    DrawPngFit(pixels, width, height, LoadPrimedGunPng(filename), x, y, w, h,
                s.weapon_selected_index == index);
   };
 
@@ -499,4 +499,4 @@ inline void AddTrackingOrigin(HybridControllerPose* pose,
   pose->position.y += snapshot.tracking_origin_position[1];
   pose->position.z += snapshot.tracking_origin_position[2];
 }
-}  // namespace PrimeGun::Overlay
+}  // namespace PrimedGun::Overlay

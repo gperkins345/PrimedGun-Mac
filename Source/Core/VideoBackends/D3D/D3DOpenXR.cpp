@@ -125,7 +125,7 @@ std::string FloatText(float value, int precision)
   return buffer;
 }
 
-struct PrimeGunPng
+struct PrimedGunPng
 {
   Common::UniqueBuffer<u8> data;
   u32 width = 0;
@@ -133,7 +133,7 @@ struct PrimeGunPng
   bool tried = false;
 };
 
-bool LoadPrimeGunPngFromPath(const std::string& path, PrimeGunPng* image)
+bool LoadPrimedGunPngFromPath(const std::string& path, PrimedGunPng* image)
 {
   File::IOFile file(path, "rb", File::SharedAccess::Read);
   if (!file.IsOpen())
@@ -163,14 +163,14 @@ bool LoadPrimeGunPngFromPath(const std::string& path, PrimeGunPng* image)
   return true;
 }
 
-const PrimeGunPng& LoadPrimeGunPng(const char* filename)
+const PrimedGunPng& LoadPrimedGunPng(const char* filename)
 {
-  static PrimeGunPng power;
-  static PrimeGunPng wave;
-  static PrimeGunPng ice;
-  static PrimeGunPng plasma;
+  static PrimedGunPng power;
+  static PrimedGunPng wave;
+  static PrimedGunPng ice;
+  static PrimedGunPng plasma;
 
-  PrimeGunPng* image = &power;
+  PrimedGunPng* image = &power;
   if (std::strcmp(filename, "wave.png") == 0)
     image = &wave;
   else if (std::strcmp(filename, "ice.png") == 0)
@@ -182,8 +182,8 @@ const PrimeGunPng& LoadPrimeGunPng(const char* filename)
   {
     image->tried = true;
     const std::string path = File::GetExeDirectory() + DIR_SEP "assets" DIR_SEP + filename;
-    if (!LoadPrimeGunPngFromPath(path, image))
-      WARN_LOG_FMT(VIDEO, "PrimeGun: Failed to load weapon panel asset '{}'.", path);
+    if (!LoadPrimedGunPngFromPath(path, image))
+      WARN_LOG_FMT(VIDEO, "PrimedGun: Failed to load weapon panel asset '{}'.", path);
   }
 
   return *image;
@@ -220,7 +220,7 @@ void BlendPixel(std::vector<uint32_t>& pixels, uint32_t width, uint32_t height, 
 }
 
 void DrawPngFit(std::vector<uint32_t>& pixels, uint32_t width, uint32_t height,
-                const PrimeGunPng& image, int x, int y, int w, int h, bool selected)
+                const PrimedGunPng& image, int x, int y, int w, int h, bool selected)
 {
   if (selected)
   {
@@ -281,7 +281,7 @@ bool MenuRowIsNumeric(uint32_t tab, int index)
   }
 }
 
-std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimeGunVrOverlayState& s)
+std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlayState& s)
 {
   switch (s.tab)
   {
@@ -350,7 +350,7 @@ std::vector<uint32_t> BuildPromptPixels(uint32_t width, uint32_t height)
 }
 
 std::vector<uint32_t> BuildMenuPixels(uint32_t width, uint32_t height,
-                                      const Common::VR::PrimeGunVrOverlayState& s)
+                                      const Common::VR::PrimedGunVrOverlayState& s)
 {
   std::vector<uint32_t> pixels(static_cast<size_t>(width) * height, 0);
   FillRect(pixels, width, height, 0, 0, static_cast<int>(width), static_cast<int>(height),
@@ -412,12 +412,12 @@ std::vector<uint32_t> BuildMenuPixels(uint32_t width, uint32_t height,
 }
 
 std::vector<uint32_t> BuildWeaponPanelPixels(uint32_t width, uint32_t height,
-                                             const Common::VR::PrimeGunVrOverlayState& s)
+                                             const Common::VR::PrimedGunVrOverlayState& s)
 {
   std::vector<uint32_t> pixels(static_cast<size_t>(width) * height, 0);
 
   auto draw_slot = [&](uint32_t index, const char* filename, int x, int y, int w, int h) {
-    DrawPngFit(pixels, width, height, LoadPrimeGunPng(filename), x, y, w, h,
+    DrawPngFit(pixels, width, height, LoadPrimedGunPng(filename), x, y, w, h,
                s.weapon_selected_index == index);
   };
 
@@ -702,8 +702,8 @@ bool D3DOpenXR::CreateSwapchains()
 
 void D3DOpenXR::DestroySwapchains()
 {
-  DestroyPrimeGunOverlaySwapchain();
-  DestroyPrimeGunLaserSwapchain();
+  DestroyPrimedGunOverlaySwapchain();
+  DestroyPrimedGunLaserSwapchain();
 
   for (uint32_t eye = 0; eye < 2; ++eye)
   {
@@ -740,7 +740,7 @@ void D3DOpenXR::DestroySwapchains()
   }
 }
 
-void D3DOpenXR::DestroyPrimeGunOverlaySwapchain()
+void D3DOpenXR::DestroyPrimedGunOverlaySwapchain()
 {
   auto& overlay = m_primegun_overlay_swapchain;
   overlay.images.clear();
@@ -751,13 +751,13 @@ void D3DOpenXR::DestroyPrimeGunOverlaySwapchain()
   {
     const XrResult result = xrDestroySwapchain(overlay.swapchain);
     if (XR_FAILED(result))
-      WARN_LOG_FMT(VIDEO, "OpenXR: PrimeGun overlay xrDestroySwapchain failed ({}).",
+      WARN_LOG_FMT(VIDEO, "OpenXR: PrimedGun overlay xrDestroySwapchain failed ({}).",
                    static_cast<int>(result));
     overlay.swapchain = XR_NULL_HANDLE;
   }
 }
 
-void D3DOpenXR::DestroyPrimeGunLaserSwapchain()
+void D3DOpenXR::DestroyPrimedGunLaserSwapchain()
 {
   auto& laser = m_primegun_laser_swapchain;
   laser.images.clear();
@@ -766,19 +766,19 @@ void D3DOpenXR::DestroyPrimeGunLaserSwapchain()
   {
     const XrResult result = xrDestroySwapchain(laser.swapchain);
     if (XR_FAILED(result))
-      WARN_LOG_FMT(VIDEO, "OpenXR: PrimeGun laser xrDestroySwapchain failed ({}).",
+      WARN_LOG_FMT(VIDEO, "OpenXR: PrimedGun laser xrDestroySwapchain failed ({}).",
                    static_cast<int>(result));
     laser.swapchain = XR_NULL_HANDLE;
   }
 }
 
-bool D3DOpenXR::EnsurePrimeGunLaserSwapchain()
+bool D3DOpenXR::EnsurePrimedGunLaserSwapchain()
 {
   auto& laser = m_primegun_laser_swapchain;
   if (laser.texture_ready && laser.swapchain != XR_NULL_HANDLE)
     return true;
 
-  DestroyPrimeGunLaserSwapchain();
+  DestroyPrimedGunLaserSwapchain();
   int64_t swapchain_format = DXGI_FORMAT_R8G8B8A8_UNORM;
   VR::D3D11OpenXR::SelectSwapchainFormat(VR::g_openxr->GetSession(), &swapchain_format);
 
@@ -799,7 +799,7 @@ bool D3DOpenXR::EnsurePrimeGunLaserSwapchain()
   result = xrEnumerateSwapchainImages(laser.swapchain, 0, &image_count, nullptr);
   if (XR_FAILED(result) || image_count == 0)
   {
-    DestroyPrimeGunLaserSwapchain();
+    DestroyPrimedGunLaserSwapchain();
     return false;
   }
 
@@ -809,7 +809,7 @@ bool D3DOpenXR::EnsurePrimeGunLaserSwapchain()
       reinterpret_cast<XrSwapchainImageBaseHeader*>(laser.images.data()));
   if (XR_FAILED(result))
   {
-    DestroyPrimeGunLaserSwapchain();
+    DestroyPrimedGunLaserSwapchain();
     return false;
   }
 
@@ -825,7 +825,7 @@ bool D3DOpenXR::EnsurePrimeGunLaserSwapchain()
     result = xrAcquireSwapchainImage(laser.swapchain, &acquire_info, &acquired);
     if (XR_FAILED(result))
     {
-      DestroyPrimeGunLaserSwapchain();
+      DestroyPrimedGunLaserSwapchain();
       return false;
     }
     XrSwapchainImageWaitInfo wait_info{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
@@ -838,7 +838,7 @@ bool D3DOpenXR::EnsurePrimeGunLaserSwapchain()
     xrReleaseSwapchainImage(laser.swapchain, &release_info);
     if (XR_FAILED(result))
     {
-      DestroyPrimeGunLaserSwapchain();
+      DestroyPrimedGunLaserSwapchain();
       return false;
     }
   }
@@ -847,7 +847,7 @@ bool D3DOpenXR::EnsurePrimeGunLaserSwapchain()
   return true;
 }
 
-bool D3DOpenXR::EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_t generation,
+bool D3DOpenXR::EnsurePrimedGunOverlaySwapchain(uint32_t content_kind, uint32_t generation,
                                                uint32_t width, uint32_t height,
                                                const std::vector<uint32_t>& pixels)
 {
@@ -859,7 +859,7 @@ bool D3DOpenXR::EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_t g
     return true;
   }
 
-  DestroyPrimeGunOverlaySwapchain();
+  DestroyPrimedGunOverlaySwapchain();
   overlay.width = width;
   overlay.height = height;
 
@@ -878,7 +878,7 @@ bool D3DOpenXR::EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_t g
   XrResult result = xrCreateSwapchain(VR::g_openxr->GetSession(), &info, &overlay.swapchain);
   if (XR_FAILED(result) || overlay.swapchain == XR_NULL_HANDLE)
   {
-    WARN_LOG_FMT(VIDEO, "OpenXR: PrimeGun overlay xrCreateSwapchain failed ({}).",
+    WARN_LOG_FMT(VIDEO, "OpenXR: PrimedGun overlay xrCreateSwapchain failed ({}).",
                  static_cast<int>(result));
     return false;
   }
@@ -887,7 +887,7 @@ bool D3DOpenXR::EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_t g
   result = xrEnumerateSwapchainImages(overlay.swapchain, 0, &image_count, nullptr);
   if (XR_FAILED(result) || image_count == 0)
   {
-    DestroyPrimeGunOverlaySwapchain();
+    DestroyPrimedGunOverlaySwapchain();
     return false;
   }
 
@@ -897,7 +897,7 @@ bool D3DOpenXR::EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_t g
       reinterpret_cast<XrSwapchainImageBaseHeader*>(overlay.images.data()));
   if (XR_FAILED(result))
   {
-    DestroyPrimeGunOverlaySwapchain();
+    DestroyPrimedGunOverlaySwapchain();
     return false;
   }
 
@@ -908,7 +908,7 @@ bool D3DOpenXR::EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_t g
     result = xrAcquireSwapchainImage(overlay.swapchain, &acquire_info, &acquired);
     if (XR_FAILED(result))
     {
-      DestroyPrimeGunOverlaySwapchain();
+      DestroyPrimedGunOverlaySwapchain();
       return false;
     }
     XrSwapchainImageWaitInfo wait_info{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
@@ -923,7 +923,7 @@ bool D3DOpenXR::EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_t g
     xrReleaseSwapchainImage(overlay.swapchain, &release_info);
     if (XR_FAILED(result))
     {
-      DestroyPrimeGunOverlaySwapchain();
+      DestroyPrimedGunOverlaySwapchain();
       return false;
     }
   }
@@ -934,12 +934,12 @@ bool D3DOpenXR::EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_t g
   return true;
 }
 
-bool D3DOpenXR::AppendPrimeGunOverlayLayers(std::vector<XrCompositionLayerBaseHeader*>* layers)
+bool D3DOpenXR::AppendPrimedGunOverlayLayers(std::vector<XrCompositionLayerBaseHeader*>* layers)
 {
   if (!VR::g_openxr || !layers)
     return false;
 
-  const auto overlay = Common::VR::OpenXRInputState::GetPrimeGunOverlay();
+  const auto overlay = Common::VR::OpenXRInputState::GetPrimedGunOverlay();
   if (!overlay.menu_visible && !overlay.prompt_visible && !overlay.weapon_panel_visible)
     return false;
 
@@ -958,7 +958,7 @@ bool D3DOpenXR::AppendPrimeGunOverlayLayers(std::vector<XrCompositionLayerBaseHe
   const std::vector<uint32_t> pixels = menu        ? BuildMenuPixels(width, height, overlay) :
                                        weapon_panel ? BuildWeaponPanelPixels(width, height, overlay) :
                                                       BuildPromptPixels(width, height);
-  if (!EnsurePrimeGunOverlaySwapchain(content_kind, generation, width, height, pixels))
+  if (!EnsurePrimedGunOverlaySwapchain(content_kind, generation, width, height, pixels))
     return false;
 
   m_primegun_overlay_layer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
@@ -1021,7 +1021,7 @@ bool D3DOpenXR::AppendPrimeGunOverlayLayers(std::vector<XrCompositionLayerBaseHe
 
   layers->push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&m_primegun_overlay_layer));
 
-  if (menu && right_pose.valid && EnsurePrimeGunLaserSwapchain())
+  if (menu && right_pose.valid && EnsurePrimedGunLaserSwapchain())
   {
     const XrQuaternionf q = right_pose.orientation;
     const XrVector3f forward = RotateVector(q, {0.0f, 0.0f, -1.0f});
@@ -1136,7 +1136,7 @@ bool D3DOpenXR::SubmitFrame()
 
   std::vector<XrCompositionLayerBaseHeader*> layers = {
       reinterpret_cast<XrCompositionLayerBaseHeader*>(&m_projection_layer)};
-  AppendPrimeGunOverlayLayers(&layers);
+  AppendPrimedGunOverlayLayers(&layers);
 
   return VR::g_openxr->EndFrame(layers);
 }

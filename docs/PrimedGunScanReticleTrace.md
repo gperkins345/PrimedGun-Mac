@@ -1,4 +1,4 @@
-# PrimeGun Scan Reticle Trace Notes
+# PrimedGun Scan Reticle Trace Notes
 
 Date: 2026-05-30
 
@@ -17,7 +17,7 @@ Date: 2026-05-30
 
 ## What The Log Still Proved
 
-- The PrimeGun mode probe was active and produced 630+ mode entries.
+- The PrimedGun mode probe was active and produced 630+ mode entries.
 - During the scan attempt, the runtime saw:
   - `player=8046B97C`
   - `camera=0`
@@ -26,7 +26,7 @@ Date: 2026-05-30
   - `gun_alpha=0.000`
   - `holster=0`
 - Pad mode later bounced between `combat` and `lock-on`, which matches the user report that scan/lock behavior is overlapping.
-- `visor=1` here comes from the current PrimeGun helper reading `player + 0x330`; it should not be treated as the real `CPlayerState::EPlayerVisor` value.
+- `visor=1` here comes from the current PrimedGun helper reading `player + 0x330`; it should not be treated as the real `CPlayerState::EPlayerVisor` value.
 
 ## Current Code Paths Explaining The Missing Scan Reticle Work
 
@@ -55,7 +55,7 @@ So the next fix should not depend only on `player + 0x330 == 1` for scan. That v
 ## Recommended Next Pass
 
 1. Stop using full interpreter instruction tracing for this problem; it is too expensive.
-2. Add a narrow PrimeGun runtime probe that reads and logs:
+2. Add a narrow PrimedGun runtime probe that reads and logs:
    - real `CPlayerState::x14_currentVisor`
    - `CPlayerState::x18_transitioningVisor`
    - player scan state around `CPlayer::x3a8_scanState`
@@ -73,7 +73,7 @@ This should give a targeted, fast log and a cleaner implementation path without 
 
 Runtime log inspected: `Binary/x64/User/Logs/dolphin.log`
 
-The new log still contains no `INTER PC` lines, so it does not include PPC assembly output. It does contain a useful PrimeGun mode window around the scan attempt.
+The new log still contains no `INTER PC` lines, so it does not include PPC assembly output. It does contain a useful PrimedGun mode window around the scan attempt.
 
 Important scan window:
 
@@ -114,7 +114,7 @@ Main scan findings:
 - Orbit fields:
   - starts with `orbit_target=FFFF0000`
   - `orbit_next` later becomes `045A0000`
-- PrimeGun scratch state:
+- PrimedGun scratch state:
   - `target_player=00000000`
   - `target_uid_word=00000000`
   - `reticle_enabled=0`
@@ -126,7 +126,7 @@ Conclusion:
 
 The real scan visor flag is now known and usable: `CPlayerState::x14_currentVisor == 2`.
 
-The scan reticle/HMD target path is currently absent, not merely pointed the wrong way. During real scan mode, PrimeGun keeps both the gun target scratch and reticle billboard scratch disabled. The next implementation should add a dedicated scan/HMD target path that stays active when `current_visor == 2`, probably feeding the scan target/orbit-next behavior instead of relying on the normal combat gun target path.
+The scan reticle/HMD target path is currently absent, not merely pointed the wrong way. During real scan mode, PrimedGun keeps both the gun target scratch and reticle billboard scratch disabled. The next implementation should add a dedicated scan/HMD target path that stays active when `current_visor == 2`, probably feeding the scan target/orbit-next behavior instead of relying on the normal combat gun target path.
 
 ## Reverted Experiment Notes: 2026-05-30
 
@@ -198,8 +198,8 @@ These notes were saved before hard-resetting the local tree.
 ### Files Touched By The Experiment
 
 - `Source/Core/Common/VR/OpenXRInputState.h`
-- `Source/Core/Core/PrimeGun/NativeRuntime.cpp`
-- `Source/Core/Core/PrimeGun/NativeRuntime.h`
+- `Source/Core/Core/PrimedGun/NativeRuntime.cpp`
+- `Source/Core/Core/PrimedGun/NativeRuntime.h`
 - `Source/Core/DolphinQt/MainWindow.cpp`
 - `Source/Core/VideoBackends/D3D/D3DOpenXR.cpp`
 - `Source/Core/VideoCommon/VertexManagerBase.cpp`

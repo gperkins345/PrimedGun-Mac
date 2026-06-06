@@ -96,8 +96,8 @@
 #include "Core/HotkeyManager.h"
 #include "Core/IOS/USB/Bluetooth/BTEmu.h"
 #include "Core/Movie.h"
-#include "Core/PrimeGun/NativeRuntime.h"
-#include "Core/PrimeGun/PPCTrace.h"
+#include "Core/PrimedGun/NativeRuntime.h"
+#include "Core/PrimedGun/PPCTrace.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "Core/WiiUtils.h"
@@ -186,54 +186,54 @@ constexpr std::array<const char*, 3> PRIMEGUN_CANNON_TEXTURE_LABELS = {
     "Shine mask",
 };
 
-QString PrimeGunCannonPackDir()
+QString PrimedGunCannonPackDir()
 {
   return QDir::cleanPath(QString::fromStdString(File::GetUserPath(D_HIRESTEXTURES_IDX)) +
                          QLatin1Char('/') + QString::fromLatin1(PRIMEGUN_CANNON_PACK_FOLDER));
 }
 
-QString PrimeGunCannonLibraryDir()
+QString PrimedGunCannonLibraryDir()
 {
   return QDir::cleanPath(QString::fromStdString(File::GetUserPath(D_LOAD_IDX)) +
                          QLatin1Char('/') + QString::fromLatin1(PRIMEGUN_CANNON_LIBRARY_FOLDER));
 }
 
-QString PrimeGunCannonSlotDir(int slot)
+QString PrimedGunCannonSlotDir(int slot)
 {
-  return QDir::cleanPath(PrimeGunCannonLibraryDir() +
+  return QDir::cleanPath(PrimedGunCannonLibraryDir() +
                          QStringLiteral("/slot_%1").arg(slot));
 }
 
-QString PrimeGunCannonDefaultPreviewDir()
+QString PrimedGunCannonDefaultPreviewDir()
 {
-  return QDir::cleanPath(PrimeGunCannonLibraryDir() + QStringLiteral("/default"));
+  return QDir::cleanPath(PrimedGunCannonLibraryDir() + QStringLiteral("/default"));
 }
 
-QString PrimeGunCannonCustomDir()
+QString PrimedGunCannonCustomDir()
 {
-  return QDir::cleanPath(PrimeGunCannonLibraryDir() + QStringLiteral("/custom"));
+  return QDir::cleanPath(PrimedGunCannonLibraryDir() + QStringLiteral("/custom"));
 }
 
-QString PrimeGunCannonPresetDir()
+QString PrimedGunCannonPresetDir()
 {
-  return QDir::cleanPath(PrimeGunCannonLibraryDir() + QStringLiteral("/presets"));
+  return QDir::cleanPath(PrimedGunCannonLibraryDir() + QStringLiteral("/presets"));
 }
 
-QString PrimeGunCannonRemoveShinePresetPath()
+QString PrimedGunCannonRemoveShinePresetPath()
 {
-  return PrimeGunCannonPresetDir() + QStringLiteral("/remove_shine/") +
+  return PrimedGunCannonPresetDir() + QStringLiteral("/remove_shine/") +
          QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX]) +
          QStringLiteral(".dds");
 }
 
-QString PrimeGunCannonRestoreShinePresetPath(int slot)
+QString PrimedGunCannonRestoreShinePresetPath(int slot)
 {
-  return PrimeGunCannonPresetDir() + QStringLiteral("/restore_shine/slot_%1/").arg(slot) +
+  return PrimedGunCannonPresetDir() + QStringLiteral("/restore_shine/slot_%1/").arg(slot) +
          QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX]) +
          QStringLiteral(".dds");
 }
 
-QString PrimeGunCannonUserTexturePackSourcePath()
+QString PrimedGunCannonUserTexturePackSourcePath()
 {
   return QDir::cleanPath(QString::fromStdString(File::GetUserPath(D_HIRESTEXTURES_IDX)) +
                          QLatin1Char('/') + QString::fromLatin1(PRIMEGUN_CANNON_GAME_ID) +
@@ -243,15 +243,15 @@ QString PrimeGunCannonUserTexturePackSourcePath()
                          QStringLiteral(".dds"));
 }
 
-QString PrimeGunCannonSourcePath(int slot, int texture_index, const QString& extension)
+QString PrimedGunCannonSourcePath(int slot, int texture_index, const QString& extension)
 {
-  return PrimeGunCannonSlotDir(slot) + QLatin1Char('/') +
+  return PrimedGunCannonSlotDir(slot) + QLatin1Char('/') +
          QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[texture_index]) + extension;
 }
 
-QString PrimeGunCannonDefaultPreviewPath(int texture_index)
+QString PrimedGunCannonDefaultPreviewPath(int texture_index)
 {
-  const QString base = PrimeGunCannonDefaultPreviewDir() + QLatin1Char('/') +
+  const QString base = PrimedGunCannonDefaultPreviewDir() + QLatin1Char('/') +
                        QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[texture_index]);
   const QString dds_path = base + QStringLiteral(".dds");
   if (QFileInfo(dds_path).isFile())
@@ -264,53 +264,53 @@ QString PrimeGunCannonDefaultPreviewPath(int texture_index)
   return {};
 }
 
-QString PrimeGunCannonActivePath(int texture_index, const QString& extension)
+QString PrimedGunCannonActivePath(int texture_index, const QString& extension)
 {
-  return PrimeGunCannonPackDir() + QLatin1Char('/') +
+  return PrimedGunCannonPackDir() + QLatin1Char('/') +
          QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[texture_index]) + extension;
 }
 
-void PrimeGunRemoveCannonSlotTextureFiles(int slot, int texture_index)
+void PrimedGunRemoveCannonSlotTextureFiles(int slot, int texture_index)
 {
-  QFile::remove(PrimeGunCannonSourcePath(slot, texture_index, QStringLiteral(".png")));
-  QFile::remove(PrimeGunCannonSourcePath(slot, texture_index, QStringLiteral(".dds")));
+  QFile::remove(PrimedGunCannonSourcePath(slot, texture_index, QStringLiteral(".png")));
+  QFile::remove(PrimedGunCannonSourcePath(slot, texture_index, QStringLiteral(".dds")));
 }
 
-void PrimeGunRemoveActiveCannonTextureFiles(int texture_index)
+void PrimedGunRemoveActiveCannonTextureFiles(int texture_index)
 {
-  QFile::remove(PrimeGunCannonActivePath(texture_index, QStringLiteral(".png")));
-  QFile::remove(PrimeGunCannonActivePath(texture_index, QStringLiteral(".dds")));
+  QFile::remove(PrimedGunCannonActivePath(texture_index, QStringLiteral(".png")));
+  QFile::remove(PrimedGunCannonActivePath(texture_index, QStringLiteral(".dds")));
 }
 
-QString PrimeGunCannonSlotSetting(int slot, int texture_index)
+QString PrimedGunCannonSlotSetting(int slot, int texture_index)
 {
   return QStringLiteral("primegun/cannon_texture_slot_%1_target_%2").arg(slot).arg(texture_index);
 }
 
-QString PrimeGunResolveCannonTextureSource(int slot, int texture_index, const QString& stored_source)
+QString PrimedGunResolveCannonTextureSource(int slot, int texture_index, const QString& stored_source)
 {
   const QString normalized_stored_source = QDir::fromNativeSeparators(stored_source);
   const bool uses_legacy_primegun_folder =
-      normalized_stored_source.contains(QStringLiteral("/Load/PrimeGun/"));
+      normalized_stored_source.contains(QStringLiteral("/Load/PrimedGun/"));
 
   if (!stored_source.isEmpty() && !uses_legacy_primegun_folder &&
       QFileInfo(stored_source).isFile())
     return stored_source;
 
   const QString dds_source =
-      PrimeGunCannonSourcePath(slot, texture_index, QStringLiteral(".dds"));
+      PrimedGunCannonSourcePath(slot, texture_index, QStringLiteral(".dds"));
   if (QFileInfo(dds_source).isFile())
     return dds_source;
 
   const QString png_source =
-      PrimeGunCannonSourcePath(slot, texture_index, QStringLiteral(".png"));
+      PrimedGunCannonSourcePath(slot, texture_index, QStringLiteral(".png"));
   if (QFileInfo(png_source).isFile())
     return png_source;
 
   return stored_source;
 }
 
-QString PrimeGunCannonSlotName(int slot)
+QString PrimedGunCannonSlotName(int slot)
 {
   if (slot == 0)
     return QObject::tr("Default");
@@ -319,9 +319,9 @@ QString PrimeGunCannonSlotName(int slot)
   return QObject::tr("Slot %1").arg(slot);
 }
 
-bool PrimeGunEnsureCannonPackRegistration()
+bool PrimedGunEnsureCannonPackRegistration()
 {
-  QDir pack_dir(PrimeGunCannonPackDir());
+  QDir pack_dir(PrimedGunCannonPackDir());
   if (!pack_dir.exists() && !pack_dir.mkpath(QStringLiteral(".")))
     return false;
 
@@ -340,9 +340,9 @@ bool PrimeGunEnsureCannonPackRegistration()
   return true;
 }
 
-bool PrimeGunEnsureRemoveShinePreset(QString* error)
+bool PrimedGunEnsureRemoveShinePreset(QString* error)
 {
-  const QString preset_path = PrimeGunCannonRemoveShinePresetPath();
+  const QString preset_path = PrimedGunCannonRemoveShinePresetPath();
   QFileInfo preset_info(preset_path);
   if (preset_info.exists() && preset_info.isFile())
     return true;
@@ -355,7 +355,7 @@ bool PrimeGunEnsureRemoveShinePreset(QString* error)
     return false;
   }
 
-  const QString source_path = PrimeGunCannonUserTexturePackSourcePath();
+  const QString source_path = PrimedGunCannonUserTexturePackSourcePath();
   if (!QFileInfo::exists(source_path))
   {
     if (error)
@@ -373,18 +373,18 @@ bool PrimeGunEnsureRemoveShinePreset(QString* error)
   return true;
 }
 
-bool PrimeGunBackupSlotShinePreset(int slot, QString* error)
+bool PrimedGunBackupSlotShinePreset(int slot, QString* error)
 {
-  const QString backup_path = PrimeGunCannonRestoreShinePresetPath(slot);
+  const QString backup_path = PrimedGunCannonRestoreShinePresetPath(slot);
   if (QFileInfo(backup_path).isFile())
     return true;
 
-  const QString source = PrimeGunResolveCannonTextureSource(
+  const QString source = PrimedGunResolveCannonTextureSource(
       slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX, QString());
   if (source.isEmpty())
     return true;
 
-  const QString remove_shine_path = QDir::cleanPath(PrimeGunCannonRemoveShinePresetPath());
+  const QString remove_shine_path = QDir::cleanPath(PrimedGunCannonRemoveShinePresetPath());
   if (QDir::cleanPath(source) == remove_shine_path)
     return true;
 
@@ -408,20 +408,20 @@ bool PrimeGunBackupSlotShinePreset(int slot, QString* error)
   return true;
 }
 
-void PrimeGunSetCannonPathLabel(QLabel* label, const QString& text)
+void PrimedGunSetCannonPathLabel(QLabel* label, const QString& text)
 {
   label->setText(text);
   label->setToolTip(text);
 }
 
-void PrimeGunTouchFile(const QString& path)
+void PrimedGunTouchFile(const QString& path)
 {
   QFile file(path);
   if (file.open(QIODevice::ReadWrite))
     file.setFileTime(QDateTime::currentDateTimeUtc(), QFileDevice::FileModificationTime);
 }
 
-QImage PrimeGunDecodeDxt1Preview(const QString& path)
+QImage PrimedGunDecodeDxt1Preview(const QString& path)
 {
   QFile file(path);
   if (!file.open(QIODevice::ReadOnly))
@@ -512,7 +512,7 @@ QImage PrimeGunDecodeDxt1Preview(const QString& path)
   return image;
 }
 
-QImage PrimeGunLoadCannonTexturePreview(const QString& path)
+QImage PrimedGunLoadCannonTexturePreview(const QString& path)
 {
   if (path.isEmpty())
     return {};
@@ -522,15 +522,15 @@ QImage PrimeGunLoadCannonTexturePreview(const QString& path)
     return image;
 
   if (QFileInfo(path).suffix().compare(QStringLiteral("dds"), Qt::CaseInsensitive) == 0)
-    return PrimeGunDecodeDxt1Preview(path);
+    return PrimedGunDecodeDxt1Preview(path);
 
   return {};
 }
 
-void PrimeGunSetCannonPreviewLabel(QLabel* label, const QString& path)
+void PrimedGunSetCannonPreviewLabel(QLabel* label, const QString& path)
 {
   label->setToolTip(path);
-  const QImage image = PrimeGunLoadCannonTexturePreview(path);
+  const QImage image = PrimedGunLoadCannonTexturePreview(path);
   if (image.isNull())
   {
     label->clear();
@@ -543,26 +543,26 @@ void PrimeGunSetCannonPreviewLabel(QLabel* label, const QString& path)
                                                     Qt::SmoothTransformation));
 }
 
-void PrimeGunClearActiveCannonTextures()
+void PrimedGunClearActiveCannonTextures()
 {
   for (const char* texture_name : PRIMEGUN_CANNON_TEXTURE_NAMES)
   {
-    const QString base = PrimeGunCannonPackDir() + QLatin1Char('/') + QString::fromLatin1(texture_name);
+    const QString base = PrimedGunCannonPackDir() + QLatin1Char('/') + QString::fromLatin1(texture_name);
     QFile::remove(base + QStringLiteral(".png"));
     QFile::remove(base + QStringLiteral(".dds"));
   }
 }
 
-bool PrimeGunApplyCannonTextureSlot(int slot, QString* error)
+bool PrimedGunApplyCannonTextureSlot(int slot, QString* error)
 {
-  if (!PrimeGunEnsureCannonPackRegistration())
+  if (!PrimedGunEnsureCannonPackRegistration())
   {
     if (error)
       *error = QObject::tr("Could not create the PrimedGun cannon texture pack folder.");
     return false;
   }
 
-  PrimeGunClearActiveCannonTextures();
+  PrimedGunClearActiveCannonTextures();
   if (slot == 0)
     return true;
 
@@ -570,9 +570,9 @@ bool PrimeGunApplyCannonTextureSlot(int slot, QString* error)
   for (int texture_index = 0; texture_index < static_cast<int>(PRIMEGUN_CANNON_TEXTURE_NAMES.size());
        ++texture_index)
   {
-    const QString setting_key = PrimeGunCannonSlotSetting(slot, texture_index);
+    const QString setting_key = PrimedGunCannonSlotSetting(slot, texture_index);
     const QString stored_source = settings.value(setting_key).toString();
-    const QString source = PrimeGunResolveCannonTextureSource(slot, texture_index, stored_source);
+    const QString source = PrimedGunResolveCannonTextureSource(slot, texture_index, stored_source);
     if (source.isEmpty())
       continue;
 
@@ -595,7 +595,7 @@ bool PrimeGunApplyCannonTextureSlot(int slot, QString* error)
       return false;
     }
 
-    const QString destination = PrimeGunCannonActivePath(texture_index, QLatin1Char('.') + suffix);
+    const QString destination = PrimedGunCannonActivePath(texture_index, QLatin1Char('.') + suffix);
     QFile::remove(destination);
     if (!QFile::copy(source, destination))
     {
@@ -603,13 +603,13 @@ bool PrimeGunApplyCannonTextureSlot(int slot, QString* error)
         *error = QObject::tr("Could not copy cannon texture to:\n%1").arg(destination);
       return false;
     }
-    PrimeGunTouchFile(destination);
+    PrimedGunTouchFile(destination);
   }
 
   return true;
 }
 
-void PrimeGunRefreshCustomTextureConfig(bool use_active_overrides)
+void PrimedGunRefreshCustomTextureConfig(bool use_active_overrides)
 {
   g_Config.Refresh();
   UpdateActiveConfig();
@@ -620,8 +620,8 @@ void PrimeGunRefreshCustomTextureConfig(bool use_active_overrides)
        ++texture_index)
   {
     const char* texture_name = PRIMEGUN_CANNON_TEXTURE_NAMES[texture_index];
-    const QString active_dds = PrimeGunCannonActivePath(texture_index, QStringLiteral(".dds"));
-    const QString active_png = PrimeGunCannonActivePath(texture_index, QStringLiteral(".png"));
+    const QString active_dds = PrimedGunCannonActivePath(texture_index, QStringLiteral(".dds"));
+    const QString active_png = PrimedGunCannonActivePath(texture_index, QStringLiteral(".png"));
     const QString active_path =
         QFileInfo(active_dds).isFile() ? active_dds :
         QFileInfo(active_png).isFile() ? active_png :
@@ -718,10 +718,10 @@ static std::vector<std::string> StringListToStdVector(QStringList list)
 
 static constexpr const char* SELECTED_METROID_GAME_SETTING = "mainwindow/selected_metroid_prime_path";
 
-class PrimeGunScaledImageLabel final : public QLabel
+class PrimedGunScaledImageLabel final : public QLabel
 {
 public:
-  explicit PrimeGunScaledImageLabel(QWidget* parent = nullptr) : QLabel(parent)
+  explicit PrimedGunScaledImageLabel(QWidget* parent = nullptr) : QLabel(parent)
   {
     setAlignment(Qt::AlignCenter);
     setMinimumSize(240, 160);
@@ -1328,7 +1328,7 @@ void MainWindow::ConnectStack()
   options_button->setStyleSheet(game_button_style);
   QSettings& settings = Settings::GetQSettings();
   const auto load_primegun_runtime_settings = [&settings] {
-    PrimeGun::RuntimeSettings runtime = PrimeGun::GetRuntimeSettings();
+    PrimedGun::RuntimeSettings runtime = PrimedGun::GetRuntimeSettings();
     runtime.enabled = settings.value(QStringLiteral("primegun/enabled"), runtime.enabled).toBool();
     runtime.builtin_patches_enabled =
         settings.value(QStringLiteral("primegun/builtin_patches_enabled"),
@@ -1451,9 +1451,9 @@ void MainWindow::ConnectStack()
         settings.value(QStringLiteral("primegun/directional_movement_air_accel"),
                        runtime.directional_movement_air_accel)
             .toFloat();
-    PrimeGun::SetRuntimeSettings(runtime);
+    PrimedGun::SetRuntimeSettings(runtime);
   };
-  const auto save_primegun_runtime_settings = [&settings](const PrimeGun::RuntimeSettings& runtime) {
+  const auto save_primegun_runtime_settings = [&settings](const PrimedGun::RuntimeSettings& runtime) {
     settings.setValue(QStringLiteral("primegun/enabled"), runtime.enabled);
     settings.setValue(QStringLiteral("primegun/builtin_patches_enabled"),
                       runtime.builtin_patches_enabled);
@@ -1511,15 +1511,15 @@ void MainWindow::ConnectStack()
   load_primegun_runtime_settings();
   auto* primegun_vr_save_timer = new QTimer(this);
   connect(primegun_vr_save_timer, &QTimer::timeout, this, [save_primegun_runtime_settings] {
-    if (!PrimeGun::ConsumeVrSettingsSaveRequest())
+    if (!PrimedGun::ConsumeVrSettingsSaveRequest())
       return;
 
-    save_primegun_runtime_settings(PrimeGun::GetRuntimeSettings());
-    PrimeGun::MarkVrSettingsSaved();
+    save_primegun_runtime_settings(PrimedGun::GetRuntimeSettings());
+    PrimedGun::MarkVrSettingsSaved();
   });
   primegun_vr_save_timer->start(250);
   auto* revision_warning = new QLabel(tr("Wrong revision"), game_tab);
-  revision_warning->setObjectName(QStringLiteral("PrimeGunBad"));
+  revision_warning->setObjectName(QStringLiteral("PrimedGunBad"));
   revision_warning->setVisible(false);
 
   const auto update_selected_game = [this, selected_game, play_button, revision_warning,
@@ -1569,17 +1569,17 @@ void MainWindow::ConnectStack()
   game_layout->setSpacing(8);
   game_tab->setStyleSheet(QStringLiteral(R"(
     QWidget { background: #101215; color: #edf0f4; font-family: Consolas, monospace; font-size: 12px; }
-    QFrame#PrimeGunPanel, QTabWidget::pane { background: #121519; border: 1px solid #353a43; border-radius: 5px; }
-    QLabel#PrimeGunTitle, QLabel#PrimeGunSection { color: #f0a12a; }
-    QLabel#PrimeGunMuted { color: #858b94; }
-    QLabel#PrimeGunBad { color: #ff5b45; }
-    QLabel#PrimeGunGood { color: #38d86f; }
+    QFrame#PrimedGunPanel, QTabWidget::pane { background: #121519; border: 1px solid #353a43; border-radius: 5px; }
+    QLabel#PrimedGunTitle, QLabel#PrimedGunSection { color: #f0a12a; }
+    QLabel#PrimedGunMuted { color: #858b94; }
+    QLabel#PrimedGunBad { color: #ff5b45; }
+    QLabel#PrimedGunGood { color: #38d86f; }
     QPushButton { background: #242a33; border: 1px solid #242a33; border-radius: 4px; color: #edf0f4; padding: 5px 10px; }
     QPushButton:hover { background: #2d3440; border-color: #3b4553; }
     QPushButton:pressed { background: #303844; border-color: #c2802e; color: #f0a12a; }
-    QPushButton#PrimeGunStart { background: #84241e; border-color: #84241e; min-height: 24px; }
-    QPushButton#PrimeGunStatusPill { background: #611c18; border: 1px solid #b13a2e; border-radius: 5px; text-align: left; min-width: 96px; }
-    QPushButton#PrimeGunStatusPill[ok="true"] { background: #154823; border-color: #2f9c54; }
+    QPushButton#PrimedGunStart { background: #84241e; border-color: #84241e; min-height: 24px; }
+    QPushButton#PrimedGunStatusPill { background: #611c18; border: 1px solid #b13a2e; border-radius: 5px; text-align: left; min-width: 96px; }
+    QPushButton#PrimedGunStatusPill[ok="true"] { background: #154823; border-color: #2f9c54; }
     QTabBar::tab { background: #20262d; color: #edf0f4; padding: 5px 12px; border-top-left-radius: 4px; border-top-right-radius: 4px; margin-right: 2px; }
     QTabBar::tab:selected { background: #34404b; }
     QTabBar::tab:hover { background: #2b333d; }
@@ -1594,26 +1594,26 @@ void MainWindow::ConnectStack()
   )"));
 
   auto* header = new QFrame(game_tab);
-  header->setObjectName(QStringLiteral("PrimeGunPanel"));
+  header->setObjectName(QStringLiteral("PrimedGunPanel"));
   auto* header_layout = new QGridLayout(header);
   header_layout->setContentsMargins(14, 12, 14, 12);
   auto* brand = new QLabel(tr("PrimedGun"), header);
-  brand->setObjectName(QStringLiteral("PrimeGunTitle"));
+  brand->setObjectName(QStringLiteral("PrimedGunTitle"));
   auto* version = new QLabel(tr("v0.9.9d"), header);
-  version->setObjectName(QStringLiteral("PrimeGunMuted"));
+  version->setObjectName(QStringLiteral("PrimedGunMuted"));
   auto* status_tracking = new QLabel(tr("Waiting for DolphinXR OpenXR"), header);
-  status_tracking->setObjectName(QStringLiteral("PrimeGunBad"));
+  status_tracking->setObjectName(QStringLiteral("PrimedGunBad"));
   auto* status_hook = new QLabel(tr("Hook: OpenXR seen, waiting for bridge"), header);
-  status_hook->setObjectName(QStringLiteral("PrimeGunBad"));
+  status_hook->setObjectName(QStringLiteral("PrimedGunBad"));
   auto* status_game = new QLabel(tr("Load game: not ready, try reconnect"), header);
-  status_game->setObjectName(QStringLiteral("PrimeGunBad"));
+  status_game->setObjectName(QStringLiteral("PrimedGunBad"));
   auto* start_button = new QPushButton(header);
-  start_button->setObjectName(QStringLiteral("PrimeGunStart"));
+  start_button->setObjectName(QStringLiteral("PrimedGunStart"));
   auto* reconnect_dolphin = new QPushButton(tr("Reconnect Dolphin"), header);
   auto* reconnect_hook = new QPushButton(tr("Reconnect Hook"), header);
   const auto make_status_pill = [header](const QString& text) {
     auto* pill = new QPushButton(text, header);
-    pill->setObjectName(QStringLiteral("PrimeGunStatusPill"));
+    pill->setObjectName(QStringLiteral("PrimedGunStatusPill"));
     pill->setEnabled(false);
     return pill;
   };
@@ -1631,22 +1631,22 @@ void MainWindow::ConnectStack()
   header_layout->setColumnStretch(3, 1);
   header->hide();
 
-  auto runtime = std::make_shared<PrimeGun::RuntimeSettings>(PrimeGun::GetRuntimeSettings());
+  auto runtime = std::make_shared<PrimedGun::RuntimeSettings>(PrimedGun::GetRuntimeSettings());
   const auto refresh_start_button = [start_button, runtime] {
     start_button->setText(runtime->enabled ? QObject::tr("Active - Stop") :
                                             QObject::tr("Inactive - Start"));
     start_button->setStyleSheet(runtime->enabled ?
-        QStringLiteral("QPushButton#PrimeGunStart { background: #20783b; border-color: #20783b; }") :
+        QStringLiteral("QPushButton#PrimedGunStart { background: #20783b; border-color: #20783b; }") :
         QStringLiteral(""));
   };
   refresh_start_button();
   connect(start_button, &QPushButton::clicked, this, [runtime, refresh_start_button] {
     runtime->enabled = !runtime->enabled;
-    PrimeGun::SetRuntimeSettings(*runtime);
+    PrimedGun::SetRuntimeSettings(*runtime);
     refresh_start_button();
   });
   connect(reconnect_dolphin, &QPushButton::clicked, this, [this] { RefreshGameList(); });
-  connect(reconnect_hook, &QPushButton::clicked, this, [] { PrimeGun::ResetNativeRuntime(); });
+  connect(reconnect_hook, &QPushButton::clicked, this, [] { PrimedGun::ResetNativeRuntime(); });
 
   auto* tabs = new QTabWidget(game_tab);
   tabs->setDocumentMode(true);
@@ -1669,7 +1669,7 @@ void MainWindow::ConnectStack()
   };
   const auto section_label = [](const QString& text, QWidget* parent) {
     auto* label = new QLabel(text, parent);
-    label->setObjectName(QStringLiteral("PrimeGunSection"));
+    label->setObjectName(QStringLiteral("PrimedGunSection"));
     return label;
   };
   const auto separator = [](QVBoxLayout* parent_layout) {
@@ -1678,7 +1678,7 @@ void MainWindow::ConnectStack()
     line->setStyleSheet(QStringLiteral("color: #444955;"));
     parent_layout->addWidget(line);
   };
-  const auto apply_runtime = [runtime] { PrimeGun::SetRuntimeSettings(*runtime); };
+  const auto apply_runtime = [runtime] { PrimedGun::SetRuntimeSettings(*runtime); };
   const QString assets_dir = QApplication::applicationDirPath() + QStringLiteral("/assets/");
 
   auto* setup_layout = make_scroll_tab(tr("Setup"));
@@ -1688,7 +1688,7 @@ void MainWindow::ConnectStack()
   setup_layout->addWidget(selected_game);
   auto* select_game_row = new QHBoxLayout;
   auto* select_game_note = new QLabel(tr("Select Metroid Prime NTSC Revision 0."), game_tab);
-  select_game_note->setObjectName(QStringLiteral("PrimeGunMuted"));
+  select_game_note->setObjectName(QStringLiteral("PrimedGunMuted"));
   select_game_row->addWidget(select_game_note);
   select_game_row->addStretch();
   select_game_row->addWidget(revision_warning);
@@ -1711,7 +1711,7 @@ void MainWindow::ConnectStack()
                               "  * Click the left thumbstick to open or close the in-headset settings menu.\n"
                               "  * Try to stay in the centre of your play space and face forward for the best interaction.\n"
                               "  * Use Save Settings after changing PrimedGun options to apply them."), game_tab);
-  notes->setObjectName(QStringLiteral("PrimeGunMuted"));
+  notes->setObjectName(QStringLiteral("PrimedGunMuted"));
   setup_layout->addWidget(notes);
   setup_layout->addStretch();
   auto* setup_art = new QLabel(game_tab);
@@ -1936,7 +1936,7 @@ void MainWindow::ConnectStack()
          "cannon textures."),
       game_tab);
   cannon_note->setWordWrap(true);
-  cannon_note->setObjectName(QStringLiteral("PrimeGunMuted"));
+  cannon_note->setObjectName(QStringLiteral("PrimedGunMuted"));
   cannon_layout->addWidget(cannon_note);
   separator(cannon_layout);
 
@@ -1952,7 +1952,7 @@ void MainWindow::ConnectStack()
   cannon_slot_row->setSpacing(8);
   for (int slot = 0; slot <= 5; ++slot)
   {
-    auto* radio = new QRadioButton(PrimeGunCannonSlotName(slot), game_tab);
+    auto* radio = new QRadioButton(PrimedGunCannonSlotName(slot), game_tab);
     radio->setChecked(slot == active_cannon_slot);
     cannon_slot_group->addButton(radio, slot);
     cannon_slot_row->addWidget(radio);
@@ -1962,7 +1962,7 @@ void MainWindow::ConnectStack()
 
   auto* cannon_status = new QLabel(game_tab);
   cannon_status->setWordWrap(true);
-  cannon_status->setObjectName(QStringLiteral("PrimeGunMuted"));
+  cannon_status->setObjectName(QStringLiteral("PrimedGunMuted"));
   cannon_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   cannon_status->setMinimumWidth(220);
   cannon_layout->addWidget(cannon_status);
@@ -1981,7 +1981,7 @@ void MainWindow::ConnectStack()
         cannon_texture_box);
     auto* path_label = new QLabel(cannon_texture_box);
     path_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    path_label->setObjectName(QStringLiteral("PrimeGunMuted"));
+    path_label->setObjectName(QStringLiteral("PrimedGunMuted"));
     path_label->setWordWrap(true);
     path_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     path_label->setMinimumWidth(220);
@@ -1989,7 +1989,7 @@ void MainWindow::ConnectStack()
     preview_label->setFixedSize(72, 72);
     preview_label->setAlignment(Qt::AlignCenter);
     preview_label->setFrameShape(QFrame::StyledPanel);
-    preview_label->setObjectName(QStringLiteral("PrimeGunMuted"));
+    preview_label->setObjectName(QStringLiteral("PrimedGunMuted"));
     auto* import_button = new QPushButton(tr("Import..."), cannon_texture_box);
     cannon_texture_grid->addWidget(target_label, texture_index, 0);
     cannon_texture_grid->addWidget(preview_label, texture_index, 1);
@@ -2010,12 +2010,12 @@ void MainWindow::ConnectStack()
         return;
       }
 
-      QDir custom_dir(PrimeGunCannonCustomDir());
+      QDir custom_dir(PrimedGunCannonCustomDir());
       if (!custom_dir.exists())
         custom_dir.mkpath(QStringLiteral("."));
 
       const QString source = DolphinFileDialog::getOpenFileName(
-          this, tr("Select Cannon Texture"), PrimeGunCannonCustomDir(),
+          this, tr("Select Cannon Texture"), PrimedGunCannonCustomDir(),
           tr("Texture Images (*.png *.dds);;All Files (*)"));
       if (source.isEmpty())
         return;
@@ -2029,7 +2029,7 @@ void MainWindow::ConnectStack()
         return;
       }
 
-      QDir slot_dir(PrimeGunCannonSlotDir(slot));
+      QDir slot_dir(PrimedGunCannonSlotDir(slot));
       if (!slot_dir.exists() && !slot_dir.mkpath(QStringLiteral(".")))
       {
         ModalMessageBox::critical(this, tr("Cannon Textures"),
@@ -2038,12 +2038,12 @@ void MainWindow::ConnectStack()
       }
 
       const QString destination =
-          PrimeGunCannonSourcePath(slot, texture_index, QLatin1Char('.') + suffix);
+          PrimedGunCannonSourcePath(slot, texture_index, QLatin1Char('.') + suffix);
       const bool already_in_slot = QDir::cleanPath(QFileInfo(source).absoluteFilePath()) ==
                                    QDir::cleanPath(QFileInfo(destination).absoluteFilePath());
       if (!already_in_slot)
       {
-        PrimeGunRemoveCannonSlotTextureFiles(slot, texture_index);
+        PrimedGunRemoveCannonSlotTextureFiles(slot, texture_index);
       }
       if (!already_in_slot && !QFile::copy(source, destination))
       {
@@ -2053,12 +2053,12 @@ void MainWindow::ConnectStack()
       }
 
       QSettings& settings = Settings::GetQSettings();
-      settings.setValue(PrimeGunCannonSlotSetting(slot, texture_index), destination);
-      PrimeGunSetCannonPathLabel(cannon_texture_path_labels[texture_index],
+      settings.setValue(PrimedGunCannonSlotSetting(slot, texture_index), destination);
+      PrimedGunSetCannonPathLabel(cannon_texture_path_labels[texture_index],
                                  QDir::toNativeSeparators(destination));
-      PrimeGunSetCannonPreviewLabel(cannon_texture_preview_labels[texture_index], destination);
+      PrimedGunSetCannonPreviewLabel(cannon_texture_preview_labels[texture_index], destination);
       cannon_status->setText(tr("Imported texture for %1. Click Apply to use it.")
-                                 .arg(PrimeGunCannonSlotName(slot)));
+                                 .arg(PrimedGunCannonSlotName(slot)));
     });
   }
   cannon_layout->addWidget(cannon_texture_box);
@@ -2075,25 +2075,25 @@ void MainWindow::ConnectStack()
       QLabel* label = cannon_texture_path_labels[texture_index];
       if (slot <= 0)
       {
-        PrimeGunSetCannonPathLabel(label, QObject::tr("Default: no PrimedGun override"));
-        PrimeGunSetCannonPreviewLabel(cannon_texture_preview_labels[texture_index],
-                                      PrimeGunCannonDefaultPreviewPath(texture_index));
+        PrimedGunSetCannonPathLabel(label, QObject::tr("Default: no PrimedGun override"));
+        PrimedGunSetCannonPreviewLabel(cannon_texture_preview_labels[texture_index],
+                                      PrimedGunCannonDefaultPreviewPath(texture_index));
         continue;
       }
 
-      const QString setting_key = PrimeGunCannonSlotSetting(slot, texture_index);
+      const QString setting_key = PrimedGunCannonSlotSetting(slot, texture_index);
       const QString stored_path = settings.value(setting_key).toString();
-      const QString path = PrimeGunResolveCannonTextureSource(slot, texture_index, stored_path);
+      const QString path = PrimedGunResolveCannonTextureSource(slot, texture_index, stored_path);
       if (path != stored_path)
         settings.setValue(setting_key, path);
-      PrimeGunSetCannonPathLabel(label, path.isEmpty() ? QObject::tr("No texture imported") :
+      PrimedGunSetCannonPathLabel(label, path.isEmpty() ? QObject::tr("No texture imported") :
                                                    QDir::toNativeSeparators(path));
-      PrimeGunSetCannonPreviewLabel(cannon_texture_preview_labels[texture_index], path);
+      PrimedGunSetCannonPreviewLabel(cannon_texture_preview_labels[texture_index], path);
     }
 
     cannon_status->setText(slot <= 0 ?
                                QObject::tr("Default is active. PrimedGun cannon overrides are clear.") :
-                               QObject::tr("%1 is active.").arg(PrimeGunCannonSlotName(slot)));
+                               QObject::tr("%1 is active.").arg(PrimedGunCannonSlotName(slot)));
   };
 
   auto apply_cannon_slot = [this, cannon_slot_group, refresh_cannon_texture_ui, cannon_status] {
@@ -2101,19 +2101,19 @@ void MainWindow::ConnectStack()
     Settings::GetQSettings().setValue(QStringLiteral("primegun/cannon_texture_slot"), slot);
 
     QString error;
-    if (!PrimeGunApplyCannonTextureSlot(slot, &error))
+    if (!PrimedGunApplyCannonTextureSlot(slot, &error))
     {
       ModalMessageBox::critical(this, tr("Cannon Textures"), error);
       return;
     }
 
     Config::SetBaseOrCurrent(Config::GFX_HIRES_TEXTURES, true);
-    PrimeGunRefreshCustomTextureConfig(slot > 0);
+    PrimedGunRefreshCustomTextureConfig(slot > 0);
     refresh_cannon_texture_ui();
     cannon_status->setText(slot <= 0 ?
                                tr("Default applied. Installed HD texture packs can supply the cannon.") :
                                tr("Applied %1. Custom textures are enabled.")
-                                   .arg(PrimeGunCannonSlotName(slot)));
+                                   .arg(PrimedGunCannonSlotName(slot)));
   };
 
   connect(cannon_slot_group, &QButtonGroup::idClicked, this,
@@ -2123,7 +2123,7 @@ void MainWindow::ConnectStack()
     cannon_status->setText(slot <= 0 ?
                                QObject::tr("Default selected. Click Apply to use it.") :
                                QObject::tr("%1 selected. Click Apply to use it.")
-                                   .arg(PrimeGunCannonSlotName(slot)));
+                                   .arg(PrimedGunCannonSlotName(slot)));
   });
 
   auto* cannon_actions = new QHBoxLayout;
@@ -2152,18 +2152,18 @@ void MainWindow::ConnectStack()
     }
 
     QString error;
-    if (!PrimeGunEnsureRemoveShinePreset(&error))
+    if (!PrimedGunEnsureRemoveShinePreset(&error))
     {
       ModalMessageBox::critical(this, tr("Cannon Textures"), error);
       return;
     }
-    if (!PrimeGunBackupSlotShinePreset(slot, &error))
+    if (!PrimedGunBackupSlotShinePreset(slot, &error))
     {
       ModalMessageBox::critical(this, tr("Cannon Textures"), error);
       return;
     }
 
-    QDir slot_dir(PrimeGunCannonSlotDir(slot));
+    QDir slot_dir(PrimedGunCannonSlotDir(slot));
     if (!slot_dir.exists() && !slot_dir.mkpath(QStringLiteral(".")))
     {
       ModalMessageBox::critical(this, tr("Cannon Textures"),
@@ -2171,10 +2171,10 @@ void MainWindow::ConnectStack()
       return;
     }
 
-    const QString source = PrimeGunCannonRemoveShinePresetPath();
-    const QString destination = PrimeGunCannonSourcePath(
+    const QString source = PrimedGunCannonRemoveShinePresetPath();
+    const QString destination = PrimedGunCannonSourcePath(
         slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX, QStringLiteral(".dds"));
-    PrimeGunRemoveCannonSlotTextureFiles(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX);
+    PrimedGunRemoveCannonSlotTextureFiles(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX);
     if (!QFile::copy(source, destination))
     {
       ModalMessageBox::critical(this, tr("Cannon Textures"),
@@ -2183,25 +2183,25 @@ void MainWindow::ConnectStack()
     }
 
     QSettings& settings = Settings::GetQSettings();
-    settings.setValue(PrimeGunCannonSlotSetting(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX),
+    settings.setValue(PrimedGunCannonSlotSetting(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX),
                       destination);
     settings.setValue(QStringLiteral("primegun/cannon_texture_slot"), slot);
 
-    if (!PrimeGunApplyCannonTextureSlot(slot, &error))
+    if (!PrimedGunApplyCannonTextureSlot(slot, &error))
     {
       ModalMessageBox::critical(this, tr("Cannon Textures"), error);
       return;
     }
 
     Config::SetBaseOrCurrent(Config::GFX_HIRES_TEXTURES, true);
-    PrimeGunRefreshCustomTextureConfig(true);
+    PrimedGunRefreshCustomTextureConfig(true);
     refresh_cannon_texture_ui();
-    PrimeGunSetCannonPathLabel(cannon_texture_path_labels[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX],
+    PrimedGunSetCannonPathLabel(cannon_texture_path_labels[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX],
                                QDir::toNativeSeparators(destination));
-    PrimeGunSetCannonPreviewLabel(
+    PrimedGunSetCannonPreviewLabel(
         cannon_texture_preview_labels[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX], destination);
     cannon_status->setText(tr("Applied %1 with Remove Shine. Custom textures are enabled.")
-                               .arg(PrimeGunCannonSlotName(slot)));
+                               .arg(PrimedGunCannonSlotName(slot)));
   });
   connect(restore_cannon_shine_button, &QPushButton::clicked, this,
           [this, cannon_slot_group, cannon_texture_path_labels, cannon_status,
@@ -2214,7 +2214,7 @@ void MainWindow::ConnectStack()
       return;
     }
 
-    const QString source = PrimeGunCannonRestoreShinePresetPath(slot);
+    const QString source = PrimedGunCannonRestoreShinePresetPath(slot);
     if (!QFileInfo(source).isFile())
     {
       ModalMessageBox::critical(this, tr("Cannon Textures"),
@@ -2222,7 +2222,7 @@ void MainWindow::ConnectStack()
       return;
     }
 
-    QDir slot_dir(PrimeGunCannonSlotDir(slot));
+    QDir slot_dir(PrimedGunCannonSlotDir(slot));
     if (!slot_dir.exists() && !slot_dir.mkpath(QStringLiteral(".")))
     {
       ModalMessageBox::critical(this, tr("Cannon Textures"),
@@ -2232,9 +2232,9 @@ void MainWindow::ConnectStack()
 
     const QFileInfo source_info(source);
     const QString suffix = source_info.suffix().toLower();
-    const QString destination = PrimeGunCannonSourcePath(
+    const QString destination = PrimedGunCannonSourcePath(
         slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX, QLatin1Char('.') + suffix);
-    PrimeGunRemoveCannonSlotTextureFiles(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX);
+    PrimedGunRemoveCannonSlotTextureFiles(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX);
     if (!QFile::copy(source, destination))
     {
       ModalMessageBox::critical(this, tr("Cannon Textures"),
@@ -2243,36 +2243,36 @@ void MainWindow::ConnectStack()
     }
 
     QSettings& settings = Settings::GetQSettings();
-    settings.setValue(PrimeGunCannonSlotSetting(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX),
+    settings.setValue(PrimedGunCannonSlotSetting(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX),
                       destination);
     settings.setValue(QStringLiteral("primegun/cannon_texture_slot"), slot);
 
     QString error;
-    if (!PrimeGunApplyCannonTextureSlot(slot, &error))
+    if (!PrimedGunApplyCannonTextureSlot(slot, &error))
     {
       ModalMessageBox::critical(this, tr("Cannon Textures"), error);
       return;
     }
 
     Config::SetBaseOrCurrent(Config::GFX_HIRES_TEXTURES, true);
-    PrimeGunRefreshCustomTextureConfig(true);
+    PrimedGunRefreshCustomTextureConfig(true);
     refresh_cannon_texture_ui();
-    PrimeGunSetCannonPathLabel(cannon_texture_path_labels[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX],
+    PrimedGunSetCannonPathLabel(cannon_texture_path_labels[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX],
                                QDir::toNativeSeparators(destination));
-    PrimeGunSetCannonPreviewLabel(
+    PrimedGunSetCannonPreviewLabel(
         cannon_texture_preview_labels[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX], destination);
     cannon_status->setText(tr("Restored shine for %1. Cannon base textures are unchanged.")
-                               .arg(PrimeGunCannonSlotName(slot)));
+                               .arg(PrimedGunCannonSlotName(slot)));
   });
   connect(open_cannon_library_button, &QPushButton::clicked, this, [] {
-    QDir dir(PrimeGunCannonLibraryDir());
+    QDir dir(PrimedGunCannonLibraryDir());
     if (!dir.exists())
       dir.mkpath(QStringLiteral("."));
     QDesktopServices::openUrl(QUrl::fromLocalFile(dir.absolutePath()));
   });
   connect(open_cannon_pack_button, &QPushButton::clicked, this, [] {
-    PrimeGunEnsureCannonPackRegistration();
-    QDesktopServices::openUrl(QUrl::fromLocalFile(PrimeGunCannonPackDir()));
+    PrimedGunEnsureCannonPackRegistration();
+    QDesktopServices::openUrl(QUrl::fromLocalFile(PrimedGunCannonPackDir()));
   });
   refresh_cannon_texture_ui();
   cannon_layout->addStretch();
@@ -2282,7 +2282,7 @@ void MainWindow::ConnectStack()
   layout_tab_layout->setContentsMargins(14, 10, 14, 10);
   auto* layout_title = section_label(tr("Controller Layout"), layout_tab);
   layout_tab_layout->addWidget(layout_title);
-  auto* controller_map = new PrimeGunScaledImageLabel(layout_tab);
+  auto* controller_map = new PrimedGunScaledImageLabel(layout_tab);
   controller_map->SetSourcePixmap(QPixmap(assets_dir + QStringLiteral("controller layout.png")));
   layout_tab_layout->addWidget(controller_map, 1);
   tabs->addTab(layout_tab, tr("Layout"));
@@ -2292,7 +2292,7 @@ void MainWindow::ConnectStack()
   auto* dolphin_note = new QLabel(
       tr("Open Dolphin's native configuration windows when you need emulator-specific settings."),
       game_tab);
-  dolphin_note->setObjectName(QStringLiteral("PrimeGunMuted"));
+  dolphin_note->setObjectName(QStringLiteral("PrimedGunMuted"));
   dolphin_layout->addWidget(dolphin_note);
   auto* open_general = new QPushButton(tr("Dolphin Settings"), game_tab);
   auto* open_hotkeys = new QPushButton(tr("Hotkey Settings"), game_tab);
@@ -2319,7 +2319,7 @@ void MainWindow::ConnectStack()
   auto* reset_all = new QPushButton(tr("Reset All"), game_tab);
   auto* save_settings_button = new QPushButton(tr("Save Settings"), game_tab);
   auto* credit = new QLabel(tr("By Nobbie   v0.9.9d"), game_tab);
-  credit->setObjectName(QStringLiteral("PrimeGunMuted"));
+  credit->setObjectName(QStringLiteral("PrimedGunMuted"));
   footer->addWidget(reset_all);
   footer->addWidget(save_settings_button);
   footer->addStretch();
@@ -2507,7 +2507,7 @@ void MainWindow::ConnectStack()
 
   auto* runtime_ui_sync_timer = new QTimer(this);
   connect(runtime_ui_sync_timer, &QTimer::timeout, this, [runtime, refresh_visible_settings] {
-    *runtime = PrimeGun::GetRuntimeSettings();
+    *runtime = PrimedGun::GetRuntimeSettings();
     refresh_visible_settings();
   });
   runtime_ui_sync_timer->start(100);
@@ -3468,7 +3468,7 @@ bool MainWindow::eventFilter(QObject* object, QEvent* event)
     const QKeyEvent* key_event = static_cast<const QKeyEvent*>(event);
     if (key_event->key() == Qt::Key_F7 && !key_event->isAutoRepeat())
     {
-      PrimeGun::PPCTrace::Toggle();
+      PrimedGun::PPCTrace::Toggle();
       return true;
     }
   }

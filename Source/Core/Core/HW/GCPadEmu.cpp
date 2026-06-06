@@ -16,7 +16,7 @@
 
 #include "Core/HW/GCPad.h"
 #ifdef ENABLE_VR
-#include "Core/PrimeGun/NativeRuntime.h"
+#include "Core/PrimedGun/NativeRuntime.h"
 #endif
 
 #include "InputCommon/ControllerEmu/ControlGroup/AnalogStick.h"
@@ -46,14 +46,14 @@ static const u16 dpad_bitmasks[] = {PAD_BUTTON_UP, PAD_BUTTON_DOWN, PAD_BUTTON_L
 static const u8 triforce_bitmask[] = {SWITCH_TEST, SWITCH_SERVICE, SWITCH_COIN};
 
 #ifdef ENABLE_VR
-static u8 PrimeGunAxisToPadByte(float value, u8 center)
+static u8 PrimedGunAxisToPadByte(float value, u8 center)
 {
   value = std::clamp(value, -1.0f, 1.0f);
   return static_cast<u8>(std::clamp<int>(static_cast<int>(center + std::lround(value * 127.0f)),
                                          0, 255));
 }
 
-struct PrimeGunQuat
+struct PrimedGunQuat
 {
   float x = 0.0f;
   float y = 0.0f;
@@ -61,7 +61,7 @@ struct PrimeGunQuat
   float w = 1.0f;
 };
 
-static PrimeGunQuat PrimeGunNormalizeQuat(PrimeGunQuat q)
+static PrimedGunQuat PrimedGunNormalizeQuat(PrimedGunQuat q)
 {
   const float len = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
   if (len <= 0.00001f || !std::isfinite(len))
@@ -75,18 +75,18 @@ static PrimeGunQuat PrimeGunNormalizeQuat(PrimeGunQuat q)
   return q;
 }
 
-static PrimeGunQuat PrimeGunPoseQuat(const Common::VR::OpenXRPoseState& pose)
+static PrimedGunQuat PrimedGunPoseQuat(const Common::VR::OpenXRPoseState& pose)
 {
-  return PrimeGunNormalizeQuat(
+  return PrimedGunNormalizeQuat(
       {pose.orientation[0], pose.orientation[1], pose.orientation[2], pose.orientation[3]});
 }
 
-static PrimeGunQuat PrimeGunQuatFromBasis(float right_x, float right_y, float right_z, float up_x,
+static PrimedGunQuat PrimedGunQuatFromBasis(float right_x, float right_y, float right_z, float up_x,
                                           float up_y, float up_z, float back_x, float back_y,
                                           float back_z)
 {
   const float trace = right_x + up_y + back_z;
-  PrimeGunQuat q{};
+  PrimedGunQuat q{};
   if (trace > 0.0f)
   {
     const float s = std::sqrt(trace + 1.0f) * 2.0f;
@@ -119,18 +119,18 @@ static PrimeGunQuat PrimeGunQuatFromBasis(float right_x, float right_y, float ri
     q.y = (back_y + up_z) / s;
     q.z = 0.25f * s;
   }
-  return PrimeGunNormalizeQuat(q);
+  return PrimedGunNormalizeQuat(q);
 }
 
-static PrimeGunQuat PrimeGunConjugateQuat(PrimeGunQuat q)
+static PrimedGunQuat PrimedGunConjugateQuat(PrimedGunQuat q)
 {
   return {-q.x, -q.y, -q.z, q.w};
 }
 
-static void PrimeGunRotateByInverse(PrimeGunQuat q, float x, float y, float z, float* out_x,
+static void PrimedGunRotateByInverse(PrimedGunQuat q, float x, float y, float z, float* out_x,
                                     float* out_y, float* out_z)
 {
-  q = PrimeGunConjugateQuat(q);
+  q = PrimedGunConjugateQuat(q);
   const float tx = 2.0f * (q.y * z - q.z * y);
   const float ty = 2.0f * (q.z * x - q.x * z);
   const float tz = 2.0f * (q.x * y - q.y * x);
@@ -139,7 +139,7 @@ static void PrimeGunRotateByInverse(PrimeGunQuat q, float x, float y, float z, f
   *out_z = z + q.w * tz + (q.x * ty - q.y * tx);
 }
 
-static void PrimeGunRotate(PrimeGunQuat q, float x, float y, float z, float* out_x, float* out_y,
+static void PrimedGunRotate(PrimedGunQuat q, float x, float y, float z, float* out_x, float* out_y,
                            float* out_z)
 {
   const float tx = 2.0f * (q.y * z - q.z * y);
@@ -150,17 +150,17 @@ static void PrimeGunRotate(PrimeGunQuat q, float x, float y, float z, float* out
   *out_z = z + q.w * tz + (q.x * ty - q.y * tx);
 }
 
-static float PrimeGunDot(float ax, float ay, float az, float bx, float by, float bz)
+static float PrimedGunDot(float ax, float ay, float az, float bx, float by, float bz)
 {
   return ax * bx + ay * by + az * bz;
 }
 
-static PrimeGunQuat PrimeGunRollFreeQuat(PrimeGunQuat q)
+static PrimedGunQuat PrimedGunRollFreeQuat(PrimedGunQuat q)
 {
   float forward_x = 0.0f;
   float forward_y = 0.0f;
   float forward_z = 0.0f;
-  PrimeGunRotate(q, 0.0f, 0.0f, -1.0f, &forward_x, &forward_y, &forward_z);
+  PrimedGunRotate(q, 0.0f, 0.0f, -1.0f, &forward_x, &forward_y, &forward_z);
 
   float right_x = -forward_z;
   float right_y = 0.0f;
@@ -178,28 +178,28 @@ static PrimeGunQuat PrimeGunRollFreeQuat(PrimeGunQuat q)
   const float up_x = -forward_y * right_z;
   const float up_y = -forward_z * right_x + forward_x * right_z;
   const float up_z = forward_y * right_x;
-  return PrimeGunQuatFromBasis(right_x, right_y, right_z, up_x, up_y, up_z, -forward_x,
+  return PrimedGunQuatFromBasis(right_x, right_y, right_z, up_x, up_y, up_z, -forward_x,
                                -forward_y, -forward_z);
 }
 
-static void ApplyPrimeGunClassicMenuControls(const Common::VR::OpenXRControllerState& left,
+static void ApplyPrimedGunClassicMenuControls(const Common::VR::OpenXRControllerState& left,
                                              const Common::VR::OpenXRControllerState& right,
                                              GCPadStatus* pad, bool suppress_left_stick,
                                              bool consume_left_secondary)
 {
   pad->stickX =
       left.connected && !suppress_left_stick ?
-          PrimeGunAxisToPadByte(left.thumbstick_x, GCPadStatus::MAIN_STICK_CENTER_X) :
+          PrimedGunAxisToPadByte(left.thumbstick_x, GCPadStatus::MAIN_STICK_CENTER_X) :
           GCPadStatus::MAIN_STICK_CENTER_X;
   pad->stickY =
       left.connected && !suppress_left_stick ?
-          PrimeGunAxisToPadByte(left.thumbstick_y, GCPadStatus::MAIN_STICK_CENTER_Y) :
+          PrimedGunAxisToPadByte(left.thumbstick_y, GCPadStatus::MAIN_STICK_CENTER_Y) :
           GCPadStatus::MAIN_STICK_CENTER_Y;
   pad->substickX =
-      right.connected ? PrimeGunAxisToPadByte(right.thumbstick_x, GCPadStatus::C_STICK_CENTER_X) :
+      right.connected ? PrimedGunAxisToPadByte(right.thumbstick_x, GCPadStatus::C_STICK_CENTER_X) :
                         GCPadStatus::C_STICK_CENTER_X;
   pad->substickY =
-      right.connected ? PrimeGunAxisToPadByte(right.thumbstick_y, GCPadStatus::C_STICK_CENTER_Y) :
+      right.connected ? PrimedGunAxisToPadByte(right.thumbstick_y, GCPadStatus::C_STICK_CENTER_Y) :
                         GCPadStatus::C_STICK_CENTER_Y;
 
   if (left.connected)
@@ -229,7 +229,7 @@ static void ApplyPrimeGunClassicMenuControls(const Common::VR::OpenXRControllerS
   }
 }
 
-enum class PrimeGunBeamSlot
+enum class PrimedGunBeamSlot
 {
   None,
   Power,
@@ -238,127 +238,127 @@ enum class PrimeGunBeamSlot
   Plasma,
 };
 
-static void SetPrimeGunBeamCStick(PrimeGunBeamSlot slot, GCPadStatus* pad)
+static void SetPrimedGunBeamCStick(PrimedGunBeamSlot slot, GCPadStatus* pad)
 {
   switch (slot)
   {
-  case PrimeGunBeamSlot::Power:
+  case PrimedGunBeamSlot::Power:
     pad->substickX = GCPadStatus::C_STICK_CENTER_X;
-    pad->substickY = PrimeGunAxisToPadByte(1.0f, GCPadStatus::C_STICK_CENTER_Y);
+    pad->substickY = PrimedGunAxisToPadByte(1.0f, GCPadStatus::C_STICK_CENTER_Y);
     break;
-  case PrimeGunBeamSlot::Wave:
-    pad->substickX = PrimeGunAxisToPadByte(1.0f, GCPadStatus::C_STICK_CENTER_X);
+  case PrimedGunBeamSlot::Wave:
+    pad->substickX = PrimedGunAxisToPadByte(1.0f, GCPadStatus::C_STICK_CENTER_X);
     pad->substickY = GCPadStatus::C_STICK_CENTER_Y;
     break;
-  case PrimeGunBeamSlot::Ice:
+  case PrimedGunBeamSlot::Ice:
     pad->substickX = GCPadStatus::C_STICK_CENTER_X;
-    pad->substickY = PrimeGunAxisToPadByte(-1.0f, GCPadStatus::C_STICK_CENTER_Y);
+    pad->substickY = PrimedGunAxisToPadByte(-1.0f, GCPadStatus::C_STICK_CENTER_Y);
     break;
-  case PrimeGunBeamSlot::Plasma:
-    pad->substickX = PrimeGunAxisToPadByte(-1.0f, GCPadStatus::C_STICK_CENTER_X);
+  case PrimedGunBeamSlot::Plasma:
+    pad->substickX = PrimedGunAxisToPadByte(-1.0f, GCPadStatus::C_STICK_CENTER_X);
     pad->substickY = GCPadStatus::C_STICK_CENTER_Y;
     break;
-  case PrimeGunBeamSlot::None:
+  case PrimedGunBeamSlot::None:
     pad->substickX = GCPadStatus::C_STICK_CENTER_X;
     pad->substickY = GCPadStatus::C_STICK_CENTER_Y;
     break;
   }
 }
 
-static const char* PrimeGunBeamSlotName(PrimeGunBeamSlot slot)
+static const char* PrimedGunBeamSlotName(PrimedGunBeamSlot slot)
 {
   switch (slot)
   {
-  case PrimeGunBeamSlot::Power:
+  case PrimedGunBeamSlot::Power:
     return "power";
-  case PrimeGunBeamSlot::Wave:
+  case PrimedGunBeamSlot::Wave:
     return "wave";
-  case PrimeGunBeamSlot::Ice:
+  case PrimedGunBeamSlot::Ice:
     return "ice";
-  case PrimeGunBeamSlot::Plasma:
+  case PrimedGunBeamSlot::Plasma:
     return "plasma";
-  case PrimeGunBeamSlot::None:
+  case PrimedGunBeamSlot::None:
     return "none";
   }
   return "none";
 }
 
-static uint32_t PrimeGunBeamSlotIndex(PrimeGunBeamSlot slot)
+static uint32_t PrimedGunBeamSlotIndex(PrimedGunBeamSlot slot)
 {
   switch (slot)
   {
-  case PrimeGunBeamSlot::Power:
+  case PrimedGunBeamSlot::Power:
     return 1;
-  case PrimeGunBeamSlot::Wave:
+  case PrimedGunBeamSlot::Wave:
     return 2;
-  case PrimeGunBeamSlot::Ice:
+  case PrimedGunBeamSlot::Ice:
     return 3;
-  case PrimeGunBeamSlot::Plasma:
+  case PrimedGunBeamSlot::Plasma:
     return 4;
-  case PrimeGunBeamSlot::None:
+  case PrimedGunBeamSlot::None:
     return 0;
   }
   return 0;
 }
 
-static void PublishPrimeGunWeaponPanel(bool visible, PrimeGunBeamSlot slot,
+static void PublishPrimedGunWeaponPanel(bool visible, PrimedGunBeamSlot slot,
                                        const Common::VR::OpenXRPoseState* anchor_pose)
 {
-  const bool overlays_enabled = PrimeGun::GetRuntimeSettings().vr_overlays_enabled;
-  auto overlay = Common::VR::OpenXRInputState::GetPrimeGunOverlay();
+  const bool overlays_enabled = PrimedGun::GetRuntimeSettings().vr_overlays_enabled;
+  auto overlay = Common::VR::OpenXRInputState::GetPrimedGunOverlay();
   overlay.weapon_panel_visible = overlays_enabled && visible;
-  overlay.weapon_selected_index = PrimeGunBeamSlotIndex(slot);
+  overlay.weapon_selected_index = PrimedGunBeamSlotIndex(slot);
   if (overlays_enabled && visible && anchor_pose && anchor_pose->valid)
   {
     overlay.weapon_panel_position = anchor_pose->position;
     overlay.weapon_panel_orientation = anchor_pose->orientation;
   }
-  Common::VR::OpenXRInputState::SetPrimeGunOverlay(overlay);
+  Common::VR::OpenXRInputState::SetPrimedGunOverlay(overlay);
 }
 
-static void UpdatePrimeGunWeaponSelect(const Common::VR::OpenXRControllerState& right,
+static void UpdatePrimedGunWeaponSelect(const Common::VR::OpenXRControllerState& right,
                                        GCPadStatus* pad)
 {
   static bool s_gesture_active = false;
   static float s_base_x = 0.0f;
   static float s_base_y = 0.0f;
   static float s_base_z = 0.0f;
-  static PrimeGunQuat s_base_orientation = {};
-  static PrimeGunBeamSlot s_selected_slot = PrimeGunBeamSlot::None;
-  static PrimeGunBeamSlot s_last_logged_slot = PrimeGunBeamSlot::None;
-  static PrimeGunBeamSlot s_pulse_slot = PrimeGunBeamSlot::None;
+  static PrimedGunQuat s_base_orientation = {};
+  static PrimedGunBeamSlot s_selected_slot = PrimedGunBeamSlot::None;
+  static PrimedGunBeamSlot s_last_logged_slot = PrimedGunBeamSlot::None;
+  static PrimedGunBeamSlot s_pulse_slot = PrimedGunBeamSlot::None;
   static int s_pulse_frames = 0;
   static Common::VR::OpenXRPoseState s_anchor_pose = {};
-  static PrimeGunQuat s_anchor_orientation = {};
+  static PrimedGunQuat s_anchor_orientation = {};
   static bool s_have_selection_center = false;
   static float s_selection_center_x = 0.0f;
   static float s_selection_center_y = 0.0f;
 
   if (s_pulse_frames > 0)
   {
-    SetPrimeGunBeamCStick(s_pulse_slot, pad);
+    SetPrimedGunBeamCStick(s_pulse_slot, pad);
     --s_pulse_frames;
     if (s_pulse_frames == 0)
-      s_pulse_slot = PrimeGunBeamSlot::None;
+      s_pulse_slot = PrimedGunBeamSlot::None;
   }
 
   const auto& pose = right.aim_pose.valid ? right.aim_pose : right.grip_pose;
   if (!right.secondary_button || !pose.valid)
   {
-    if (s_gesture_active && s_selected_slot != PrimeGunBeamSlot::None)
+    if (s_gesture_active && s_selected_slot != PrimedGunBeamSlot::None)
     {
       s_pulse_slot = s_selected_slot;
       s_pulse_frames = 8;
-      SetPrimeGunBeamCStick(s_pulse_slot, pad);
-      NOTICE_LOG_FMT(CORE, "PrimeGun weapon select commit={}", PrimeGunBeamSlotName(s_pulse_slot));
+      SetPrimedGunBeamCStick(s_pulse_slot, pad);
+      NOTICE_LOG_FMT(CORE, "PrimedGun weapon select commit={}", PrimedGunBeamSlotName(s_pulse_slot));
     }
     s_gesture_active = false;
-    s_selected_slot = PrimeGunBeamSlot::None;
-    s_last_logged_slot = PrimeGunBeamSlot::None;
+    s_selected_slot = PrimedGunBeamSlot::None;
+    s_last_logged_slot = PrimedGunBeamSlot::None;
     s_have_selection_center = false;
     s_selection_center_x = 0.0f;
     s_selection_center_y = 0.0f;
-    PublishPrimeGunWeaponPanel(false, PrimeGunBeamSlot::None, nullptr);
+    PublishPrimedGunWeaponPanel(false, PrimedGunBeamSlot::None, nullptr);
     return;
   }
 
@@ -367,18 +367,18 @@ static void UpdatePrimeGunWeaponSelect(const Common::VR::OpenXRControllerState& 
     s_base_x = pose.position[0];
     s_base_y = pose.position[1];
     s_base_z = pose.position[2];
-    s_base_orientation = PrimeGunRollFreeQuat(PrimeGunPoseQuat(pose));
+    s_base_orientation = PrimedGunRollFreeQuat(PrimedGunPoseQuat(pose));
     s_anchor_orientation = s_base_orientation;
     s_anchor_pose = pose;
     s_anchor_pose.orientation = {s_anchor_orientation.x, s_anchor_orientation.y,
                                  s_anchor_orientation.z, s_anchor_orientation.w};
     s_gesture_active = true;
-    s_selected_slot = PrimeGunBeamSlot::None;
-    s_last_logged_slot = PrimeGunBeamSlot::None;
+    s_selected_slot = PrimedGunBeamSlot::None;
+    s_last_logged_slot = PrimedGunBeamSlot::None;
     s_have_selection_center = false;
     s_selection_center_x = 0.0f;
     s_selection_center_y = 0.0f;
-    NOTICE_LOG_FMT(CORE, "PrimeGun weapon select open");
+    NOTICE_LOG_FMT(CORE, "PrimedGun weapon select open");
   }
 
   float panel_right_x = 0.0f;
@@ -393,25 +393,25 @@ static void UpdatePrimeGunWeaponSelect(const Common::VR::OpenXRControllerState& 
   float panel_offset_x = 0.0f;
   float panel_offset_y = 0.0f;
   float panel_offset_z = 0.0f;
-  PrimeGunRotate(s_anchor_orientation, 1.0f, 0.0f, 0.0f, &panel_right_x, &panel_right_y,
+  PrimedGunRotate(s_anchor_orientation, 1.0f, 0.0f, 0.0f, &panel_right_x, &panel_right_y,
                  &panel_right_z);
-  PrimeGunRotate(s_anchor_orientation, 0.0f, 1.0f, 0.0f, &panel_up_x, &panel_up_y, &panel_up_z);
-  PrimeGunRotate(s_anchor_orientation, 0.0f, 0.0f, -1.0f, &panel_forward_x, &panel_forward_y,
+  PrimedGunRotate(s_anchor_orientation, 0.0f, 1.0f, 0.0f, &panel_up_x, &panel_up_y, &panel_up_z);
+  PrimedGunRotate(s_anchor_orientation, 0.0f, 0.0f, -1.0f, &panel_forward_x, &panel_forward_y,
                  &panel_forward_z);
-  PrimeGunRotate(s_anchor_orientation, 0.0f, 0.055f, -0.26f, &panel_offset_x, &panel_offset_y,
+  PrimedGunRotate(s_anchor_orientation, 0.0f, 0.055f, -0.26f, &panel_offset_x, &panel_offset_y,
                  &panel_offset_z);
 
   const float panel_x = s_base_x + panel_offset_x;
   const float panel_y = s_base_y + panel_offset_y;
   const float panel_z = s_base_z + panel_offset_z;
-  const PrimeGunQuat current_orientation = PrimeGunRollFreeQuat(PrimeGunPoseQuat(pose));
+  const PrimedGunQuat current_orientation = PrimedGunRollFreeQuat(PrimedGunPoseQuat(pose));
   float ray_x = 0.0f;
   float ray_y = 0.0f;
   float ray_z = 0.0f;
-  PrimeGunRotate(current_orientation, 0.0f, 0.0f, -1.0f, &ray_x, &ray_y, &ray_z);
+  PrimedGunRotate(current_orientation, 0.0f, 0.0f, -1.0f, &ray_x, &ray_y, &ray_z);
 
   const float denom =
-      PrimeGunDot(ray_x, ray_y, ray_z, panel_forward_x, panel_forward_y, panel_forward_z);
+      PrimedGunDot(ray_x, ray_y, ray_z, panel_forward_x, panel_forward_y, panel_forward_z);
   float x = 0.0f;
   float y = 0.0f;
   bool hit_panel = false;
@@ -420,7 +420,7 @@ static void UpdatePrimeGunWeaponSelect(const Common::VR::OpenXRControllerState& 
     const float to_panel_x = panel_x - pose.position[0];
     const float to_panel_y = panel_y - pose.position[1];
     const float to_panel_z = panel_z - pose.position[2];
-    const float t = PrimeGunDot(to_panel_x, to_panel_y, to_panel_z, panel_forward_x,
+    const float t = PrimedGunDot(to_panel_x, to_panel_y, to_panel_z, panel_forward_x,
                                 panel_forward_y, panel_forward_z) /
                     denom;
     if (t > 0.02f && t < 2.0f)
@@ -428,10 +428,10 @@ static void UpdatePrimeGunWeaponSelect(const Common::VR::OpenXRControllerState& 
       const float hit_x = pose.position[0] + ray_x * t;
       const float hit_y = pose.position[1] + ray_y * t;
       const float hit_z = pose.position[2] + ray_z * t;
-      x = PrimeGunDot(hit_x - panel_x, hit_y - panel_y, hit_z - panel_z, panel_right_x,
+      x = PrimedGunDot(hit_x - panel_x, hit_y - panel_y, hit_z - panel_z, panel_right_x,
                       panel_right_y, panel_right_z) /
           0.21f;
-      y = PrimeGunDot(hit_x - panel_x, hit_y - panel_y, hit_z - panel_z, panel_up_x,
+      y = PrimedGunDot(hit_x - panel_x, hit_y - panel_y, hit_z - panel_z, panel_up_x,
                       panel_up_y, panel_up_z) /
           0.21f;
       hit_panel = std::fabs(x) <= 1.8f && std::fabs(y) <= 1.8f;
@@ -443,7 +443,7 @@ static void UpdatePrimeGunWeaponSelect(const Common::VR::OpenXRControllerState& 
     float local_x = 0.0f;
     float local_y = 0.0f;
     float local_z = 0.0f;
-    PrimeGunRotateByInverse(s_base_orientation, pose.position[0] - s_base_x,
+    PrimedGunRotateByInverse(s_base_orientation, pose.position[0] - s_base_x,
                             pose.position[1] - s_base_y, pose.position[2] - s_base_z, &local_x,
                             &local_y, &local_z);
     x = local_x / 0.075f;
@@ -463,34 +463,34 @@ static void UpdatePrimeGunWeaponSelect(const Common::VR::OpenXRControllerState& 
   y = std::clamp(y, -1.0f, 1.0f);
   if (std::fabs(x) < 0.25f && std::fabs(y) < 0.25f)
   {
-    s_selected_slot = PrimeGunBeamSlot::None;
+    s_selected_slot = PrimedGunBeamSlot::None;
     if (s_last_logged_slot != s_selected_slot)
     {
-      NOTICE_LOG_FMT(CORE, "PrimeGun weapon select hover={}", PrimeGunBeamSlotName(s_selected_slot));
+      NOTICE_LOG_FMT(CORE, "PrimedGun weapon select hover={}", PrimedGunBeamSlotName(s_selected_slot));
       s_last_logged_slot = s_selected_slot;
     }
-    PublishPrimeGunWeaponPanel(true, s_selected_slot, &s_anchor_pose);
+    PublishPrimedGunWeaponPanel(true, s_selected_slot, &s_anchor_pose);
     return;
   }
 
   if (std::fabs(x) >= std::fabs(y))
   {
-    s_selected_slot = x < 0.0f ? PrimeGunBeamSlot::Plasma : PrimeGunBeamSlot::Wave;
+    s_selected_slot = x < 0.0f ? PrimedGunBeamSlot::Plasma : PrimedGunBeamSlot::Wave;
   }
   else
   {
-    s_selected_slot = y < 0.0f ? PrimeGunBeamSlot::Ice : PrimeGunBeamSlot::Power;
+    s_selected_slot = y < 0.0f ? PrimedGunBeamSlot::Ice : PrimedGunBeamSlot::Power;
   }
 
   if (s_last_logged_slot != s_selected_slot)
   {
-    NOTICE_LOG_FMT(CORE, "PrimeGun weapon select hover={}", PrimeGunBeamSlotName(s_selected_slot));
+    NOTICE_LOG_FMT(CORE, "PrimedGun weapon select hover={}", PrimedGunBeamSlotName(s_selected_slot));
     s_last_logged_slot = s_selected_slot;
   }
-  PublishPrimeGunWeaponPanel(true, s_selected_slot, &s_anchor_pose);
+  PublishPrimedGunWeaponPanel(true, s_selected_slot, &s_anchor_pose);
 }
 
-static bool ApplyPrimeGunModernControls(GCPadStatus* pad)
+static bool ApplyPrimedGunModernControls(GCPadStatus* pad)
 {
   static u64 s_primegun_pad_sample = 0;
   static bool s_last_gameplay = false;
@@ -506,7 +506,7 @@ static bool ApplyPrimeGunModernControls(GCPadStatus* pad)
   static bool s_last_orbit_lock = false;
 
   const auto snapshot = Common::VR::OpenXRInputState::GetSnapshot();
-  const auto overlay = Common::VR::OpenXRInputState::GetPrimeGunOverlay();
+  const auto overlay = Common::VR::OpenXRInputState::GetPrimedGunOverlay();
   if (!snapshot.runtime_active)
     return false;
 
@@ -537,8 +537,8 @@ static bool ApplyPrimeGunModernControls(GCPadStatus* pad)
   const bool left_vr_menu_button = left.connected && (left.thumbstick_button || left.menu_button);
   const bool suppress_left_stick = false;
 
-  const bool gameplay = PrimeGun::IsGameplayInputActive();
-  const bool orbit_lock_active = gameplay && PrimeGun::IsOrbitLockActive();
+  const bool gameplay = PrimedGun::IsGameplayInputActive();
+  const bool orbit_lock_active = gameplay && PrimedGun::IsOrbitLockActive();
   const bool log_now =
       (++s_primegun_pad_sample % 120) == 0 || gameplay != s_last_gameplay ||
       orbit_lock_active != s_last_orbit_lock ||
@@ -551,7 +551,7 @@ static bool ApplyPrimeGunModernControls(GCPadStatus* pad)
   if (log_now)
   {
     NOTICE_LOG_FMT(CORE,
-                   "PrimeGun pad mode={} overlay={} L[p={} s={} menu={} stick_click={} x={:.2f} y={:.2f}] "
+                   "PrimedGun pad mode={} overlay={} L[p={} s={} menu={} stick_click={} x={:.2f} y={:.2f}] "
                    "R[p={} s={} menu={} stick_click={} trig={} grip={}]",
                    orbit_lock_active ? "lock-on" : (gameplay ? "combat" : "classic"),
                    overlay.menu_visible, left.primary_button,
@@ -574,7 +574,7 @@ static bool ApplyPrimeGunModernControls(GCPadStatus* pad)
 
   if (!gameplay)
   {
-    ApplyPrimeGunClassicMenuControls(game_left, game_right, pad, suppress_left_stick, false);
+    ApplyPrimedGunClassicMenuControls(game_left, game_right, pad, suppress_left_stick, false);
     if (pad->button & PAD_BUTTON_A)
       pad->analogA = 0xFF;
     if (pad->button & PAD_BUTTON_B)
@@ -591,29 +591,29 @@ static bool ApplyPrimeGunModernControls(GCPadStatus* pad)
   const auto& move_stick = swap_sticks ? game_right : game_left;
   const auto& look_stick = swap_sticks ? game_left : game_right;
 
-  // PrimeGun owns the first-person locomotion layout:
+  // PrimedGun owns the first-person locomotion layout:
   // movement stick Y = forward/back, movement stick X = runtime strafe,
   // look stick X = turn, look stick up = jump.
   pad->stickX = orbit_lock_active && left.connected ?
-                    PrimeGunAxisToPadByte(left.thumbstick_x, GCPadStatus::MAIN_STICK_CENTER_X) :
+                    PrimedGunAxisToPadByte(left.thumbstick_x, GCPadStatus::MAIN_STICK_CENTER_X) :
                     look_stick.connected && !weapon_modifier ?
-          PrimeGunAxisToPadByte(look_stick.thumbstick_x, GCPadStatus::MAIN_STICK_CENTER_X) :
+          PrimedGunAxisToPadByte(look_stick.thumbstick_x, GCPadStatus::MAIN_STICK_CENTER_X) :
           GCPadStatus::MAIN_STICK_CENTER_X;
   pad->stickY =
       move_stick.connected && !suppress_left_stick ?
-          PrimeGunAxisToPadByte(move_stick.thumbstick_y, GCPadStatus::MAIN_STICK_CENTER_Y) :
+          PrimedGunAxisToPadByte(move_stick.thumbstick_y, GCPadStatus::MAIN_STICK_CENTER_Y) :
                        GCPadStatus::MAIN_STICK_CENTER_Y;
 
   if (weapon_modifier && weapon_hand.connected)
   {
-    UpdatePrimeGunWeaponSelect(weapon_hand, pad);
+    UpdatePrimedGunWeaponSelect(weapon_hand, pad);
   }
   else
   {
     pad->substickX = GCPadStatus::C_STICK_CENTER_X;
     pad->substickY = GCPadStatus::C_STICK_CENTER_Y;
     if (weapon_hand.connected)
-      UpdatePrimeGunWeaponSelect(weapon_hand, pad);
+      UpdatePrimedGunWeaponSelect(weapon_hand, pad);
   }
 
   if (game_left.connected)
@@ -765,7 +765,7 @@ GCPadStatus GCPad::GetInput() const
   GCPadStatus pad = {};
 
 #ifdef ENABLE_VR
-  if (m_index == 0 && ApplyPrimeGunModernControls(&pad))
+  if (m_index == 0 && ApplyPrimedGunModernControls(&pad))
     return pad;
 #endif
 

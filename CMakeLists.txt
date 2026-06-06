@@ -877,7 +877,7 @@ if(NOT CMAKE_SYSTEM_NAME MATCHES "Darwin|Windows")
     "execute_process(COMMAND \"${CMAKE_COMMAND}\"
       -DPRIMEGUN_USER_DEFAULTS_SOURCE=\"${CMAKE_SOURCE_DIR}/Data/User\"
       -DPRIMEGUN_USER_DEFAULTS_DEST=\"\$ENV{DESTDIR}${datadir}/User\"
-      -P \"${CMAKE_SOURCE_DIR}/CMake/PrimeGunSeedUserDefaults.cmake\")"
+      -P \"${CMAKE_SOURCE_DIR}/CMake/PrimedGunSeedUserDefaults.cmake\")"
   )
 endif()
 if(NOT CMAKE_SYSTEM_NAME MATCHES "Linux|FreeBSD|OpenBSD|Darwin")
