@@ -3120,11 +3120,11 @@ void MainWindow::ShowRenderWidget()
 
   if (Config::Get(Config::MAIN_RENDER_TO_MAIN))
   {
-    // If we're rendering to main, add it to the stack and update our title when necessary.
+    // If we're rendering to main, add it to the stack and keep the branded window title.
     m_rendering_to_main = true;
 
     m_stack->setCurrentIndex(m_stack->addWidget(m_render_widget));
-    connect(Host::GetInstance(), &Host::RequestTitle, this, &MainWindow::setWindowTitle);
+    setWindowTitle(QStringLiteral("PrimedGun"));
     m_stack->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     m_stack->repaint();
 
@@ -3150,7 +3150,6 @@ void MainWindow::HideRenderWidget(bool reinit, bool is_exit)
     m_render_widget->setParent(nullptr);
     m_rendering_to_main = false;
     m_stack->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-    disconnect(Host::GetInstance(), &Host::RequestTitle, this, &MainWindow::setWindowTitle);
     setWindowTitle(QStringLiteral("PrimedGun"));
   }
 
