@@ -99,6 +99,7 @@ constexpr u32 MODEL_OFFSET_WORLD_SCRATCH = SCRATCH_BASE + 0x040u;
 constexpr u32 ADJUSTED_GUN_POS_SCRATCH = SCRATCH_BASE + 0x050u;
 constexpr u32 GUN_TARGET_SCRATCH = SCRATCH_BASE + 0x400u;
 constexpr u32 RETICLE_BILLBOARD_SCRATCH = SCRATCH_BASE + 0x500u;
+constexpr u32 SCAN_RETICLE_TRACE_SCRATCH = SCRATCH_BASE + 0x540u;
 constexpr u32 DPAD_PRESS_SCRATCH = SCRATCH_BASE + 0x680u;
 constexpr u32 GAMEFLOW_MENU_SCRATCH = SCRATCH_BASE + 0x690u;
 
@@ -117,8 +118,16 @@ constexpr u32 GAMEFLOW_SAVE_CAVE = 0x800020A0u;
 constexpr u32 GAMEFLOW_LOGBOOK_CAVE = 0x800020D0u;
 constexpr u32 GAMEFLOW_PAUSE_CAVE = 0x80002100u;
 constexpr u32 GAMEFLOW_MAP_CAVE = 0x80002130u;
+constexpr u32 SCAN_RETICLE_TRACE_CAVE = 0x80002180u;
+constexpr u32 SCAN_RETICLE_TRACE_CURR_CAVE = 0x800021C0u;
+constexpr u32 SCAN_INDICATOR_UPDATE_TRACE_CAVE = 0x80002200u;
+constexpr u32 SCAN_INDICATOR_VIEW_BASIS_CAVE = 0x80002240u;
 constexpr u32 LOAD_ZERO_TO_F1 = 0xC02280B0u;
 constexpr u32 LOAD_ZERO_TO_F31 = 0xC3E280B0u;
+constexpr u32 DRAW_NEXT_LOCK_ON_GROUP = 0x800BD808u;
+constexpr u32 DRAW_CURR_LOCK_ON_GROUP = 0x800BE25Cu;
+constexpr u32 UPDATE_SCAN_OBJECT_INDICATORS = 0x80112508u;
+constexpr u32 DRAW_SCAN_INDICATOR_MODEL_BASIS = 0x801122CCu;
 
 constexpr u32 VR_MENU_TAB_COUNT = 6;
 constexpr u32 VR_MENU_CANNON_TAB = 5;
@@ -228,6 +237,8 @@ float s_last_mode_probe_gun_alpha = -1.0f;
 std::array<u32, 16> s_last_mode_probe_state_words{};
 std::array<u32, 16> s_last_mode_probe_game_words{};
 bool s_have_mode_probe_words = false;
+u64 s_last_scan_reticle_trace_frame = 0;
+bool s_have_dumped_scan_indicator_code = false;
 u32 s_last_validated_gun = 0;
 bool s_smooth_matrix_valid = false;
 float s_smooth_matrix[12] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
@@ -282,6 +293,15 @@ DynamicPpcPatch s_combat_pitch_patches[] = {
 
 DynamicPpcPatch s_combat_elevation_pitch_patch{
     0x8000FA50u, 0xD01D01C0u, LOAD_ZERO_TO_F1, COMBAT_ELEVATION_PITCH_CAVE, false};
+
+DynamicPpcPatch s_scan_reticle_trace_patch{
+    DRAW_NEXT_LOCK_ON_GROUP, 0, 0, SCAN_RETICLE_TRACE_CAVE, false};
+DynamicPpcPatch s_scan_reticle_trace_curr_patch{
+    DRAW_CURR_LOCK_ON_GROUP, 0, 0, SCAN_RETICLE_TRACE_CURR_CAVE, false};
+DynamicPpcPatch s_scan_indicator_update_trace_patch{
+    UPDATE_SCAN_OBJECT_INDICATORS, 0, 0, SCAN_INDICATOR_UPDATE_TRACE_CAVE, false};
+DynamicPpcPatch s_scan_indicator_view_basis_patch{
+    DRAW_SCAN_INDICATOR_MODEL_BASIS, 0xC0410074u, 0, SCAN_INDICATOR_VIEW_BASIS_CAVE, false};
 
 ProjectileTransformPatch s_projectile_transform_patches[] = {
     {0x800E0434u, 0, WAVE_PROJECTILE_TRANSFORM_CAVE, 6, false},
@@ -819,6 +839,188 @@ void LogModeProbe(const Core::CPUThreadGuard& guard, u32 player, bool force)
                  "PrimedGun mode_probe camera+000: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
                  camera_words[0], camera_words[1], camera_words[2], camera_words[3],
                  camera_words[4], camera_words[5], camera_words[6], camera_words[7]);
+}
+
+void LogScanReticleTrace(const Core::CPUThreadGuard& guard, u32 player)
+{
+  if (player < 0x80000000u || !ScanVisorActive(guard, player))
+    return;
+
+  if (s_frame_counter < s_last_scan_reticle_trace_frame + 20)
+    return;
+
+  u32 next_hit = 0;
+  u32 curr_hit = 0;
+  u32 next_reticle = 0;
+  u32 curr_reticle = 0;
+  u32 next_rot = 0;
+  u32 curr_rot = 0;
+  u32 visor = 0;
+  TryReadU32(guard, SCAN_RETICLE_TRACE_SCRATCH + 0x08u, &next_hit);
+  TryReadU32(guard, SCAN_RETICLE_TRACE_SCRATCH + 0x18u, &curr_hit);
+  TryReadU32(guard, SCAN_RETICLE_TRACE_SCRATCH + 0x00u, &next_reticle);
+  TryReadU32(guard, SCAN_RETICLE_TRACE_SCRATCH + 0x04u, &next_rot);
+  TryReadU32(guard, SCAN_RETICLE_TRACE_SCRATCH + 0x10u, &curr_reticle);
+  TryReadU32(guard, SCAN_RETICLE_TRACE_SCRATCH + 0x14u, &curr_rot);
+  TryReadU32(guard, SCAN_RETICLE_TRACE_SCRATCH + 0x20u, &visor);
+
+  if ((next_hit == 0 || next_reticle < 0x80000000u || next_rot < 0x80000000u) &&
+      (curr_hit == 0 || curr_reticle < 0x80000000u || curr_rot < 0x80000000u))
+  {
+    return;
+  }
+
+  s_last_scan_reticle_trace_frame = s_frame_counter;
+  TryWriteU32(guard, SCAN_RETICLE_TRACE_SCRATCH + 8u, 0);
+  TryWriteU32(guard, SCAN_RETICLE_TRACE_SCRATCH + 0x18u, 0);
+
+  auto read_vec3 = [&](u32 address, float* x, float* y, float* z) {
+    *x = 0.0f;
+    *y = 0.0f;
+    *z = 0.0f;
+    TryReadFloat(guard, address + 0x00u, x);
+    TryReadFloat(guard, address + 0x04u, y);
+    TryReadFloat(guard, address + 0x08u, z);
+  };
+
+  float p_right_x = 0.0f;
+  float p_right_y = 0.0f;
+  float p_right_z = 0.0f;
+  float p_up_x = 0.0f;
+  float p_up_y = 0.0f;
+  float p_up_z = 0.0f;
+  float p_fwd_x = 0.0f;
+  float p_fwd_y = 0.0f;
+  float p_fwd_z = 0.0f;
+  read_vec3(player + ADDRESS.transform_offset + 0x00u, &p_right_x, &p_right_y, &p_right_z);
+  read_vec3(player + ADDRESS.transform_offset + 0x10u, &p_up_x, &p_up_y, &p_up_z);
+  read_vec3(player + ADDRESS.transform_offset + 0x20u, &p_fwd_x, &p_fwd_y, &p_fwd_z);
+
+  u32 camera_manager = 0;
+  u32 camera = 0;
+  TryReadU32(guard, ADDRESS.state_manager + 0x84Cu, &camera_manager);
+  if (camera_manager >= 0x80000000u)
+    TryReadU32(guard, camera_manager + 0x10u, &camera);
+
+  float c_right_x = 0.0f;
+  float c_right_y = 0.0f;
+  float c_right_z = 0.0f;
+  float c_up_x = 0.0f;
+  float c_up_y = 0.0f;
+  float c_up_z = 0.0f;
+  float c_fwd_x = 0.0f;
+  float c_fwd_y = 0.0f;
+  float c_fwd_z = 0.0f;
+  if (camera >= 0x80000000u)
+  {
+    read_vec3(camera + ADDRESS.transform_offset + 0x00u, &c_right_x, &c_right_y, &c_right_z);
+    read_vec3(camera + ADDRESS.transform_offset + 0x10u, &c_up_x, &c_up_y, &c_up_z);
+    read_vec3(camera + ADDRESS.transform_offset + 0x20u, &c_fwd_x, &c_fwd_y, &c_fwd_z);
+  }
+
+  auto log_reticle_state = [&](const char* name, u32 reticle, u32 rot, u32 state_offset) {
+    if (reticle < 0x80000000u || rot < 0x80000000u)
+      return;
+
+    const u32 state = reticle + state_offset;
+    u32 target_id_word = 0;
+    float radius = 0.0f;
+    float tx = 0.0f;
+    float ty = 0.0f;
+    float tz = 0.0f;
+    float factor = 0.0f;
+    float min_vp = 0.0f;
+    u8 orbit_idle = 0;
+    TryReadU32(guard, state + 0x00u, &target_id_word);
+    TryReadFloat(guard, state + 0x04u, &radius);
+    TryReadFloat(guard, state + 0x08u, &tx);
+    TryReadFloat(guard, state + 0x0Cu, &ty);
+    TryReadFloat(guard, state + 0x10u, &tz);
+    TryReadFloat(guard, state + 0x14u, &factor);
+    TryReadFloat(guard, state + 0x18u, &min_vp);
+    TryReadU8(guard, state + 0x1Cu, &orbit_idle);
+
+    float r0x = 0.0f;
+    float r0y = 0.0f;
+    float r0z = 0.0f;
+    float r1x = 0.0f;
+    float r1y = 0.0f;
+    float r1z = 0.0f;
+    float r2x = 0.0f;
+    float r2y = 0.0f;
+    float r2z = 0.0f;
+    read_vec3(rot + 0x00u, &r0x, &r0y, &r0z);
+    read_vec3(rot + 0x0Cu, &r1x, &r1y, &r1z);
+    read_vec3(rot + 0x18u, &r2x, &r2y, &r2z);
+
+    const u16 target_id = static_cast<u16>(target_id_word >> 16);
+    NOTICE_LOG_FMT(CORE,
+                   "PrimedGun scan_reticle_trace {} reticle={:08X} rot={:08X} target={:04X} "
+                   "radius={:.3f} pos=({:.2f},{:.2f},{:.2f}) factor={:.3f} min_vp={:.3f} "
+                   "orbit_idle={} rot_rows=({:.3f},{:.3f},{:.3f})/({:.3f},{:.3f},{:.3f})/"
+                   "({:.3f},{:.3f},{:.3f})",
+                   name, reticle, rot, target_id, radius, tx, ty, tz, factor, min_vp,
+                   orbit_idle != 0, r0x, r0y, r0z, r1x, r1y, r1z, r2x, r2y, r2z);
+  };
+
+  NOTICE_LOG_FMT(CORE,
+                 "PrimedGun scan_basis player={:08X} camera={:08X} p_r=({:.3f},{:.3f},{:.3f}) "
+                 "p_u=({:.3f},{:.3f},{:.3f}) p_f=({:.3f},{:.3f},{:.3f}) "
+                 "c_r=({:.3f},{:.3f},{:.3f}) c_u=({:.3f},{:.3f},{:.3f}) "
+                 "c_f=({:.3f},{:.3f},{:.3f})",
+                 player, camera, p_right_x, p_right_y, p_right_z, p_up_x, p_up_y, p_up_z,
+                 p_fwd_x, p_fwd_y, p_fwd_z, c_right_x, c_right_y, c_right_z, c_up_x, c_up_y,
+                 c_up_z, c_fwd_x, c_fwd_y, c_fwd_z);
+
+  log_reticle_state("next", next_reticle, next_rot, 0x174u);
+  log_reticle_state("curr", curr_reticle, curr_rot, 0x10Cu);
+
+  if (visor >= 0x80000000u)
+  {
+    std::string entries;
+    for (int i = 0; i < 8; ++i)
+    {
+      const u32 entry = visor + 0x140u + static_cast<u32>(i * 0x10);
+      u32 target_id_word = 0;
+      float f4 = 0.0f;
+      float f8 = 0.0f;
+      u8 visible = 0;
+      TryReadU32(guard, entry + 0x00u, &target_id_word);
+      TryReadFloat(guard, entry + 0x04u, &f4);
+      TryReadFloat(guard, entry + 0x08u, &f8);
+      TryReadU8(guard, entry + 0x0Cu, &visible);
+      const u16 target_id = static_cast<u16>(target_id_word >> 16);
+      entries += fmt::format("{}#{:d}:id={:04X} f4={:.3f} f8={:.3f} vis={}",
+                             entries.empty() ? "" : " ", i, target_id, f4, f8, visible != 0);
+    }
+    NOTICE_LOG_FMT(CORE, "PrimedGun scan_indicator_table visor={:08X} {}", visor, entries);
+  }
+}
+
+void DumpScanIndicatorCodeOnce(const Core::CPUThreadGuard& guard)
+{
+  if (s_have_dumped_scan_indicator_code)
+    return;
+
+  s_have_dumped_scan_indicator_code = true;
+
+  auto dump_range = [&](const char* name, u32 start, u32 end) {
+    std::string words;
+    for (u32 address = start; address < end; address += 4)
+    {
+      u32 instruction = 0;
+      if (!TryReadU32(guard, address, &instruction))
+        instruction = 0xffffffffu;
+      words += fmt::format("{}{:08X}:{:08X}", words.empty() ? "" : " ", address, instruction);
+    }
+    NOTICE_LOG_FMT(CORE, "PrimedGun scan_code_dump {} {}", name, words);
+  };
+
+  dump_range("FindEmptyInactiveScanTarget", 0x80111E20u, 0x80111E5Cu);
+  dump_range("FindCachedInactiveScanTarget", 0x80111E5Cu, 0x80111EA8u);
+  dump_range("DrawScanObjectIndicators_full", 0x80111EA8u, 0x80112508u);
+  dump_range("UpdateScanObjectIndicators_head", 0x80112508u, 0x80112880u);
+  dump_range("UpdateScanWindow_head", 0x80112948u, 0x80112B00u);
 }
 
 void ApplyHelmetOpacityZero(const Core::CPUThreadGuard& guard)
@@ -2992,6 +3194,145 @@ bool ApplyRenderModelOffsetPatch(const Core::CPUThreadGuard& guard)
   return patch.applied;
 }
 
+bool ApplyScanReticleTracePatch(const Core::CPUThreadGuard& guard)
+{
+  auto apply_one = [&](DynamicPpcPatch& patch, u32 scratch_offset) {
+    u32 current = 0;
+    if (!TryReadU32(guard, patch.address, &current))
+      return false;
+
+    const u32 branch = PpcBranch(patch.address, patch.cave);
+    if (current == branch)
+    {
+      if (patch.original == 0)
+        TryReadU32(guard, patch.cave + 0x18u, &patch.original);
+      patch.applied = patch.original != 0;
+      return false;
+    }
+
+    if ((current & 0xFFFF0000u) != 0x94210000u)
+    {
+      patch.applied = false;
+      return false;
+    }
+
+    patch.original = current;
+    const u32 scratch = SCAN_RETICLE_TRACE_SCRATCH + scratch_offset;
+    const u32 trace_hi = (scratch >> 16) & 0xffffu;
+    const u32 trace_lo = scratch & 0xffffu;
+    const u32 return_addr = patch.address + 4u;
+
+    TryWriteInstruction(guard, patch.cave + 0x00u, 0x3D800000u | trace_hi);
+    TryWriteInstruction(guard, patch.cave + 0x04u, 0x618C0000u | trace_lo);
+    TryWriteInstruction(guard, patch.cave + 0x08u, 0x906C0000u);
+    TryWriteInstruction(guard, patch.cave + 0x0Cu, 0x908C0004u);
+    TryWriteInstruction(guard, patch.cave + 0x10u, 0x38000001u);
+    TryWriteInstruction(guard, patch.cave + 0x14u, 0x900C0008u);
+    TryWriteInstruction(guard, patch.cave + 0x18u, patch.original);
+    TryWriteInstruction(guard, patch.cave + 0x1Cu, PpcBranch(patch.cave + 0x1Cu, return_addr));
+    patch.applied = TryWriteInstruction(guard, patch.address, branch);
+    return patch.applied;
+  };
+
+  bool wrote = false;
+  wrote = apply_one(s_scan_reticle_trace_patch, 0x00u) || wrote;
+  wrote = apply_one(s_scan_reticle_trace_curr_patch, 0x10u) || wrote;
+
+  auto& update_patch = s_scan_indicator_update_trace_patch;
+  u32 current = 0;
+  if (TryReadU32(guard, update_patch.address, &current))
+  {
+    const u32 branch = PpcBranch(update_patch.address, update_patch.cave);
+    if (current == branch)
+    {
+      if (update_patch.original == 0)
+        TryReadU32(guard, update_patch.cave + 0x14u, &update_patch.original);
+      update_patch.applied = update_patch.original != 0;
+    }
+    else if ((current & 0xFFFF0000u) == 0x94210000u)
+    {
+      update_patch.original = current;
+      const u32 trace_hi = (SCAN_RETICLE_TRACE_SCRATCH >> 16) & 0xffffu;
+      const u32 trace_lo = SCAN_RETICLE_TRACE_SCRATCH & 0xffffu;
+      const u32 return_addr = update_patch.address + 4u;
+
+      TryWriteInstruction(guard, update_patch.cave + 0x00u, 0x3D800000u | trace_hi);
+      TryWriteInstruction(guard, update_patch.cave + 0x04u, 0x618C0000u | trace_lo);
+      TryWriteInstruction(guard, update_patch.cave + 0x08u, 0x906C0020u);
+      TryWriteInstruction(guard, update_patch.cave + 0x0Cu, 0x38000001u);
+      TryWriteInstruction(guard, update_patch.cave + 0x10u, 0x900C0024u);
+      TryWriteInstruction(guard, update_patch.cave + 0x14u, update_patch.original);
+      TryWriteInstruction(guard, update_patch.cave + 0x18u,
+                          PpcBranch(update_patch.cave + 0x18u, return_addr));
+      update_patch.applied = TryWriteInstruction(guard, update_patch.address, branch);
+      wrote = update_patch.applied || wrote;
+    }
+    else
+    {
+      update_patch.applied = false;
+    }
+  }
+
+  return wrote;
+}
+
+bool ApplyScanIndicatorViewBasisPatch(const Core::CPUThreadGuard& guard)
+{
+  auto& patch = s_scan_indicator_view_basis_patch;
+  u32 current = 0;
+  if (!TryReadU32(guard, patch.address, &current))
+    return false;
+
+  const u32 branch = PpcBranch(patch.address, patch.cave);
+  if (current == branch)
+  {
+    patch.applied = true;
+    return false;
+  }
+
+  if (current != patch.original)
+  {
+    patch.applied = false;
+    return false;
+  }
+
+  patch.original = current;
+  constexpr u32 basis_hi = (RETICLE_BILLBOARD_SCRATCH >> 16) & 0xffffu;
+  constexpr u32 basis_lo = RETICLE_BILLBOARD_SCRATCH & 0xffffu;
+  const u32 return_addr = patch.address + 4u;
+
+  TryWriteInstruction(guard, patch.cave + 0x00u, 0x3D800000u | basis_hi);
+  TryWriteInstruction(guard, patch.cave + 0x04u, 0x618C0000u | basis_lo);
+
+  // Copy only the 3x3 orientation rows into the per-indicator model transform.
+  // Translation remains the scan indicator position the game already selected.
+  TryWriteInstruction(guard, patch.cave + 0x08u, 0xC00C0004u);  // lfs f0, 4(r12)
+  TryWriteInstruction(guard, patch.cave + 0x0Cu, 0xD0010148u);  // stfs f0, 0x148(r1)
+  TryWriteInstruction(guard, patch.cave + 0x10u, 0xC00C0008u);
+  TryWriteInstruction(guard, patch.cave + 0x14u, 0xD001014Cu);
+  TryWriteInstruction(guard, patch.cave + 0x18u, 0xC00C000Cu);
+  TryWriteInstruction(guard, patch.cave + 0x1Cu, 0xD0010150u);
+
+  TryWriteInstruction(guard, patch.cave + 0x20u, 0xC00C0010u);
+  TryWriteInstruction(guard, patch.cave + 0x24u, 0xD0010158u);
+  TryWriteInstruction(guard, patch.cave + 0x28u, 0xC00C0014u);
+  TryWriteInstruction(guard, patch.cave + 0x2Cu, 0xD001015Cu);
+  TryWriteInstruction(guard, patch.cave + 0x30u, 0xC00C0018u);
+  TryWriteInstruction(guard, patch.cave + 0x34u, 0xD0010160u);
+
+  TryWriteInstruction(guard, patch.cave + 0x38u, 0xC00C001Cu);
+  TryWriteInstruction(guard, patch.cave + 0x3Cu, 0xD0010168u);
+  TryWriteInstruction(guard, patch.cave + 0x40u, 0xC00C0020u);
+  TryWriteInstruction(guard, patch.cave + 0x44u, 0xD001016Cu);
+  TryWriteInstruction(guard, patch.cave + 0x48u, 0xC00C0024u);
+  TryWriteInstruction(guard, patch.cave + 0x4Cu, 0xD0010170u);
+
+  TryWriteInstruction(guard, patch.cave + 0x50u, patch.original);
+  TryWriteInstruction(guard, patch.cave + 0x54u, PpcBranch(patch.cave + 0x54u, return_addr));
+  patch.applied = TryWriteInstruction(guard, patch.address, branch);
+  return patch.applied;
+}
+
 bool ApplyProjectileTransformPatch(const Core::CPUThreadGuard& guard, ProjectileTransformPatch& patch)
 {
   u32 current = 0;
@@ -3207,6 +3548,8 @@ bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
   bool wrote = false;
   wrote = ApplyGameFlowFlagPatches(guard) || wrote;
   wrote = ApplyRenderModelOffsetPatch(guard) || wrote;
+  wrote = ApplyScanReticleTracePatch(guard) || wrote;
+  wrote = ApplyScanIndicatorViewBasisPatch(guard) || wrote;
   wrote = ApplyFirstPersonPitchLoadPatch(guard) || wrote;
 
   for (DynamicPpcPatch& patch : s_combat_pitch_patches)
@@ -3301,7 +3644,12 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   s_gameplay_input_active.store(gameplay_input_active, std::memory_order_relaxed);
   s_orbit_lock_active.store(orbit_lock_active, std::memory_order_relaxed);
   if (have_player)
+  {
     LogModeProbe(guard, player, gameplay_input_active != s_last_logged_gameplay_input_active);
+    if (ScanVisorActive(guard, player))
+      DumpScanIndicatorCodeOnce(guard);
+    LogScanReticleTrace(guard, player);
+  }
   if (!s_have_logged_gameplay_input_active ||
       gameplay_input_active != s_last_logged_gameplay_input_active)
   {
@@ -3373,6 +3721,8 @@ void ResetNativeRuntime()
   s_last_mode_probe_state_words = {};
   s_last_mode_probe_game_words = {};
   s_have_mode_probe_words = false;
+  s_last_scan_reticle_trace_frame = 0;
+  s_have_dumped_scan_indicator_code = false;
   s_last_validated_gun = 0;
   s_smooth_matrix_valid = false;
   s_controller_base_x = 0.0f;
@@ -3404,6 +3754,14 @@ void ResetNativeRuntime()
   s_first_person_pitch_load_patch.applied = false;
   s_render_model_offset_patch.applied = false;
   s_render_model_offset_patch.original = 0;
+  s_scan_reticle_trace_patch.applied = false;
+  s_scan_reticle_trace_patch.original = 0;
+  s_scan_reticle_trace_curr_patch.applied = false;
+  s_scan_reticle_trace_curr_patch.original = 0;
+  s_scan_indicator_update_trace_patch.applied = false;
+  s_scan_indicator_update_trace_patch.original = 0;
+  s_scan_indicator_view_basis_patch.applied = false;
+  s_scan_indicator_view_basis_patch.original = 0;
   for (DynamicPpcPatch& patch : s_combat_pitch_patches)
     patch.applied = false;
   s_combat_elevation_pitch_patch.applied = false;
