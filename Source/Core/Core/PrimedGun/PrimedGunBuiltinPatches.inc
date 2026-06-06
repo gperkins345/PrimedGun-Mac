@@ -1,4 +1,4 @@
-﻿inline constexpr const char kPrimeGunBuiltinPatches[] = R"PGINI(
+﻿inline constexpr const char kPrimedGunBuiltinPatches[] = R"PGINI(
 $PrimedGun Disable Frustum Culling
 04345200 4BCBC780
 04001980 2C1E0005

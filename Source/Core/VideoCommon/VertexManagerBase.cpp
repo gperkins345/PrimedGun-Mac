@@ -120,7 +120,7 @@ const char* HandlingToDebugName(ShaderHunter::HandlingType handling)
   }
 }
 
-std::string PrimeGunCannonProbeLogPath()
+std::string PrimedGunCannonProbeLogPath()
 {
   const std::string game_id = SConfig::GetInstance().GetGameID();
   const std::string dump_dir = File::GetUserPath(D_DUMP_IDX) + "Shaders/" + game_id + "/";
@@ -129,9 +129,9 @@ std::string PrimeGunCannonProbeLogPath()
   return dump_dir + "primegun_cannon_probe.log";
 }
 
-void AppendPrimeGunCannonProbeLog(std::string_view text)
+void AppendPrimedGunCannonProbeLog(std::string_view text)
 {
-  const std::string path = PrimeGunCannonProbeLogPath();
+  const std::string path = PrimedGunCannonProbeLogPath();
   File::IOFile file(path, "ab");
   if (!file)
   {
@@ -141,7 +141,7 @@ void AppendPrimeGunCannonProbeLog(std::string_view text)
   file.WriteString(text);
 }
 
-void LogPrimeGunCannonProbeDraw(u32 draw_sequence, u64 vs_hash, u64 ps_hash, u64 gs_hash,
+void LogPrimedGunCannonProbeDraw(u32 draw_sequence, u64 vs_hash, u64 ps_hash, u64 gs_hash,
                                 const std::array<u64, 8>& texture_hashes,
                                 const std::array<std::string, 8>& texture_names,
                                 const ShaderHunter::RuntimeElementSignature& signature)
@@ -154,12 +154,12 @@ void LogPrimeGunCannonProbeDraw(u32 draw_sequence, u64 vs_hash, u64 ps_hash, u64
     if (!s_primegun_cannon_probe_suppressed_notice)
     {
       s_primegun_cannon_probe_suppressed_notice = true;
-      AppendPrimeGunCannonProbeLog(fmt::format(
+      AppendPrimedGunCannonProbeLog(fmt::format(
           "\nPrimedGun cannon probe: suppressing further draws after {} matches.\n",
           PRIMEGUN_CANNON_PROBE_MAX_LOGS));
       INFO_LOG_FMT(VIDEO,
                    "PrimedGun cannon probe: suppressing further draws after {} matches. Log: {}",
-                   PRIMEGUN_CANNON_PROBE_MAX_LOGS, PrimeGunCannonProbeLogPath());
+                   PRIMEGUN_CANNON_PROBE_MAX_LOGS, PrimedGunCannonProbeLogPath());
     }
     return;
   }
@@ -248,11 +248,11 @@ void LogPrimeGunCannonProbeDraw(u32 draw_sequence, u64 vs_hash, u64 ps_hash, u64
         xfmem.color[i].GetFullLightMask(), xfmem.alpha[i].GetFullLightMask());
   }
 
-  AppendPrimeGunCannonProbeLog(out);
+  AppendPrimedGunCannonProbeLog(out);
   if (s_primegun_cannon_probe_log_count == 1)
   {
     INFO_LOG_FMT(VIDEO, "PrimedGun cannon probe logging PS {:08x} to {}",
-                 static_cast<u32>(PRIMEGUN_CANNON_PROBE_PS_HASH), PrimeGunCannonProbeLogPath());
+                 static_cast<u32>(PRIMEGUN_CANNON_PROBE_PS_HASH), PrimedGunCannonProbeLogPath());
   }
 }
 
@@ -1229,7 +1229,7 @@ void VertexManagerBase::Flush()
 
           if (primegun_cannon_probe_enabled)
           {
-            LogPrimeGunCannonProbeDraw(m_draw_counter + 1, vs_hash, ps_hash, gs_hash, tex_hashes,
+            LogPrimedGunCannonProbeDraw(m_draw_counter + 1, vs_hash, ps_hash, gs_hash, tex_hashes,
                                        tex_names, draw_signature);
           }
 

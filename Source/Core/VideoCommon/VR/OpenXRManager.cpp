@@ -825,7 +825,7 @@ bool OpenXRManager::CreateReferenceSpace()
   XrReferenceSpaceCreateInfo space_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
   space_info.poseInReferenceSpace = {{0.f, 0.f, 0.f, 1.f}, {0.f, 0.f, 0.f}};
 
-  // Prefer stage space so PrimeGun starts from the runtime's play-space origin instead of the
+  // Prefer stage space so PrimedGun starts from the runtime's play-space origin instead of the
   // first HMD pose seen during boot.
   space_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
   XrResult result = xrCreateReferenceSpace(m_session, &space_info, &m_reference_space);
@@ -835,7 +835,7 @@ bool OpenXRManager::CreateReferenceSpace()
     m_home_position = {0.0f, PRIMEGUN_DEFAULT_STANDING_HEIGHT_M, 0.0f};
     m_home_set = true;
     INFO_LOG_FMT(OPENXR,
-                 "OpenXR: Using stage reference space for PrimeGun play-space origin with default "
+                 "OpenXR: Using stage reference space for PrimedGun play-space origin with default "
                  "startup height {:.2f}m.",
                  PRIMEGUN_DEFAULT_STANDING_HEIGHT_M);
     return true;

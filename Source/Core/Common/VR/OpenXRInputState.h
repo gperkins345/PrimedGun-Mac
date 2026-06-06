@@ -63,7 +63,7 @@ struct OpenXRHapticsState
   std::array<float, 2> amplitude{};
 };
 
-struct PrimeGunVrOverlayState
+struct PrimedGunVrOverlayState
 {
   bool prompt_visible = false;
   bool menu_visible = false;
@@ -181,13 +181,13 @@ public:
     return s_haptics;
   }
 
-  static PrimeGunVrOverlayState GetPrimeGunOverlay()
+  static PrimedGunVrOverlayState GetPrimedGunOverlay()
   {
     std::lock_guard lk(s_state_mutex);
     return s_primegun_overlay;
   }
 
-  static void SetPrimeGunOverlay(const PrimeGunVrOverlayState& overlay)
+  static void SetPrimedGunOverlay(const PrimedGunVrOverlayState& overlay)
   {
     std::lock_guard lk(s_state_mutex);
     s_primegun_overlay = overlay;
@@ -227,7 +227,7 @@ private:
   static inline std::mutex s_state_mutex;
   static inline OpenXRInputSnapshot s_state{};
   static inline OpenXRHapticsState s_haptics{};
-  static inline PrimeGunVrOverlayState s_primegun_overlay{};
+  static inline PrimedGunVrOverlayState s_primegun_overlay{};
 };
 }  // namespace Common::VR
 

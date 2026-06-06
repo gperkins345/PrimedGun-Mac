@@ -493,10 +493,10 @@ add_library(core
   NetworkCaptureLogger.h
   PatchEngine.cpp
   PatchEngine.h
-  PrimeGun/NativeRuntime.cpp
-  PrimeGun/NativeRuntime.h
-  PrimeGun/PPCTrace.cpp
-  PrimeGun/PPCTrace.h
+  PrimedGun/NativeRuntime.cpp
+  PrimedGun/NativeRuntime.h
+  PrimedGun/PPCTrace.cpp
+  PrimedGun/PPCTrace.h
   PowerPC/BreakPoints.cpp
   PowerPC/BreakPoints.h
   PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp

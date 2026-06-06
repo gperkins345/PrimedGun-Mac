@@ -503,7 +503,7 @@ if (MSVC)
   target_compile_options(dolphin-emu PRIVATE "/GR")
 endif()
 
-option(PRIMEGUN_ENABLE_TRANSLATIONS "Build and deploy Dolphin UI translation files for PrimeGun" OFF)
+option(PRIMEGUN_ENABLE_TRANSLATIONS "Build and deploy Dolphin UI translation files for PrimedGun" OFF)
 
 if(WIN32)
   target_sources(dolphin-emu PRIVATE DolphinQt.manifest DolphinQt.rc)
@@ -598,7 +598,7 @@ add_custom_target(primegun-user-defaults-copy
   COMMAND ${CMAKE_COMMAND}
     -DPRIMEGUN_USER_DEFAULTS_SOURCE="${CMAKE_SOURCE_DIR}/Data/User"
     -DPRIMEGUN_USER_DEFAULTS_DEST="$<TARGET_FILE_DIR:dolphin-emu>/User"
-    -P "${CMAKE_SOURCE_DIR}/CMake/PrimeGunSeedUserDefaults.cmake"
+    -P "${CMAKE_SOURCE_DIR}/CMake/PrimedGunSeedUserDefaults.cmake"
   DEPENDS ${primegun_user_default_files}
   COMMENT "Seeding missing Data/User defaults into the runtime User directory"
 )

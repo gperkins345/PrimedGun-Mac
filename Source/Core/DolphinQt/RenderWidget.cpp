@@ -19,7 +19,7 @@
 
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
-#include "Core/PrimeGun/PPCTrace.h"
+#include "Core/PrimedGun/PPCTrace.h"
 #include "Core/State.h"
 #include "Core/System.h"
 
@@ -368,7 +368,7 @@ bool RenderWidget::event(QEvent* event)
     QKeyEvent* ke = static_cast<QKeyEvent*>(event);
     if (ke->key() == Qt::Key_F7 && !ke->isAutoRepeat())
     {
-      PrimeGun::PPCTrace::Toggle();
+      PrimedGun::PPCTrace::Toggle();
       return true;
     }
 

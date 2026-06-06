@@ -229,7 +229,7 @@ private:
       if (!state.connected)
         return 0.0;
       const bool primegun_menu_open =
-          Common::VR::OpenXRInputState::GetPrimeGunOverlay().menu_visible;
+          Common::VR::OpenXRInputState::GetPrimedGunOverlay().menu_visible;
 
       switch (m_control)
       {
@@ -290,7 +290,7 @@ private:
       if (!state.connected)
         return 0.0;
       const bool primegun_menu_open =
-          Common::VR::OpenXRInputState::GetPrimeGunOverlay().menu_visible;
+          Common::VR::OpenXRInputState::GetPrimedGunOverlay().menu_visible;
 
       switch (m_control)
       {

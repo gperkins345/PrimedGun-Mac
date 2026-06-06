@@ -69,7 +69,7 @@ execute_process(
   COMMAND ${CMAKE_COMMAND}
     -DPRIMEGUN_USER_DEFAULTS_SOURCE=${CMAKE_SOURCE_DIR}/Data/User
     -DPRIMEGUN_USER_DEFAULTS_DEST=${CMAKE_SOURCE_DIR}/Source/Android/app/src/main/assets/User
-    -P ${CMAKE_SOURCE_DIR}/CMake/PrimeGunSeedUserDefaults.cmake
+    -P ${CMAKE_SOURCE_DIR}/CMake/PrimedGunSeedUserDefaults.cmake
 )
 
 # Delete folders that aren't used by the Android version of Dolphin

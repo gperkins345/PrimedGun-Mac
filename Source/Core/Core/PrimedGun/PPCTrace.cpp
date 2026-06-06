@@ -1,7 +1,7 @@
-// Copyright 2026 PrimeGun
+// Copyright 2026 PrimedGun
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/PrimeGun/PPCTrace.h"
+#include "Core/PrimedGun/PPCTrace.h"
 
 #include <algorithm>
 #include <array>
@@ -22,7 +22,7 @@
 #include "Common/CommonPaths.h"
 #include "Core/Core.h"
 
-namespace PrimeGun::PPCTrace
+namespace PrimedGun::PPCTrace
 {
 namespace
 {
@@ -47,7 +47,7 @@ std::chrono::system_clock::time_point s_started_wall_time;
 
 std::string MakeTracePath()
 {
-  const std::string root = File::GetUserPath(D_DUMPDEBUG_IDX) + "PrimeGun" DIR_SEP;
+  const std::string root = File::GetUserPath(D_DUMPDEBUG_IDX) + "PrimedGun" DIR_SEP;
   File::CreateFullPath(root);
 
   const auto now = std::chrono::system_clock::now();
@@ -69,7 +69,7 @@ void Flush(const char* reason)
   File::IOFile file(path, "w");
   if (!file)
   {
-    ERROR_LOG_FMT(POWERPC, "PrimeGun PPC trace failed to open {}", path);
+    ERROR_LOG_FMT(POWERPC, "PrimedGun PPC trace failed to open {}", path);
     s_flushing.store(false);
     return;
   }
@@ -86,7 +86,7 @@ void Flush(const char* reason)
     return a.first < b.first;
   });
 
-  std::fprintf(file.GetHandle(), "PrimeGun PPC JIT block trace\n");
+  std::fprintf(file.GetHandle(), "PrimedGun PPC JIT block trace\n");
   std::fprintf(file.GetHandle(), "Reason: %s\n", reason);
   std::fprintf(file.GetHandle(), "Started: %s\n",
                fmt::format("{:%Y-%m-%d %H:%M:%S}", s_started_wall_time).c_str());
@@ -109,8 +109,8 @@ void Flush(const char* reason)
   for (std::size_t i = 0; i < recorded; ++i)
     std::fprintf(file.GetHandle(), "%08x\n", s_entries[i].pc);
 
-  NOTICE_LOG_FMT(POWERPC, "PrimeGun PPC trace wrote {}", path);
-  Core::DisplayMessage(fmt::format("PrimeGun PPC trace wrote {}", path), 5000);
+  NOTICE_LOG_FMT(POWERPC, "PrimedGun PPC trace wrote {}", path);
+  Core::DisplayMessage(fmt::format("PrimedGun PPC trace wrote {}", path), 5000);
   s_flushing.store(false);
 }
 }  // namespace
@@ -147,8 +147,8 @@ void Start()
   s_started_steady_time = std::chrono::steady_clock::now();
   s_end_time = s_started_steady_time + TRACE_DURATION;
   s_active.store(1, std::memory_order_release);
-  NOTICE_LOG_FMT(POWERPC, "PrimeGun PPC trace started");
-  Core::DisplayMessage("PrimeGun PPC trace started", 2500);
+  NOTICE_LOG_FMT(POWERPC, "PrimedGun PPC trace started");
+  Core::DisplayMessage("PrimedGun PPC trace started", 2500);
 }
 
 void Stop()
@@ -181,4 +181,4 @@ void TraceBlockFromJit(u32 pc)
       Flush("10 second capture complete");
   }
 }
-}  // namespace PrimeGun::PPCTrace
+}  // namespace PrimedGun::PPCTrace

@@ -1,4 +1,4 @@
-// Copyright 2026 PrimeGun Project
+// Copyright 2026 PrimedGun Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
@@ -9,7 +9,7 @@ class CPUThreadGuard;
 class System;
 }  // namespace Core
 
-namespace PrimeGun
+namespace PrimedGun
 {
 struct RuntimeSettings
 {
@@ -63,4 +63,4 @@ bool IsGameplayInputActive();
 bool IsOrbitLockActive();
 void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard);
 void ResetNativeRuntime();
-}  // namespace PrimeGun
+}  // namespace PrimedGun

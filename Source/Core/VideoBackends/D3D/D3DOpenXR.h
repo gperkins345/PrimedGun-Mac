@@ -35,7 +35,7 @@ struct XREyeSwapchain
   std::vector<std::unique_ptr<DXFramebuffer>> framebuffers;
 };
 
-struct XRPrimeGunOverlaySwapchain
+struct XRPrimedGunOverlaySwapchain
 {
   XrSwapchain swapchain = XR_NULL_HANDLE;
   uint32_t width = 0;
@@ -46,7 +46,7 @@ struct XRPrimeGunOverlaySwapchain
   std::vector<XrSwapchainImageD3D11KHR> images;
 };
 
-struct XRPrimeGunLaserSwapchain
+struct XRPrimedGunLaserSwapchain
 {
   XrSwapchain swapchain = XR_NULL_HANDLE;
   bool texture_ready = false;
@@ -97,17 +97,17 @@ private:
   bool CreateSwapchains();
 
   void DestroySwapchains();
-  bool EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_t generation,
+  bool EnsurePrimedGunOverlaySwapchain(uint32_t content_kind, uint32_t generation,
                                       uint32_t width, uint32_t height,
                                       const std::vector<uint32_t>& pixels);
-  void DestroyPrimeGunOverlaySwapchain();
-  bool EnsurePrimeGunLaserSwapchain();
-  void DestroyPrimeGunLaserSwapchain();
-  bool AppendPrimeGunOverlayLayers(std::vector<XrCompositionLayerBaseHeader*>* layers);
+  void DestroyPrimedGunOverlaySwapchain();
+  bool EnsurePrimedGunLaserSwapchain();
+  void DestroyPrimedGunLaserSwapchain();
+  bool AppendPrimedGunOverlayLayers(std::vector<XrCompositionLayerBaseHeader*>* layers);
 
   std::array<XREyeSwapchain, 2> m_eye_swapchains{};
-  XRPrimeGunOverlaySwapchain m_primegun_overlay_swapchain{};
-  XRPrimeGunLaserSwapchain m_primegun_laser_swapchain{};
+  XRPrimedGunOverlaySwapchain m_primegun_overlay_swapchain{};
+  XRPrimedGunLaserSwapchain m_primegun_laser_swapchain{};
 
   // Image index selected by xrAcquireSwapchainImage for the current frame.
   std::array<uint32_t, 2> m_acquired_image_index{0, 0};

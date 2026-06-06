@@ -1,7 +1,7 @@
-// Copyright 2026 PrimeGun Project
+// Copyright 2026 PrimedGun Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/PrimeGun/NativeRuntime.h"
+#include "Core/PrimedGun/NativeRuntime.h"
 
 #include <algorithm>
 #include <atomic>
@@ -30,14 +30,14 @@
 #include "Core/PowerPC/MMU.h"
 #include "Core/System.h"
 
-#include "Core/PrimeGun/PrimeGunBuiltinPatches.inc"
+#include "Core/PrimedGun/PrimedGunBuiltinPatches.inc"
 
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/HiresTextures.h"
 #include "VideoCommon/TextureCacheBase.h"
 #include "VideoCommon/VideoConfig.h"
 
-namespace PrimeGun
+namespace PrimedGun
 {
 namespace
 {
@@ -138,6 +138,10 @@ constexpr u32 FINAL_INPUT_RIGHT_STICK_X_PRESS = FINAL_INPUT_OFFSET + 0x22u;
 constexpr u32 FINAL_INPUT_RIGHT_STICK_Y_PRESS = FINAL_INPUT_OFFSET + 0x23u;
 constexpr u32 FINAL_INPUT_DPAD_HELD_0 = FINAL_INPUT_OFFSET + 0x2Cu;
 constexpr u32 FINAL_INPUT_DPAD_HELD_1 = FINAL_INPUT_OFFSET + 0x2Du;
+constexpr u32 STATE_MANAGER_PLAYER_STATE_OFFSET = 0x8B8u;
+constexpr u32 PLAYER_STATE_CURRENT_VISOR_OFFSET = 0x14u;
+constexpr u32 PLAYER_STATE_TRANSITION_VISOR_OFFSET = 0x18u;
+constexpr u32 PLAYER_STATE_SCAN_VISOR = 2u;
 constexpr u32 FINAL_INPUT_DPAD_PRESSED_0 = FINAL_INPUT_OFFSET + 0x2Eu;
 constexpr u32 PLAYER_DISABLE_INPUT_FLAGS_OFFSET = 0x9C6u;
 constexpr u8 PLAYER_DISABLE_INPUT_MASK = 0x04u;
@@ -377,7 +381,7 @@ bool PatchGroupEnabled(const RuntimeSettings& settings, u32 group)
 
 void ParseBuiltinPatches()
 {
-  std::string_view text{kPrimeGunBuiltinPatches};
+  std::string_view text{kPrimedGunBuiltinPatches};
   u32 current_group = PatchUnknown;
   while (!text.empty())
   {
@@ -406,7 +410,7 @@ void ParseBuiltinPatches()
       continue;
     }
 
-    // PrimeGun's built-in patch block currently uses AR 04 dword writes only.
+    // PrimedGun's built-in patch block currently uses AR 04 dword writes only.
     if (static_cast<u8>(command >> 24) != 0x04)
       continue;
 
@@ -596,13 +600,52 @@ void WriteBasis9(const Core::CPUThreadGuard& guard, u32 address, const Matrix3x4
   }
 }
 
+struct ScanVisorInfo
+{
+  bool active = false;
+  bool real_state = false;
+  u32 player_state = 0;
+  u32 current_visor = 0xffffffffu;
+  u32 transition_visor = 0xffffffffu;
+  u32 proxy_visor = 0xffffffffu;
+};
+
+ScanVisorInfo ReadScanVisorInfo(const Core::CPUThreadGuard& guard, u32 player)
+{
+  ScanVisorInfo info{};
+  if (player < 0x80000000u)
+    return info;
+
+  if (TryReadU32(guard, ADDRESS.state_manager + STATE_MANAGER_PLAYER_STATE_OFFSET,
+                 &info.player_state) &&
+      info.player_state >= 0x80000000u &&
+      TryReadU32(guard, info.player_state + PLAYER_STATE_CURRENT_VISOR_OFFSET,
+                 &info.current_visor))
+  {
+    TryReadU32(guard, info.player_state + PLAYER_STATE_TRANSITION_VISOR_OFFSET,
+               &info.transition_visor);
+
+    if (info.current_visor == PLAYER_STATE_SCAN_VISOR ||
+        info.transition_visor == PLAYER_STATE_SCAN_VISOR)
+    {
+      info.active = true;
+      info.real_state = true;
+      return info;
+    }
+  }
+
+  if (TryReadU32(guard, player + PLAYER_VISOR_STATE_OFFSET, &info.proxy_visor) &&
+      info.proxy_visor == 1)
+  {
+    info.active = true;
+  }
+
+  return info;
+}
+
 bool ScanVisorActive(const Core::CPUThreadGuard& guard, u32 player)
 {
-  if (player < 0x80000000u)
-    return false;
-
-  u32 visor = 0;
-  return TryReadU32(guard, player + PLAYER_VISOR_STATE_OFFSET, &visor) && visor == 1;
+  return ReadScanVisorInfo(guard, player).active;
 }
 
 bool PlayerIsFirstPersonUnmorphed(const Core::CPUThreadGuard& guard, u32 player)
@@ -748,32 +791,32 @@ void LogModeProbe(const Core::CPUThreadGuard& guard, u32 player, bool force)
   s_have_mode_probe_words = true;
 
   NOTICE_LOG_FMT(CORE,
-                 "PrimeGun mode_probe player={:08X} menu={} camera={} morph={} input_flags={:02X} "
+                 "PrimedGun mode_probe player={:08X} menu={} camera={} morph={} input_flags={:02X} "
                  "move={} visor={} gun_alpha={:.3f} holster={} game_state={:08X} camera_mgr={:08X}",
                  player, gameflow_menu, camera_state, morph_state, input_flags, movement_state,
                  visor_state, gun_alpha, holster_state, game_state, camera_manager);
   NOTICE_LOG_FMT(CORE,
-                 "PrimeGun mode_probe player+2E0: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 "PrimedGun mode_probe player+2E0: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
                  player_words[0], player_words[1], player_words[2], player_words[3],
                  player_words[4], player_words[5], player_words[6], player_words[7]);
   NOTICE_LOG_FMT(CORE,
-                 "PrimeGun mode_probe state+800: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 "PrimedGun mode_probe state+800: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
                  state_words[0], state_words[1], state_words[2], state_words[3], state_words[4],
                  state_words[5], state_words[6], state_words[7]);
   NOTICE_LOG_FMT(CORE,
-                 "PrimeGun mode_probe game+000: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 "PrimedGun mode_probe game+000: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
                  game_words_0[0], game_words_0[1], game_words_0[2], game_words_0[3],
                  game_words_0[4], game_words_0[5], game_words_0[6], game_words_0[7]);
   NOTICE_LOG_FMT(CORE,
-                 "PrimeGun mode_probe game+080: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 "PrimedGun mode_probe game+080: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
                  game_words_80[0], game_words_80[1], game_words_80[2], game_words_80[3],
                  game_words_80[4], game_words_80[5], game_words_80[6], game_words_80[7]);
   NOTICE_LOG_FMT(CORE,
-                 "PrimeGun mode_probe game+100: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 "PrimedGun mode_probe game+100: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
                  game_words_100[0], game_words_100[1], game_words_100[2], game_words_100[3],
                  game_words_100[4], game_words_100[5], game_words_100[6], game_words_100[7]);
   NOTICE_LOG_FMT(CORE,
-                 "PrimeGun mode_probe camera+000: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 "PrimedGun mode_probe camera+000: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
                  camera_words[0], camera_words[1], camera_words[2], camera_words[3],
                  camera_words[4], camera_words[5], camera_words[6], camera_words[7]);
 }
@@ -894,6 +937,46 @@ bool GunAimDirectionFromMatrix(const Matrix3x4& mat, float* x, float* y, float* 
   *y = mat.m[5];
   *z = mat.m[9];
   return Normalize3(*x, *y, *z);
+}
+
+bool RemoveRollFromAimBasis(Matrix3x4* mat)
+{
+  float forward_x = mat->m[1];
+  float forward_y = mat->m[5];
+  float forward_z = mat->m[9];
+  if (!Normalize3(forward_x, forward_y, forward_z))
+    return false;
+
+  constexpr float world_up_x = 0.0f;
+  constexpr float world_up_y = 0.0f;
+  constexpr float world_up_z = 1.0f;
+
+  float right_x = forward_y * world_up_z - forward_z * world_up_y;
+  float right_y = forward_z * world_up_x - forward_x * world_up_z;
+  float right_z = forward_x * world_up_y - forward_y * world_up_x;
+  if (!Normalize3(right_x, right_y, right_z))
+  {
+    right_x = -1.0f;
+    right_y = 0.0f;
+    right_z = 0.0f;
+  }
+
+  float up_x = right_y * forward_z - right_z * forward_y;
+  float up_y = right_z * forward_x - right_x * forward_z;
+  float up_z = right_x * forward_y - right_y * forward_x;
+  if (!Normalize3(up_x, up_y, up_z))
+    return false;
+
+  mat->At(0, 0) = right_x;
+  mat->At(1, 0) = right_y;
+  mat->At(2, 0) = right_z;
+  mat->At(0, 1) = forward_x;
+  mat->At(1, 1) = forward_y;
+  mat->At(2, 1) = forward_z;
+  mat->At(0, 2) = up_x;
+  mat->At(1, 2) = up_y;
+  mat->At(2, 2) = up_z;
+  return true;
 }
 
 bool TargetUidStillExists(const Core::CPUThreadGuard& guard, u32 state_manager, u16 uid,
@@ -1514,7 +1597,8 @@ void UpdateReticleBillboard(const Core::CPUThreadGuard& guard,
                             const Common::VR::OpenXRInputSnapshot& snapshot, u32 player,
                             float yaw_delta_deg)
 {
-  if (ScanVisorActive(guard, player) || !snapshot.head_pose.valid)
+  const ScanVisorInfo scan_info = ReadScanVisorInfo(guard, player);
+  if (!snapshot.head_pose.valid)
   {
     TryWriteU32(guard, RETICLE_BILLBOARD_SCRATCH, 0);
     return;
@@ -1525,8 +1609,12 @@ void UpdateReticleBillboard(const Core::CPUThreadGuard& guard,
 
   const Matrix3x4 hmd =
       PoseToPrimeMatrix(adjusted_hmd, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+  Matrix3x4 billboard_basis = hmd;
+  if (scan_info.active)
+    RemoveRollFromAimBasis(&billboard_basis);
+
   TryWriteU32(guard, RETICLE_BILLBOARD_SCRATCH, 1);
-  WriteBasis9(guard, RETICLE_BILLBOARD_SCRATCH + 4, hmd);
+  WriteBasis9(guard, RETICLE_BILLBOARD_SCRATCH + 4, billboard_basis);
 }
 
 bool HmdPitchFromSnapshot(const Common::VR::OpenXRInputSnapshot& snapshot, float yaw_delta_deg,
@@ -1601,7 +1689,8 @@ void UpdateScanTargetingFromHmd(const Core::CPUThreadGuard& guard,
                                 const Common::VR::OpenXRInputSnapshot& snapshot, u32 state_manager,
                                 u32 player, const RuntimeSettings& settings, float yaw_delta_deg)
 {
-  if (!ScanVisorActive(guard, player))
+  const ScanVisorInfo scan_info = ReadScanVisorInfo(guard, player);
+  if (!scan_info.active)
     return;
 
   Matrix3x4 hmd = {};
@@ -1611,8 +1700,16 @@ void UpdateScanTargetingFromHmd(const Core::CPUThreadGuard& guard,
     return;
   }
 
-  UpdateGunTargeting(guard, state_manager, player, player, player + ADDRESS.transform_offset, hmd,
-                     settings);
+  GunTargetPick pick = {};
+  if (PickGunRayTarget(guard, state_manager, player, player, player + ADDRESS.transform_offset, hmd,
+                       settings, false, &pick))
+  {
+    WriteGunTargetScratch(guard, player, pick.uid);
+  }
+  else
+  {
+    WriteGunTargetScratch(guard, player, 0xffffu);
+  }
 }
 
 void UpdateXrDpad(const Core::CPUThreadGuard& guard,
@@ -1885,25 +1982,25 @@ void UpdateDirectionalMovement(const Core::CPUThreadGuard& guard,
 #endif
 
 #ifdef ENABLE_VR
-std::string PrimeGunCannonActiveFolder()
+std::string PrimedGunCannonActiveFolder()
 {
   return File::GetUserPath(D_HIRESTEXTURES_IDX) + PRIMEGUN_CANNON_PACK_FOLDER + DIR_SEP;
 }
 
-std::string PrimeGunCannonLibraryFolderForSlot(u32 slot)
+std::string PrimedGunCannonLibraryFolderForSlot(u32 slot)
 {
   return File::GetUserPath(D_LOAD_IDX) + PRIMEGUN_CANNON_LIBRARY_FOLDER + DIR_SEP + "slot_" +
          std::to_string(slot) + DIR_SEP;
 }
 
-std::string PrimeGunCannonActivePath(std::string_view texture_name, std::string_view extension)
+std::string PrimedGunCannonActivePath(std::string_view texture_name, std::string_view extension)
 {
-  return PrimeGunCannonActiveFolder() + std::string(texture_name) + std::string(extension);
+  return PrimedGunCannonActiveFolder() + std::string(texture_name) + std::string(extension);
 }
 
-std::string PrimeGunCannonSourcePath(u32 slot, std::string_view texture_name)
+std::string PrimedGunCannonSourcePath(u32 slot, std::string_view texture_name)
 {
-  const std::string slot_folder = PrimeGunCannonLibraryFolderForSlot(slot);
+  const std::string slot_folder = PrimedGunCannonLibraryFolderForSlot(slot);
   const std::string dds_path = slot_folder + std::string(texture_name) + ".dds";
   if (File::Exists(dds_path))
     return dds_path;
@@ -1912,9 +2009,9 @@ std::string PrimeGunCannonSourcePath(u32 slot, std::string_view texture_name)
   return File::Exists(png_path) ? png_path : std::string();
 }
 
-void PrimeGunCannonRegisterPack()
+void PrimedGunCannonRegisterPack()
 {
-  const std::string active_folder = PrimeGunCannonActiveFolder();
+  const std::string active_folder = PrimedGunCannonActiveFolder();
   File::CreateDirs(active_folder);
   const std::string gameids_folder = active_folder + "gameids" DIR_SEP;
   File::CreateDirs(gameids_folder);
@@ -1924,7 +2021,7 @@ void PrimeGunCannonRegisterPack()
     File::CreateEmptyFile(gameids_path);
 }
 
-void PrimeGunCannonRefreshHiresMap(
+void PrimedGunCannonRefreshHiresMap(
     const std::array<std::string, PRIMEGUN_CANNON_TEXTURE_NAMES.size()>& active_paths)
 {
   for (const char* texture_name : PRIMEGUN_CANNON_TEXTURE_NAMES)
@@ -1945,15 +2042,15 @@ void PrimeGunCannonRefreshHiresMap(
   });
 }
 
-bool ApplyPrimeGunCannonTextureSlot(u32 slot)
+bool ApplyPrimedGunCannonTextureSlot(u32 slot)
 {
-  PrimeGunCannonRegisterPack();
+  PrimedGunCannonRegisterPack();
 
   for (const char* texture_name : PRIMEGUN_CANNON_TEXTURE_NAMES)
   {
-    File::Delete(PrimeGunCannonActivePath(texture_name, ".dds"),
+    File::Delete(PrimedGunCannonActivePath(texture_name, ".dds"),
                  File::IfAbsentBehavior::NoConsoleWarning);
-    File::Delete(PrimeGunCannonActivePath(texture_name, ".png"),
+    File::Delete(PrimedGunCannonActivePath(texture_name, ".png"),
                  File::IfAbsentBehavior::NoConsoleWarning);
   }
 
@@ -1964,18 +2061,18 @@ bool ApplyPrimeGunCannonTextureSlot(u32 slot)
     for (size_t i = 0; i < PRIMEGUN_CANNON_TEXTURE_NAMES.size(); ++i)
     {
       const std::string source_path =
-          PrimeGunCannonSourcePath(slot, PRIMEGUN_CANNON_TEXTURE_NAMES[i]);
+          PrimedGunCannonSourcePath(slot, PRIMEGUN_CANNON_TEXTURE_NAMES[i]);
       if (source_path.empty())
         continue;
 
       const std::filesystem::path source_fs(source_path);
       const std::string extension = source_fs.extension().string();
       const std::string dest_path =
-          PrimeGunCannonActivePath(PRIMEGUN_CANNON_TEXTURE_NAMES[i], extension);
+          PrimedGunCannonActivePath(PRIMEGUN_CANNON_TEXTURE_NAMES[i], extension);
       File::CreateFullPath(dest_path);
       if (!File::Copy(source_path, dest_path, true))
       {
-        WARN_LOG_FMT(VIDEO, "PrimeGun: Failed to apply cannon texture '{}' from '{}'.",
+        WARN_LOG_FMT(VIDEO, "PrimedGun: Failed to apply cannon texture '{}' from '{}'.",
                      PRIMEGUN_CANNON_TEXTURE_NAMES[i], source_path);
         continue;
       }
@@ -1990,7 +2087,7 @@ bool ApplyPrimeGunCannonTextureSlot(u32 slot)
 
   Config::SetBaseOrCurrent(Config::GFX_HIRES_TEXTURES, true);
   UpdateActiveConfig();
-  PrimeGunCannonRefreshHiresMap(active_paths);
+  PrimedGunCannonRefreshHiresMap(active_paths);
   return true;
 }
 
@@ -2350,7 +2447,7 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
   {
     if (s_vr_menu_selected_index <= 5)
     {
-      if (ApplyPrimeGunCannonTextureSlot(s_vr_menu_selected_index))
+      if (ApplyPrimedGunCannonTextureSlot(s_vr_menu_selected_index))
       {
         s_vr_cannon_texture_slot = s_vr_menu_selected_index;
         s_vr_cannon_texture_notice_until_frame = s_frame_counter + 180;
@@ -2369,9 +2466,9 @@ void SaveVrMenuSettingsNotice()
 
 void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
 {
-  const Common::VR::PrimeGunVrOverlayState previous =
-      Common::VR::OpenXRInputState::GetPrimeGunOverlay();
-  Common::VR::PrimeGunVrOverlayState overlay{};
+  const Common::VR::PrimedGunVrOverlayState previous =
+      Common::VR::OpenXRInputState::GetPrimedGunOverlay();
+  Common::VR::PrimedGunVrOverlayState overlay{};
   overlay.prompt_visible = settings.vr_overlays_enabled && prompt_visible;
   overlay.menu_visible = settings.vr_overlays_enabled && s_vr_menu_visible;
   overlay.menu_pointer_active = settings.vr_overlays_enabled && s_vr_menu_visible;
@@ -2413,7 +2510,7 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.rot_offset_x = settings.rot_offset_x;
   overlay.rot_offset_y = settings.rot_offset_y;
   overlay.rot_offset_z = settings.rot_offset_z;
-  Common::VR::OpenXRInputState::SetPrimeGunOverlay(overlay);
+  Common::VR::OpenXRInputState::SetPrimedGunOverlay(overlay);
 }
 
 void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettings* settings,
@@ -2541,11 +2638,11 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
   }
 
   PublishVrOverlayState(*settings, !s_vr_menu_visible && prompt_visible);
-  auto overlay = Common::VR::OpenXRInputState::GetPrimeGunOverlay();
+  auto overlay = Common::VR::OpenXRInputState::GetPrimedGunOverlay();
   overlay.menu_pointer_active = s_vr_menu_visible && pointer_active;
   overlay.pointer_x = pointer_x;
   overlay.pointer_y = pointer_y;
-  Common::VR::OpenXRInputState::SetPrimeGunOverlay(overlay);
+  Common::VR::OpenXRInputState::SetPrimedGunOverlay(overlay);
 }
 
 void UpdateHeightOnlyReset(const Common::VR::OpenXRInputSnapshot& snapshot,
@@ -2755,6 +2852,9 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
   if (!PlayerIsFirstPersonGunReady(guard, player) ||
       !TryReadU32(guard, player + ADDRESS.cannon_offset, &gun) || gun < 0x80000000u)
   {
+    if (scan_active)
+      UpdateReticleBillboard(guard, snapshot, player, yaw_delta_deg);
+
     if (scan_active)
       return;
 
@@ -3181,7 +3281,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   if (dynamic_patch_applied)
     system.GetJitInterface().InvalidateICache(0x80000000u, 0x00200000u, true);
 
-  // Recheck occasionally so user/loaded-state changes cannot silently undo PrimeGun patches.
+  // Recheck occasionally so user/loaded-state changes cannot silently undo PrimedGun patches.
   if (settings.builtin_patches_enabled &&
       (!s_patches_applied_this_boot || (s_frame_counter % 60) == 0))
   {
@@ -3223,7 +3323,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
       TryReadFloat(guard, player + 0x494u, &gun_alpha);
     }
     NOTICE_LOG_FMT(CORE,
-                   "PrimeGun gameplay_input={} player={:08X} camera={} morph={} "
+                   "PrimedGun gameplay_input={} player={:08X} camera={} morph={} "
                    "input_flags={:02X} move={} visor={} gun_alpha={:.3f} holster={}",
                    gameplay_input_active, player, camera_state, morph_state, input_flags,
                    movement_state, visor_state, gun_alpha, holster_state);
@@ -3299,7 +3399,7 @@ void ResetNativeRuntime()
   s_prompt_skipped_first_ready = false;
   s_prompt_waiting_for_second_ready = false;
 #ifdef ENABLE_VR
-  Common::VR::OpenXRInputState::SetPrimeGunOverlay({});
+  Common::VR::OpenXRInputState::SetPrimedGunOverlay({});
 #endif
   s_first_person_pitch_load_patch.applied = false;
   s_render_model_offset_patch.applied = false;
@@ -3385,4 +3485,4 @@ void MarkVrSettingsSaved()
   s_vr_menu_saved_notice_until_frame = s_frame_counter + 180;
   ++s_vr_menu_generation;
 }
-}  // namespace PrimeGun
+}  // namespace PrimedGun
