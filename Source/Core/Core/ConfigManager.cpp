@@ -54,6 +54,7 @@
 #include "Core/WC24PatchEngine.h"
 
 #include "VideoCommon/HiresTextures.h"
+#include "VideoCommon/VideoBackendBase.h"
 
 #include "DiscIO/Enums.h"
 #include "DiscIO/Volume.h"
@@ -65,6 +66,118 @@ constexpr std::string_view VR_SECTION_NAME = "Graphics.VR";
 constexpr std::string_view LEGACY_VR_SECTION_NAME = "GFX.VR";
 
 using VRSettingMap = std::map<std::string, std::string, Common::CaseInsensitiveLess>;
+
+static void EnsurePrimedGunDefaultGFXConfig()
+{
+  const std::string path = File::GetUserPath(F_GFXCONFIG_IDX);
+  if (File::Exists(path) && File::GetSize(path) > 0)
+    return;
+
+  File::CreateFullPath(path);
+  std::ofstream file(path, std::ios::trunc);
+  file << R"([Enhancements]
+ArbitraryMipmapDetection = True
+DisableCopyFilter = True
+ForceTrueColor = True
+PostProcessingShader = 
+ForceTextureFiltering = 0
+ForceFiltering = False
+OutputResampling = 0
+HDROutput = False
+[Hacks]
+BBoxEnable = False
+DeferEFBCopies = True
+EFBEmulateFormatChanges = False
+EFBScaledCopy = True
+EFBToTextureEnable = True
+SkipDuplicateXFBs = False
+XFBToTextureEnable = True
+EFBAccessEnable = False
+ForceProgressive = True
+EFBCopyEnable = False
+EFBCopyClearDisable = False
+ImmediateXFBEnable = True
+VISkip = False
+EFBAccessDeferInvalidation = False
+FastTextureSampling = True
+[Settings]
+BackendMultithreading = True
+FastDepthCalc = True
+InternalResolution = 4
+SaveTextureCacheToState = True
+MSAA = 0x00000001
+SSAA = False
+SWDrawEnd = 100000
+SWDrawStart = 0
+wideScreenHack = False
+DumpBaseTextures = False
+DumpMipTextures = False
+ShowSpeedColors = True
+AspectRatio = 1
+Crop = False
+UseXFB = False
+UseRealXFB = False
+SafeTextureCacheColorSamples = 512
+ShowFPS = False
+LogRenderTimeToFile = False
+OverlayStats = False
+OverlayProjStats = False
+DumpTextures = False
+HiresTextures = True
+ConvertHiresTextures = False
+CacheHiresTextures = False
+DumpEFBTarget = False
+FreeLook = False
+UseFFV1 = False
+EnablePixelLighting = False
+EFBScale = 9
+TexFmtOverlayEnable = False
+TexFmtOverlayCenter = False
+Wireframe = False
+DisableFog = False
+BorderlessFullscreen = False
+SWZComploc = True
+SWZFreeze = True
+SWDumpObjects = False
+SWDumpTevStages = False
+SWDumpTevTexFetches = False
+FrameDumpsResolutionType = 1
+EnableMods = False
+WaitForShadersBeforeStarting = True
+EnableGPUTextureDecoding = True
+ShaderCompilationMode = 0
+CPUCull = False
+UseLossless = False
+[Stereoscopy]
+StereoMode = 6
+StereoSwapEyes = False
+StereoDepth = 20
+StereoConvergencePercentage = 100
+[Hardware]
+Adapter = 0
+VSync = False
+[VR]
+UseVulkanMultiview = False
+CameraForward = 0.
+EnableOpenXR = True
+AutoVBIFromHMD = False
+DisableCPUCull = True
+OpcodeReplay = 0
+DontClearScreen = False
+ClearEFBCopies = 0
+ElementDepth = 0.0009999999
+Gamma = 1.
+LayerOffset = 0.0019999999
+VirtualScreen = True
+LoadCustomShaders = True
+AutoImmediateXFB = False
+LockHeadPosePerFrame = False
+ReferenceSpaceMode = 1
+MetroidVisorFix = True
+LimitOpenXRTo60FPS = False
+UnitsPerMeter = 1.5
+)";
+}
 
 static std::string GetVRGameINIPath(std::string_view game_id)
 {
@@ -87,6 +200,12 @@ static VRSettingMap LoadVRSettingsFromINI(std::string_view game_id)
 
   if (game_id.empty() || game_id == DEFAULT_GAME_ID)
     return values;
+
+  if (Common::CaseInsensitiveEquals(game_id, "GM8E01"))
+  {
+    values.insert_or_assign("UnitsPerMeter", "1.50");
+    values.insert_or_assign("CameraForward", "0.0");
+  }
 
   std::ifstream file(GetVRGameINIPath(game_id));
   if (!file.is_open())
@@ -132,6 +251,43 @@ static VRSettingMap LoadVRSettingsFromINI(std::string_view game_id)
   }
 
   return values;
+}
+
+static void ApplyPrimedGunMetroidDefaults(Common::IniFile* game_ini)
+{
+  auto* core = game_ini->GetOrCreateSection("Core");
+  core->Set("MMU", "True");
+  core->Set("EnableCheats", "False");
+  core->Set("CPUThread", "True");
+  core->Set("FPRF", "False");
+  core->Set("SyncGPU", "False");
+  core->Set("FastDiscSpeed", "True");
+  core->Set("DSPHLE", "True");
+  core->Set("GPUDeterminismMode", "auto");
+#ifdef _WIN32
+  core->Set("GFXBackend", "D3D");
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(ANDROID)
+  core->Set("GFXBackend", "Vulkan");
+#else
+  core->Set("GFXBackend", VideoBackendBase::GetDefaultBackendConfigName());
+#endif
+
+  auto* stereo = game_ini->GetOrCreateSection("Video_Stereoscopy");
+  stereo->Set("StereoDepthPercentage", "100");
+  stereo->Set("StereoConvergence", "20.00");
+  stereo->Set("StereoEFBMonoDepth", "False");
+
+  auto* video = game_ini->GetOrCreateSection("Video_Settings");
+  video->Set("ShaderCompilationMode", "0");
+  video->Set("MSAA", "0x00000001");
+  video->Set("SSAA", "False");
+  video->Set("InternalResolution", "4");
+  video->Set("EnableGPUTextureDecoding", "True");
+  video->Set("WaitForShadersBeforeStarting", "True");
+  video->Set("SafeTextureCacheColorSamples", "512");
+
+  auto* hacks = game_ini->GetOrCreateSection("Video_Hacks");
+  hacks->Set("EFBScaledCopy", "True");
 }
 
 template <typename T>
@@ -180,6 +336,7 @@ SConfig* SConfig::m_Instance;
 SConfig::SConfig()
 {
   LoadDefaults();
+  EnsurePrimedGunDefaultGFXConfig();
   // Make sure we have log manager
   LoadSettings();
 }
@@ -652,6 +809,8 @@ Common::IniFile SConfig::LoadDefaultGameIni(std::string_view id, std::optional<u
   Common::IniFile game_ini;
   for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(id, revision))
     game_ini.Load(File::GetSysDirectory() + GAMESETTINGS_DIR DIR_SEP + filename, true);
+  if (Common::CaseInsensitiveEquals(id, "GM8E01"))
+    ApplyPrimedGunMetroidDefaults(&game_ini);
   return game_ini;
 }
 
@@ -668,6 +827,8 @@ Common::IniFile SConfig::LoadGameIni(std::string_view id, std::optional<u16> rev
   Common::IniFile game_ini;
   for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(id, revision))
     game_ini.Load(File::GetSysDirectory() + GAMESETTINGS_DIR DIR_SEP + filename, true);
+  if (Common::CaseInsensitiveEquals(id, "GM8E01"))
+    ApplyPrimedGunMetroidDefaults(&game_ini);
   for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(id, revision))
     game_ini.Load(File::GetUserPath(D_GAMESETTINGS_IDX) + filename, true);
   return game_ini;

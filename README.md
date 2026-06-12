@@ -18,19 +18,30 @@ cmake --build build\Release --target dolphin-emu
 
 The built app is written to `Binary\x64\PrimedGun.exe`.
 
+## Build - Native Linux
+
+```bash
+git clone --recurse-submodules https://github.com/Nobbie248/PrimedGun.git
+cd PrimedGun
+git submodule update --init --recursive
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_VR=ON -DENABLE_VULKAN=ON
+cmake --build build --target dolphin-emu
+cmake --install build --prefix /usr/local
+```
+
 ## Build - Linux Flatpak
 
-The Flatpak package is built from `Flatpak/org.DolphinEmu.dolphin-emu.yml`. The
-manifest builds PrimedGun, installs the launcher wrapper, packages the desktop UI
-images into `/app/bin/assets`, and seeds the bundled Dolphin settings into the
-Flatpak sandbox on first launch.
+The Flatpak package is built from `Flatpak/org.PrimedGun.PrimedGun.yml`. The
+manifest builds PrimedGun, installs the PrimedGun launcher wrapper, packages the
+desktop UI images into `/app/bin/assets`, and packages the runtime files needed
+by the application.
 
 Install Flatpak Builder and the KDE runtime dependencies, then build from the
 repository root:
 
 ```bash
 flatpak install flathub org.kde.Platform//6.10 org.kde.Sdk//6.10
-flatpak-builder --user --force-clean --repo=flatpak-repo flatpak-build Flatpak/org.DolphinEmu.dolphin-emu.yml
+flatpak-builder --user --force-clean --repo=flatpak-repo flatpak-build Flatpak/org.PrimedGun.PrimedGun.yml
 flatpak build-bundle flatpak-repo PrimedGun.flatpak org.PrimedGun.PrimedGun
 ```
 
@@ -41,24 +52,17 @@ flatpak install --user --reinstall PrimedGun.flatpak
 flatpak run org.PrimedGun.PrimedGun
 ```
 
-Flatpak user files are not written beside the executable. Dolphin's writable
+Flatpak user files are not written beside the executable. PrimedGun's writable
 Flatpak folders are:
 
-- Config and INI files: `~/.var/app/org.PrimedGun.PrimedGun/config/dolphin-emu/`
+- Config and INI files: `~/.var/app/org.PrimedGun.PrimedGun/config/PrimedGun/`
 - User data, game settings, textures, resource packs, and memory cards:
-  `~/.var/app/org.PrimedGun.PrimedGun/data/dolphin-emu/`
+  `~/.var/app/org.PrimedGun.PrimedGun/data/PrimedGun/`
 
-On first launch, `Flatpak/dolphin-emu-wrapper` copies the bundled defaults from
-`/app/share/dolphin-emu/User` into those writable folders. Config, GameSettings,
-and GameSettingsVR are applied so the included PrimedGun defaults take effect.
-The wrapper also patches the Linux sandbox settings to use the Vulkan graphics
-backend and keeps the bundled cannon texture library available under
-`Load/PrimedGun/CannonTextures`. Save data folders such as `GC` are copied
-without overwriting existing files.
-
-Existing Flatpak installs are migrated with a versioned seed marker, so updated
-defaults can be applied after a package update without requiring users to delete
-their whole sandbox.
+PrimedGun's default Dolphin, VR, and Metroid Prime settings are built into the
+application. On a clean first launch, those defaults are used automatically. If
+user INI files already exist, the user's saved settings are respected instead of
+being overwritten.
 
 If an older broken Flatpak already created bad default settings, reinstalling the
 bundle may not be enough. To force a clean Flatpak sandbox, run:
@@ -79,7 +83,7 @@ For distribution, use the contents of `Binary\x64`. The important runtime pieces
 - `assets/`
 - `Licenses/`
 - `Sys/`
-- `User/`
+- `User/` for runtime data and packaged PrimedGun texture assets
 - `QtPlugins/`
 - `COPYING`
 - `qt.conf`

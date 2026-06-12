@@ -505,12 +505,15 @@ endif()
 
 option(PRIMEGUN_ENABLE_TRANSLATIONS "Build and deploy Dolphin UI translation files for PrimedGun" OFF)
 
+set_target_properties(dolphin-emu PROPERTIES
+  OUTPUT_NAME PrimedGun
+)
+
 if(WIN32)
   target_sources(dolphin-emu PRIVATE DolphinQt.manifest DolphinQt.rc)
 
   set_target_properties(dolphin-emu PROPERTIES
     DEBUG_POSTFIX    D
-    OUTPUT_NAME      PrimedGun
     WIN32_EXECUTABLE TRUE
   )
 
@@ -593,16 +596,23 @@ if(WIN32)
   endif()
 endif()
 
-file(GLOB_RECURSE primegun_user_default_files CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/Data/User/*")
-add_custom_target(primegun-user-defaults-copy
-  COMMAND ${CMAKE_COMMAND}
-    -DPRIMEGUN_USER_DEFAULTS_SOURCE="${CMAKE_SOURCE_DIR}/Data/User"
-    -DPRIMEGUN_USER_DEFAULTS_DEST="$<TARGET_FILE_DIR:dolphin-emu>/User"
-    -P "${CMAKE_SOURCE_DIR}/CMake/PrimedGunSeedUserDefaults.cmake"
-  DEPENDS ${primegun_user_default_files}
-  COMMENT "Seeding missing Data/User defaults into the runtime User directory"
+file(GLOB_RECURSE primegun_user_asset_files CONFIGURE_DEPENDS
+  "${CMAKE_SOURCE_DIR}/Data/User/Load/PrimedGun/*"
+  "${CMAKE_SOURCE_DIR}/Data/User/Load/Textures/000_PrimedGunCannon/*"
 )
-add_dependencies(dolphin-emu primegun-user-defaults-copy)
+add_custom_target(primegun-user-assets-copy
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:dolphin-emu>/User/Load"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_SOURCE_DIR}/Data/User/Load/PrimedGun"
+          "$<TARGET_FILE_DIR:dolphin-emu>/User/Load/PrimedGun"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:dolphin-emu>/User/Load/Textures"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_SOURCE_DIR}/Data/User/Load/Textures/000_PrimedGunCannon"
+          "$<TARGET_FILE_DIR:dolphin-emu>/User/Load/Textures/000_PrimedGunCannon"
+  DEPENDS ${primegun_user_asset_files}
+  COMMENT "Copying PrimedGun runtime texture assets"
+)
+add_dependencies(dolphin-emu primegun-user-assets-copy)
 
 # Handle localization
 if(PRIMEGUN_ENABLE_TRANSLATIONS)
@@ -658,92 +668,7 @@ if(GETTEXT_MSGFMT_EXECUTABLE)
 endif()
 endif()
 
-if(APPLE)
-  include(BundleUtilities)
-
-  # Ask for an application bundle.
-  set_target_properties(dolphin-emu PROPERTIES
-    MACOSX_BUNDLE true
-    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
-    XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY ""
-    OUTPUT_NAME DolphinQt
-    )
-
-  # Copy qt.conf into the bundle
-  target_sources(dolphin-emu PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/qt.conf")
-  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/qt.conf" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
-
-  # Copy icon into the bundle
-  target_sources(dolphin-emu PRIVATE "${CMAKE_SOURCE_DIR}/Data/Dolphin.icns")
-  set_source_files_properties("${CMAKE_SOURCE_DIR}/Data/Dolphin.icns" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
-
-  # Manually include plugins
-  find_package(Qt6QMacStylePlugin REQUIRED PATHS ${Qt6Widgets_DIR})
-  find_package(Qt6QCocoaIntegrationPlugin REQUIRED PATHS ${Qt6Gui_DIR})
-
-  # Copy Qt plugins into the bundle
-  get_target_property(qtcocoa_location Qt6::QCocoaIntegrationPlugin LOCATION)
-  target_sources(dolphin-emu PRIVATE "${qtcocoa_location}")
-  set_source_files_properties("${qtcocoa_location}" PROPERTIES MACOSX_PACKAGE_LOCATION MacOS/platforms)
-
-  get_target_property(qtmacstyle_location Qt6::QMacStylePlugin LOCATION)
-  target_sources(dolphin-emu PRIVATE "${qtmacstyle_location}")
-  set_source_files_properties("${qtmacstyle_location}" PROPERTIES MACOSX_PACKAGE_LOCATION MacOS/styles)
-
-  # Copy resources into the bundle
-  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/Data/Sys")
-  file(GLOB_RECURSE resources RELATIVE "${CMAKE_SOURCE_DIR}/Data" "${CMAKE_SOURCE_DIR}/Data/Sys/*")
-  foreach(res ${resources})
-    target_sources(dolphin-emu PRIVATE "${CMAKE_SOURCE_DIR}/Data/${res}")
-    get_filename_component(resdir "${res}" DIRECTORY)
-    set_source_files_properties("${CMAKE_SOURCE_DIR}/Data/${res}" PROPERTIES
-      MACOSX_PACKAGE_LOCATION "Resources/${resdir}")
-    source_group("Resources" FILES "${CMAKE_SOURCE_DIR}/Data/${res}")
-  endforeach()
-
-  include(DolphinInjectVersionInfo)
-  dolphin_inject_version_info(dolphin-emu)
-
-  # Copy MoltenVK into the bundle
-  if(ENABLE_VULKAN)
-    if(USE_BUNDLED_MOLTENVK)
-      add_dependencies(dolphin-emu MoltenVK)
-      ExternalProject_Get_Property(MoltenVK SOURCE_DIR)
-      target_sources(dolphin-emu PRIVATE "${SOURCE_DIR}/Package/Release/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib")
-      set_source_files_properties("${SOURCE_DIR}/Package/Release/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib" PROPERTIES MACOSX_PACKAGE_LOCATION Frameworks GENERATED ON)
-    else()
-      find_file(MOLTENVK_DYLIB NAMES libMoltenVK.dylib PATH_SUFFIXES lib)
-      if(NOT MOLTENVK_DYLIB)
-        message(FATAL_ERROR "Couldn't find libMoltenVK.dylib.  Enable USE_BUNDLED_MOLTENVK?")
-      endif()
-      target_sources(dolphin-emu PRIVATE ${MOLTENVK_DYLIB})
-      set_source_files_properties(${MOLTENVK_DYLIB} PROPERTIES MACOSX_PACKAGE_LOCATION Frameworks)
-    endif()
-  endif()
-
-  if(POSTPROCESS_BUNDLE)
-    # Update library references to make the bundle portable
-    include(DolphinPostprocessBundle)
-    dolphin_postprocess_bundle(dolphin-emu)
-    # Fix rpath
-    add_custom_command(TARGET dolphin-emu
-      POST_BUILD COMMAND
-      ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "@executable_path/../Frameworks/"
-      $<TARGET_FILE:dolphin-emu>)
-  endif()
-
-  if(MACOS_CODE_SIGNING)
-    add_custom_command(TARGET dolphin-emu
-      POST_BUILD
-      COMMAND "${CMAKE_SOURCE_DIR}/Tools/mac-codesign.sh"
-      "-e" "${CMAKE_CURRENT_SOURCE_DIR}/DolphinEmu$<$<CONFIG:Debug>:Debug>.entitlements"
-      "${MACOS_CODE_SIGNING_IDENTITY}"
-      "$<TARGET_BUNDLE_DIR:dolphin-emu>"
-    )
-  endif()
-else()
-  install(TARGETS dolphin-emu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-endif()
+install(TARGETS dolphin-emu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 if(USE_MGBA)
   target_sources(dolphin-emu PRIVATE

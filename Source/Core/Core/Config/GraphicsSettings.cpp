@@ -19,7 +19,8 @@ const Info<int> GFX_ADAPTER{{System::GFX, "Hardware", "Adapter"}, 0};
 // Graphics.Settings
 
 const Info<bool> GFX_WIDESCREEN_HACK{{System::GFX, "Settings", "wideScreenHack"}, false};
-const Info<AspectMode> GFX_ASPECT_RATIO{{System::GFX, "Settings", "AspectRatio"}, AspectMode::Auto};
+const Info<AspectMode> GFX_ASPECT_RATIO{{System::GFX, "Settings", "AspectRatio"},
+                                        AspectMode::ForceWide};
 const Info<int> GFX_CUSTOM_ASPECT_RATIO_WIDTH{{System::GFX, "Settings", "CustomAspectRatioWidth"},
                                               1};
 const Info<int> GFX_CUSTOM_ASPECT_RATIO_HEIGHT{{System::GFX, "Settings", "CustomAspectRatioHeight"},
@@ -36,7 +37,7 @@ const Info<float> GFX_WIDESCREEN_HEURISTIC_WIDESCREEN_RATIO{
     {System::GFX, "Settings", "WidescreenHeuristicWidescreenRatio"}, (16 / 9.f) / (4 / 3.f)};
 const Info<bool> GFX_CROP{{System::GFX, "Settings", "Crop"}, false};
 const Info<int> GFX_SAFE_TEXTURE_CACHE_COLOR_SAMPLES{
-    {System::GFX, "Settings", "SafeTextureCacheColorSamples"}, 128};
+    {System::GFX, "Settings", "SafeTextureCacheColorSamples"}, 512};
 const Info<bool> GFX_SHOW_FPS{{System::GFX, "Settings", "ShowFPS"}, false};
 const Info<bool> GFX_SHOW_FTIMES{{System::GFX, "Settings", "ShowFTimes"}, false};
 const Info<bool> GFX_SHOW_VPS{{System::GFX, "Settings", "ShowVPS"}, false};
@@ -58,11 +59,11 @@ const Info<bool> GFX_OVERLAY_SHADER_FLAGS{{System::GFX, "Settings", "OverlayShad
 const Info<bool> GFX_OVERLAY_SHADER_HUNTING{{System::GFX, "Settings", "OverlayShaderHunting"},
                                             false};
 const Info<bool> GFX_DUMP_TEXTURES{{System::GFX, "Settings", "DumpTextures"}, false};
-const Info<bool> GFX_DUMP_MIP_TEXTURES{{System::GFX, "Settings", "DumpMipTextures"}, true};
-const Info<bool> GFX_DUMP_BASE_TEXTURES{{System::GFX, "Settings", "DumpBaseTextures"}, true};
+const Info<bool> GFX_DUMP_MIP_TEXTURES{{System::GFX, "Settings", "DumpMipTextures"}, false};
+const Info<bool> GFX_DUMP_BASE_TEXTURES{{System::GFX, "Settings", "DumpBaseTextures"}, false};
 const Info<int> GFX_TEXTURE_PNG_COMPRESSION_LEVEL{
     {System::GFX, "Settings", "TexturePNGCompressionLevel"}, 6};
-const Info<bool> GFX_HIRES_TEXTURES{{System::GFX, "Settings", "HiresTextures"}, false};
+const Info<bool> GFX_HIRES_TEXTURES{{System::GFX, "Settings", "HiresTextures"}, true};
 const Info<bool> GFX_CACHE_HIRES_TEXTURES{{System::GFX, "Settings", "CacheHiresTextures"}, false};
 const Info<bool> GFX_DUMP_EFB_TARGET{{System::GFX, "Settings", "DumpEFBTarget"}, false};
 const Info<bool> GFX_DUMP_XFB_TARGET{{System::GFX, "Settings", "DumpXFBTarget"}, false};
@@ -79,12 +80,12 @@ const Info<FrameDumpResolutionType> GFX_FRAME_DUMPS_RESOLUTION_TYPE{
     FrameDumpResolutionType::XFBAspectRatioCorrectedResolution};
 const Info<int> GFX_PNG_COMPRESSION_LEVEL{{System::GFX, "Settings", "PNGCompressionLevel"}, 6};
 const Info<bool> GFX_ENABLE_GPU_TEXTURE_DECODING{
-    {System::GFX, "Settings", "EnableGPUTextureDecoding"}, false};
+    {System::GFX, "Settings", "EnableGPUTextureDecoding"}, true};
 const Info<bool> GFX_ENABLE_PIXEL_LIGHTING{{System::GFX, "Settings", "EnablePixelLighting"}, false};
 const Info<bool> GFX_FAST_DEPTH_CALC{{System::GFX, "Settings", "FastDepthCalc"}, true};
 const Info<u32> GFX_MSAA{{System::GFX, "Settings", "MSAA"}, 1};
 const Info<bool> GFX_SSAA{{System::GFX, "Settings", "SSAA"}, false};
-const Info<int> GFX_EFB_SCALE{{System::GFX, "Settings", "InternalResolution"}, 1};
+const Info<int> GFX_EFB_SCALE{{System::GFX, "Settings", "InternalResolution"}, 4};
 const Info<int> GFX_MAX_EFB_SCALE{{System::GFX, "Settings", "MaxInternalResolution"}, 12};
 const Info<bool> GFX_TEXFMT_OVERLAY_ENABLE{{System::GFX, "Settings", "TexFmtOverlayEnable"}, false};
 const Info<bool> GFX_TEXFMT_OVERLAY_CENTER{{System::GFX, "Settings", "TexFmtOverlayCenter"}, false};
@@ -102,7 +103,7 @@ const Info<int> GFX_COMMAND_BUFFER_EXECUTE_INTERVAL{
 
 const Info<bool> GFX_SHADER_CACHE{{System::GFX, "Settings", "ShaderCache"}, true};
 const Info<bool> GFX_WAIT_FOR_SHADERS_BEFORE_STARTING{
-    {System::GFX, "Settings", "WaitForShadersBeforeStarting"}, false};
+    {System::GFX, "Settings", "WaitForShadersBeforeStarting"}, true};
 const Info<ShaderCompilationMode> GFX_SHADER_COMPILATION_MODE{
     {System::GFX, "Settings", "ShaderCompilationMode"}, ShaderCompilationMode::Synchronous};
 const Info<int> GFX_SHADER_COMPILER_THREADS{{System::GFX, "Settings", "ShaderCompilerThreads"}, 1};
@@ -148,7 +149,7 @@ const Info<bool> GFX_ENHANCE_FORCE_TRUE_COLOR{{System::GFX, "Enhancements", "For
 const Info<bool> GFX_ENHANCE_DISABLE_COPY_FILTER{{System::GFX, "Enhancements", "DisableCopyFilter"},
                                                  true};
 const Info<bool> GFX_ENHANCE_ARBITRARY_MIPMAP_DETECTION{
-    {System::GFX, "Enhancements", "ArbitraryMipmapDetection"}, false};
+    {System::GFX, "Enhancements", "ArbitraryMipmapDetection"}, true};
 const Info<float> GFX_ENHANCE_ARBITRARY_MIPMAP_DETECTION_THRESHOLD{
     {System::GFX, "Enhancements", "ArbitraryMipmapDetectionThreshold"}, 14.0f};
 const Info<bool> GFX_ENHANCE_HDR_OUTPUT{{System::GFX, "Enhancements", "HDROutput"}, false};
@@ -170,7 +171,8 @@ const Info<float> GFX_CC_HDR_PAPER_WHITE_NITS{{System::GFX, "ColorCorrection", "
 
 // Graphics.Stereoscopy
 
-const Info<StereoMode> GFX_STEREO_MODE{{System::GFX, "Stereoscopy", "StereoMode"}, StereoMode::Off};
+const Info<StereoMode> GFX_STEREO_MODE{{System::GFX, "Stereoscopy", "StereoMode"},
+                                       StereoMode::OpenXR};
 const Info<bool> GFX_STEREO_PER_EYE_RESOLUTION_FULL{
     {System::GFX, "Stereoscopy", "StereoPerEyeResolutionFull"}, false};
 const Info<float> GFX_STEREO_DEPTH{{System::GFX, "Stereoscopy", "StereoDepth"}, 20};
@@ -186,8 +188,8 @@ const Info<float> GFX_STEREO_DEPTH_PERCENTAGE{{System::GFX, "Stereoscopy", "Ster
 // Graphics.VR
 
 const Info<bool> GFX_VR_ENABLE_OPENXR{{System::GFX, "VR", "EnableOpenXR"}, true};
-const Info<bool> GFX_VR_AUTO_IMMEDIATE_XFB{{System::GFX, "VR", "AutoImmediateXFB"}, true};
-const Info<float> GFX_VR_UNITS_PER_METER{{System::GFX, "VR", "UnitsPerMeter"}, 1.0f};
+const Info<bool> GFX_VR_AUTO_IMMEDIATE_XFB{{System::GFX, "VR", "AutoImmediateXFB"}, false};
+const Info<float> GFX_VR_UNITS_PER_METER{{System::GFX, "VR", "UnitsPerMeter"}, 1.5f};
 const Info<float> GFX_VR_LEAN_BACK_ANGLE{{System::GFX, "VR", "LeanBackAngle"}, 0.0f};
 const Info<bool> GFX_VR_ENABLE_CAMERA_FORWARD{{System::GFX, "VR", "EnableCameraForward"}, true};
 const Info<float> GFX_VR_CAMERA_FORWARD{{System::GFX, "VR", "CameraForward"}, 0.0f};
@@ -198,16 +200,16 @@ const Info<float> GFX_VR_SCREEN_DISTANCE{{System::GFX, "VR", "ScreenDistance"}, 
 const Info<float> GFX_VR_SCREEN_SIZE{{System::GFX, "VR", "ScreenSize"}, 1.5f};
 const Info<float> GFX_VR_HEAD_LOCKED_CURVATURE{{System::GFX, "VR", "HeadLockedCurvature"}, 0.0f};
 const Info<bool> GFX_VR_DONT_CLEAR_SCREEN{{System::GFX, "VR", "DontClearScreen"}, false};
-const Info<bool> GFX_VR_LOAD_CUSTOM_SHADERS{{System::GFX, "VR", "LoadCustomShaders"}, false};
+const Info<bool> GFX_VR_LOAD_CUSTOM_SHADERS{{System::GFX, "VR", "LoadCustomShaders"}, true};
 const Info<bool> GFX_VR_ENABLE_OPENXR_CONFIG_SCENE{{System::GFX, "VR", "EnableOpenXRConfigScene"},
                                                    true};
-const Info<bool> GFX_VR_DISABLE_CPU_CULL{{System::GFX, "VR", "DisableCPUCull"}, false};
+const Info<bool> GFX_VR_DISABLE_CPU_CULL{{System::GFX, "VR", "DisableCPUCull"}, true};
 const Info<OpenXROpcodeReplayMode> GFX_VR_OPCODE_REPLAY{
     {System::GFX, "VR", "OpcodeReplay"}, OpenXROpcodeReplayMode::Off};
 const Info<OpenXRMirrorView> GFX_VR_MIRROR_VIEW{{System::GFX, "VR", "MirrorView"},
                                                 OpenXRMirrorView::BothEyes};
 const Info<OpenXRReferenceSpaceMode> GFX_VR_REFERENCE_SPACE_MODE{
-    {System::GFX, "VR", "ReferenceSpaceMode"}, OpenXRReferenceSpaceMode::Local};
+    {System::GFX, "VR", "ReferenceSpaceMode"}, OpenXRReferenceSpaceMode::StageHeight};
 const Info<OpenXRTrackingMode> GFX_VR_TRACKING_MODE{{System::GFX, "VR", "TrackingMode"},
                                                     OpenXRTrackingMode::Full6DoF};
 const Info<bool> GFX_VR_USE_OPENXR_PLAY_SPACE_CENTER{
@@ -239,7 +241,7 @@ const Info<bool> GFX_VR_AR_MODE_DEBUG{{System::GFX, "VR", "ARModeDebug"}, false}
 const Info<float> GFX_VR_AR_BACKGROUND_ALPHA{{System::GFX, "VR", "ARBackgroundAlpha"}, 0.0f};
 const Info<float> GFX_VR_GAMMA{{System::GFX, "VR", "Gamma"}, 1.0f};
 const Info<int> GFX_VR_CLEAR_EFB_COPIES{{System::GFX, "VR", "ClearEFBCopies"}, 0};
-const Info<bool> GFX_VR_USE_VULKAN_MULTIVIEW{{System::GFX, "VR", "UseVulkanMultiview"}, true};
+const Info<bool> GFX_VR_USE_VULKAN_MULTIVIEW{{System::GFX, "VR", "UseVulkanMultiview"}, false};
 const Info<bool> GFX_VR_ANDROID_DIRECT_TO_HMD{{System::GFX, "VR", "AndroidDirectToHMD"},
                                               DEFAULT_VR_ANDROID_DIRECT_TO_HMD};
 const Info<bool> GFX_VR_QUEST_CPU_LEVEL_5_HINT{{System::GFX, "VR", "QuestCpuLevel5Hint"},
@@ -259,7 +261,7 @@ const Info<bool> GFX_HACK_DEFER_EFB_COPIES{{System::GFX, "Hacks", "DeferEFBCopie
 const Info<bool> GFX_HACK_IMMEDIATE_XFB{{System::GFX, "Hacks", "ImmediateXFBEnable"},
                                         DEFAULT_IMMEDIATE_XFB};
 const Info<bool> GFX_HACK_CAP_IMMEDIATE_XFB{{System::GFX, "Hacks", "CapImmediateXFB"}, false};
-const Info<bool> GFX_HACK_SKIP_DUPLICATE_XFBS{{System::GFX, "Hacks", "SkipDuplicateXFBs"}, true};
+const Info<bool> GFX_HACK_SKIP_DUPLICATE_XFBS{{System::GFX, "Hacks", "SkipDuplicateXFBs"}, false};
 const Info<bool> GFX_HACK_EARLY_XFB_OUTPUT{{System::GFX, "Hacks", "EarlyXFBOutput"}, true};
 const Info<bool> GFX_HACK_COPY_EFB_SCALED{{System::GFX, "Hacks", "EFBScaledCopy"}, true};
 const Info<bool> GFX_HACK_EFB_EMULATE_FORMAT_CHANGES{

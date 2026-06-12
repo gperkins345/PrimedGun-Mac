@@ -37,6 +37,20 @@
 
 namespace Config
 {
+namespace
+{
+std::string GetPrimedGunDefaultBackend()
+{
+#ifdef _WIN32
+  return "D3D";
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(ANDROID)
+  return "Vulkan";
+#else
+  return VideoBackendBase::GetDefaultBackendConfigName();
+#endif
+}
+}  // namespace
+
 // Main.Core
 
 const Info<bool> MAIN_SKIP_IPL{{System::Main, "Core", "SkipIPL"}, true};
@@ -61,8 +75,8 @@ constexpr bool DEFAULT_CPU_THREAD = true;
 #else
 constexpr bool DEFAULT_CPU_THREAD = false;
 #endif
-const Info<bool> MAIN_CPU_THREAD{{System::Main, "Core", "CPUThread"}, DEFAULT_CPU_THREAD};
-const Info<bool> MAIN_LOAD_GAME_INTO_MEMORY{{System::Main, "Core", "LoadGameIntoMemory"}, false};
+const Info<bool> MAIN_CPU_THREAD{{System::Main, "Core", "CPUThread"}, true};
+const Info<bool> MAIN_LOAD_GAME_INTO_MEMORY{{System::Main, "Core", "LoadGameIntoMemory"}, true};
 const Info<bool> MAIN_SYNC_ON_SKIP_IDLE{{System::Main, "Core", "SyncOnSkipIdle"}, true};
 const Info<std::string> MAIN_DEFAULT_ISO{{System::Main, "Core", "DefaultISO"}, ""};
 const Info<bool> MAIN_ENABLE_CHEATS{{System::Main, "Core", "EnableCheats"}, false};
@@ -75,7 +89,7 @@ const Info<AudioCommon::DPL2Quality> MAIN_DPL2_QUALITY{{System::Main, "Core", "D
 const Info<int> MAIN_AUDIO_LATENCY{{System::Main, "Core", "AudioLatency"}, 20};
 const Info<int> MAIN_AUDIO_BUFFER_SIZE{{System::Main, "Core", "AudioBufferSize"}, 80};
 const Info<bool> MAIN_AUDIO_FILL_GAPS{{System::Main, "Core", "AudioFillGaps"}, true};
-const Info<bool> MAIN_AUDIO_PRESERVE_PITCH{{System::Main, "Core", "AudioPreservePitch"}, false};
+const Info<bool> MAIN_AUDIO_PRESERVE_PITCH{{System::Main, "Core", "AudioPreservePitch"}, true};
 const Info<std::string> MAIN_MEMCARD_A_PATH{{System::Main, "Core", "MemcardAPath"}, ""};
 const Info<std::string> MAIN_MEMCARD_B_PATH{{System::Main, "Core", "MemcardBPath"}, ""};
 const Info<std::string>& GetInfoForMemcardPath(ExpansionInterface::Slot slot)
@@ -130,7 +144,7 @@ const Info<std::string>& GetInfoForGCIPathOverride(ExpansionInterface::Slot slot
 const Info<int> MAIN_MEMORY_CARD_SIZE{{System::Main, "Core", "MemoryCardSize"}, -1};
 
 const Info<ExpansionInterface::EXIDeviceType> MAIN_SLOT_A{
-    {System::Main, "Core", "SlotA"}, ExpansionInterface::EXIDeviceType::MemoryCardFolder};
+    {System::Main, "Core", "SlotA"}, ExpansionInterface::EXIDeviceType::MemoryCard};
 const Info<ExpansionInterface::EXIDeviceType> MAIN_SLOT_B{{System::Main, "Core", "SlotB"},
                                                           ExpansionInterface::EXIDeviceType::None};
 const Info<ExpansionInterface::EXIDeviceType> MAIN_SERIAL_PORT_1{
@@ -213,7 +227,7 @@ const Info<std::string> MAIN_WIIMOTE_AUTO_CONNECT_ADDRESSES{
 const Info<bool> MAIN_WIIMOTE_ENABLE_SPEAKER{{System::Main, "Core", "WiimoteEnableSpeaker"}, false};
 const Info<bool> MAIN_CONNECT_WIIMOTES_FOR_CONTROLLER_INTERFACE{
     {System::Main, "Core", "WiimoteControllerInterface"}, false};
-const Info<bool> MAIN_MMU{{System::Main, "Core", "MMU"}, false};
+const Info<bool> MAIN_MMU{{System::Main, "Core", "MMU"}, true};
 const Info<bool> MAIN_PAUSE_ON_PANIC{{System::Main, "Core", "PauseOnPanic"}, false};
 const Info<int> MAIN_BB_DUMP_PORT{{System::Main, "Core", "BBDumpPort"}, -1};
 const Info<bool> MAIN_SYNC_GPU{{System::Main, "Core", "SyncGPU"}, false};
@@ -239,15 +253,15 @@ constexpr bool DEFAULT_PRECISION_FRAME_TIMING = true;
 #endif
 const Info<bool> MAIN_PRECISION_FRAME_TIMING{{System::Main, "Core", "PrecisionFrameTiming"},
                                              DEFAULT_PRECISION_FRAME_TIMING};
-const Info<float> MAIN_OVERCLOCK{{System::Main, "Core", "Overclock"}, 1.0f};
+const Info<float> MAIN_OVERCLOCK{{System::Main, "Core", "Overclock"}, 1.11f};
 const Info<bool> MAIN_OVERCLOCK_ENABLE{{System::Main, "Core", "OverclockEnable"}, false};
-const Info<float> MAIN_VI_OVERCLOCK{{System::Main, "Core", "VIOverclock"}, 1.0f};
+const Info<float> MAIN_VI_OVERCLOCK{{System::Main, "Core", "VIOverclock"}, 1.11f};
 const Info<bool> MAIN_VI_OVERCLOCK_ENABLE{{System::Main, "Core", "VIOverclockEnable"}, false};
 const Info<bool> MAIN_RAM_OVERRIDE_ENABLE{{System::Main, "Core", "RAMOverrideEnable"}, false};
 const Info<u32> MAIN_MEM1_SIZE{{System::Main, "Core", "MEM1Size"}, Memory::MEM1_SIZE_RETAIL};
 const Info<u32> MAIN_MEM2_SIZE{{System::Main, "Core", "MEM2Size"}, Memory::MEM2_SIZE_RETAIL};
 const Info<std::string> MAIN_GFX_BACKEND{{System::Main, "Core", "GFXBackend"},
-                                         VideoBackendBase::GetDefaultBackendConfigName()};
+                                         GetPrimedGunDefaultBackend()};
 const Info<HSP::HSPDeviceType> MAIN_HSP_DEVICE{{System::Main, "Core", "HSPDevice"},
                                                HSP::HSPDeviceType::None};
 const Info<u32> MAIN_ARAM_EXPANSION_SIZE{{System::Main, "Core", "ARAMExpansionSize"}, 0x400000};
@@ -305,7 +319,7 @@ const Info<bool> MAIN_DISABLE_SCREENSAVER{{System::Main, "Display", "DisableScre
 
 // Main.DSP
 
-const Info<bool> MAIN_DSP_THREAD{{System::Main, "DSP", "DSPThread"}, false};
+const Info<bool> MAIN_DSP_THREAD{{System::Main, "DSP", "DSPThread"}, true};
 const Info<bool> MAIN_DSP_CAPTURE_LOG{{System::Main, "DSP", "CaptureLog"}, false};
 const Info<bool> MAIN_DSP_JIT{{System::Main, "DSP", "EnableJIT"}, true};
 const Info<bool> MAIN_DUMP_AUDIO{{System::Main, "DSP", "DumpAudio"}, false};
@@ -313,7 +327,7 @@ const Info<bool> MAIN_DUMP_AUDIO_SILENT{{System::Main, "DSP", "DumpAudioSilent"}
 const Info<bool> MAIN_DUMP_UCODE{{System::Main, "DSP", "DumpUCode"}, false};
 const Info<std::string> MAIN_AUDIO_BACKEND{{System::Main, "DSP", "Backend"},
                                            AudioCommon::GetDefaultSoundBackend()};
-const Info<int> MAIN_AUDIO_VOLUME{{System::Main, "DSP", "Volume"}, 100};
+const Info<int> MAIN_AUDIO_VOLUME{{System::Main, "DSP", "Volume"}, 90};
 const Info<bool> MAIN_AUDIO_MUTED{{System::Main, "DSP", "Muted"}, false};
 const Info<bool> MAIN_AUDIO_MUTE_ON_DISABLED_SPEED_LIMIT{
     {System::Main, "DSP", "MuteOnDisabledSpeedLimit"}, false};
@@ -527,7 +541,7 @@ const Info<bool> MAIN_MOVIE_SHOW_OSD{{System::Main, "Movie", "ShowMovieWindow"},
 
 // Main.Input
 
-const Info<bool> MAIN_INPUT_BACKGROUND_INPUT{{System::Main, "Input", "BackgroundInput"}, false};
+const Info<bool> MAIN_INPUT_BACKGROUND_INPUT{{System::Main, "Input", "BackgroundInput"}, true};
 
 // Main.SDL_Hints
 

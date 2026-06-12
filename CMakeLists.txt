@@ -171,7 +171,7 @@ include(RemoveCompileFlag)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 # Set up paths
-set(datadir ${CMAKE_INSTALL_FULL_DATADIR}/dolphin-emu CACHE PATH "datadir")
+set(datadir ${CMAKE_INSTALL_FULL_DATADIR}/primedgun CACHE PATH "datadir")
 add_definitions(-DDATA_DIR="${datadir}/")
 
 if(CMAKE_SYSROOT)
@@ -816,17 +816,10 @@ if (NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/Source/Core/Common/scmrev.h)
   file(TOUCH ${CMAKE_CURRENT_BINARY_DIR}/Source/Core/Common/scmrev.h)
 endif()
 
-if(APPLE)
-  file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/Source/Core)
-  if (NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/Source/Core/VersionInfo.plist)
-    file(TOUCH ${CMAKE_CURRENT_BINARY_DIR}/Source/Core/VersionInfo.plist)
-  endif()
-endif()
-
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/Flatpak)
-  if (NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/Flatpak/org.DolphinEmu.dolphin-emu.metainfo.xml)
-    file(TOUCH ${CMAKE_CURRENT_BINARY_DIR}/Flatpak/org.DolphinEmu.dolphin-emu.metainfo.xml)
+  if (NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/Flatpak/org.PrimedGun.PrimedGun.metainfo.xml)
+    file(TOUCH ${CMAKE_CURRENT_BINARY_DIR}/Flatpak/org.PrimedGun.PrimedGun.metainfo.xml)
   endif()
 endif()
 
@@ -837,7 +830,7 @@ endif()
 add_custom_target(
   dolphin_scmrev
   ${CMAKE_COMMAND} -DPROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR} -DPROJECT_BINARY_DIR=${PROJECT_BINARY_DIR} -DDISTRIBUTOR=${DISTRIBUTOR} -DDOLPHIN_DEFAULT_UPDATE_TRACK=${DOLPHIN_DEFAULT_UPDATE_TRACK} -DGIT_FOUND=${GIT_FOUND} -DGIT_EXECUTABLE=${GIT_EXECUTABLE} -DDOLPHIN_WC_REVISION=${DOLPHIN_WC_REVISION} -DDOLPHIN_WC_DESCRIBE=${DOLPHIN_WC_DESCRIBE} -DDOLPHIN_WC_BRANCH=${DOLPHIN_WC_BRANCH} -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET} -P ${CMAKE_CURRENT_SOURCE_DIR}/CMake/ScmRevGen.cmake
-  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/Source/Core/Common/scmrev.h" "${CMAKE_CURRENT_BINARY_DIR}/Source/Core/DolphinQt/Info.plist" "${CMAKE_CURRENT_BINARY_DIR}/Source/Core/MacUpdater/Info.plist" "${CMAKE_CURRENT_BINARY_DIR}/Flatpak/org.DolphinEmu.dolphin-emu.metainfo.xml"
+  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/Source/Core/Common/scmrev.h" "${CMAKE_CURRENT_BINARY_DIR}/Flatpak/org.PrimedGun.PrimedGun.metainfo.xml"
   VERBATIM
 )
 
@@ -873,40 +866,41 @@ add_subdirectory(Source)
 #
 if(NOT CMAKE_SYSTEM_NAME MATCHES "Darwin|Windows")
   install(DIRECTORY Data/Sys/ DESTINATION ${datadir}/sys PATTERN)
-  install(CODE
-    "execute_process(COMMAND \"${CMAKE_COMMAND}\"
-      -DPRIMEGUN_USER_DEFAULTS_SOURCE=\"${CMAKE_SOURCE_DIR}/Data/User\"
-      -DPRIMEGUN_USER_DEFAULTS_DEST=\"\$ENV{DESTDIR}${datadir}/User\"
-      -P \"${CMAKE_SOURCE_DIR}/CMake/PrimedGunSeedUserDefaults.cmake\")"
-  )
 endif()
 if(NOT CMAKE_SYSTEM_NAME MATCHES "Linux|FreeBSD|OpenBSD|Darwin")
   install(FILES COPYING DESTINATION ${datadir})
   install(DIRECTORY LICENSES DESTINATION ${datadir}/LICENSES PATTERN)
 endif()
 if(CMAKE_SYSTEM_NAME MATCHES "Linux|FreeBSD|OpenBSD")
+  # Install PrimedGun runtime assets for native package builds. Config defaults live in code;
+  # these are only UI/overlay images and cannon texture assets.
+  install(DIRECTORY assets/
+          DESTINATION ${CMAKE_INSTALL_BINDIR}/assets
+          PATTERN "readme" EXCLUDE)
+  install(DIRECTORY Data/User/Load/PrimedGun/
+          DESTINATION ${datadir}/User/Load/PrimedGun)
+  install(DIRECTORY Data/User/Load/Textures/000_PrimedGunCannon/
+          DESTINATION ${datadir}/User/Load/Textures/000_PrimedGunCannon)
+
   # Install the application icon and menu item
-  install(FILES Data/dolphin-emu.svg
-          DESTINATION ${CMAKE_INSTALL_PREFIX}/share/icons/hicolor/scalable/apps)
-  install(FILES Data/dolphin-emu.png
-          DESTINATION ${CMAKE_INSTALL_PREFIX}/share/icons/hicolor/256x256/apps)
-  install(FILES Data/dolphin-emu.desktop
-          DESTINATION ${CMAKE_INSTALL_PREFIX}/share/applications)
-  # Install manpages
-  install(FILES Data/dolphin-emu.6
-          DESTINATION ${CMAKE_INSTALL_MANDIR}/man6)
-  install(FILES Data/dolphin-emu-nogui.6
-          DESTINATION ${CMAKE_INSTALL_MANDIR}/man6)
+  install(FILES Data/primedgun.png
+          DESTINATION ${CMAKE_INSTALL_PREFIX}/share/icons/hicolor/256x256/apps
+          RENAME org.PrimedGun.PrimedGun.png)
+  install(FILES Data/primedgun.desktop
+          DESTINATION ${CMAKE_INSTALL_PREFIX}/share/applications
+          RENAME org.PrimedGun.PrimedGun.desktop)
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/Flatpak/org.PrimedGun.PrimedGun.metainfo.xml
+          DESTINATION ${CMAKE_INSTALL_PREFIX}/share/metainfo)
 endif()
 
 # packaging information
-set(CPACK_PACKAGE_NAME "dolphin-emu")
-set(CPACK_PACKAGE_VENDOR "Dolphin Team")
+set(CPACK_PACKAGE_NAME "PrimedGun")
+set(CPACK_PACKAGE_VENDOR "PrimedGun Project")
 set(CPACK_PACKAGE_VERSION_MAJOR ${DOLPHIN_VERSION_MAJOR})
 set(CPACK_PACKAGE_VERSION_MINOR ${DOLPHIN_VERSION_MINOR})
 set(CPACK_PACKAGE_VERSION_PATCH ${DOLPHIN_VERSION_PATCH})
 set(CPACK_PACKAGE_DESCRIPTION_FILE ${PROJECT_SOURCE_DIR}/Data/cpack_package_description.txt)
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A GameCube and Wii emulator")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A Metroid Prime VR launcher built on Dolphin ReduX")
 
 set(CPACK_RPM_PACKAGE_GROUP System/Emulators/Other)
 set(CPACK_RPM_PACKAGE_LICENSE GPL-2.0)

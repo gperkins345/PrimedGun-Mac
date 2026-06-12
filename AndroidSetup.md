@@ -1,4 +1,4 @@
-# How to Set Up an Android Development Environment
+# How to Set Up an Android Development Environment (currently PrimedGun apk builds are not supported/tested)
 
 If you'd like to contribute to the Android project, but do not currently have a development environment setup, follow the instructions in this guide.
 

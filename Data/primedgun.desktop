@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Icon=org.PrimedGun.PrimedGun
+Exec=PrimedGun
+Terminal=false
+Type=Application
+Categories=Game;Emulator;
+Name=PrimedGun
+GenericName=Metroid Prime VR Launcher
+Comment=A Dolphin ReduX-based VR launcher for Metroid Prime

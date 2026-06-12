@@ -65,12 +65,12 @@ PRIVATE
 file(MAKE_DIRECTORY ${CMAKE_SOURCE_DIR}/Source/Android/app/src/main/assets/)
 file(REMOVE_RECURSE ${CMAKE_SOURCE_DIR}/Source/Android/app/src/main/assets/Sys/)
 file(COPY ${CMAKE_SOURCE_DIR}/Data/Sys DESTINATION ${CMAKE_SOURCE_DIR}/Source/Android/app/src/main/assets/)
-execute_process(
-  COMMAND ${CMAKE_COMMAND}
-    -DPRIMEGUN_USER_DEFAULTS_SOURCE=${CMAKE_SOURCE_DIR}/Data/User
-    -DPRIMEGUN_USER_DEFAULTS_DEST=${CMAKE_SOURCE_DIR}/Source/Android/app/src/main/assets/User
-    -P ${CMAKE_SOURCE_DIR}/CMake/PrimedGunSeedUserDefaults.cmake
-)
+file(MAKE_DIRECTORY ${CMAKE_SOURCE_DIR}/Source/Android/app/src/main/assets/User/Load/)
+file(COPY ${CMAKE_SOURCE_DIR}/Data/User/Load/PrimedGun
+     DESTINATION ${CMAKE_SOURCE_DIR}/Source/Android/app/src/main/assets/User/Load/)
+file(MAKE_DIRECTORY ${CMAKE_SOURCE_DIR}/Source/Android/app/src/main/assets/User/Load/Textures/)
+file(COPY ${CMAKE_SOURCE_DIR}/Data/User/Load/Textures/000_PrimedGunCannon
+     DESTINATION ${CMAKE_SOURCE_DIR}/Source/Android/app/src/main/assets/User/Load/Textures/)
 
 # Delete folders that aren't used by the Android version of Dolphin
 file(REMOVE_RECURSE ${CMAKE_SOURCE_DIR}/Source/Android/app/src/main/assets/Sys/Themes/)

@@ -2529,7 +2529,7 @@ void MainWindow::ConnectStack()
     if (!path.isEmpty())
       StartGame(path, ScanForSecondDisc::Yes);
   });
-  connect(pause_button, &QPushButton::clicked, this, &MainWindow::Pause);
+  connect(pause_button, &QPushButton::clicked, this, &MainWindow::TogglePause);
   connect(stop_button, &QPushButton::clicked, this, &MainWindow::RequestStop);
 
   connect(options_button, &QPushButton::clicked, this,

@@ -18,10 +18,8 @@ if(GIT_FOUND)
   execute_process(WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} COMMAND ${GIT_EXECUTABLE} rev-parse --abbrev-ref HEAD
       OUTPUT_VARIABLE DOLPHIN_WC_BRANCH
       OUTPUT_STRIP_TRAILING_WHITESPACE)
-  # defines DOLPHIN_WC_COMMITS_AHEAD_MASTER
-  execute_process(WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} COMMAND ${GIT_EXECUTABLE} rev-list --count HEAD ^master
-      OUTPUT_VARIABLE DOLPHIN_WC_COMMITS_AHEAD_MASTER
-      OUTPUT_STRIP_TRAILING_WHITESPACE)
+  # PrimedGun does not track Dolphin's old master branch, so avoid querying it during builds.
+  set(DOLPHIN_WC_COMMITS_AHEAD_MASTER 0)
 
   # defines DOLPHIN_WC_TAG
   execute_process(WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} COMMAND ${GIT_EXECUTABLE} describe --exact-match HEAD
@@ -71,5 +69,5 @@ if(APPLE)
 endif()
 
 if(LINUX)
-  configure_source_file("Flatpak/org.DolphinEmu.dolphin-emu.metainfo.xml")
+  configure_source_file("Flatpak/org.PrimedGun.PrimedGun.metainfo.xml")
 endif()
