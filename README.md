@@ -18,7 +18,7 @@ cmake --build build\Release --target dolphin-emu
 
 The built app is written to `Binary\x64\PrimedGun.exe`.
 
-## Build - Native Linux
+## Build - Native Linux (experimental)
 
 ```bash
 git clone --recurse-submodules https://github.com/Nobbie248/PrimedGun.git
@@ -29,7 +29,7 @@ cmake --build build --target dolphin-emu
 cmake --install build --prefix /usr/local
 ```
 
-## Build - Linux Flatpak
+## Build - Linux Flatpak (experimental)
 
 The Flatpak package is built from `Flatpak/org.PrimedGun.PrimedGun.yml`. The
 manifest builds PrimedGun, installs the PrimedGun launcher wrapper, packages the

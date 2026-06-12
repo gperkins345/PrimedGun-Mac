@@ -642,6 +642,8 @@ void PrimedGunRefreshCustomTextureConfig(bool use_active_overrides)
 #include "UICommon/X11Utils.h"
 // This #define within X11/X.h conflicts with our WiimoteSource enum.
 #undef None
+// This #define within X11/X.h conflicts with QEvent::KeyPress.
+#undef KeyPress
 #endif
 
 #if defined(__unix__) || defined(__unix) || defined(__APPLE__)

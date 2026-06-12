@@ -79,6 +79,8 @@ modules:
       - desktop-file-edit --set-key=Exec --set-value='primedgun-wrapper'
         ${FLATPAK_DEST}/share/applications/org.PrimedGun.PrimedGun.desktop
       - install -Dm644 ../Data/primedgun.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/org.PrimedGun.PrimedGun.png
+      - rm -f ${FLATPAK_DEST}/share/metainfo/org.PrimedGun.PrimedGun.metainfo.xml
+      - rm -f ${FLATPAK_DEST}/share/appdata/org.PrimedGun.PrimedGun.appdata.xml
     sources:
       - type: dir
         path: ..
