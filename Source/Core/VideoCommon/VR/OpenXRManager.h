@@ -137,6 +137,7 @@ public:
   bool ShouldRender() const { return m_frame_state.shouldRender == XR_TRUE; }
   bool IsExtensionEnabled(const char* extension_name) const;
   bool ShouldUseVulkanLegacyProjectionFallback() const;
+  bool IsQuestOrVirtualDesktopRuntime() const;
   XrEnvironmentBlendMode GetActiveBlendMode() const { return m_active_blend_mode; }
   double GetNativeDisplayPeriodMs() const { return m_native_display_period_ms; }
   float GetStartupDisplayRefreshRateHz() const
@@ -197,6 +198,7 @@ private:
   void HandleSessionStateChange(XrSessionState new_state);
 
   XrInstance m_instance = XR_NULL_HANDLE;
+  std::string m_runtime_name;
   XrSystemId m_system_id = XR_NULL_SYSTEM_ID;
   XrSession m_session = XR_NULL_HANDLE;
   XrSpace m_reference_space = XR_NULL_HANDLE;

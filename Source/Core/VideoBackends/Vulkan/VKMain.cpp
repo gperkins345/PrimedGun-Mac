@@ -244,18 +244,10 @@ bool VideoBackend::Initialize(const WindowSystemInfo& wsi)
     }
   }
 
-  // Desktop OpenXR still uses the conservative single-threaded Vulkan submit path. Android/Quest
-  // synchronizes OpenXR queue-touching calls with the Vulkan submit worker and keeps threading on.
-  bool use_threaded_submission = g_Config.bBackendMultithreading;
-#if defined(ENABLE_VR) && !defined(ANDROID)
-  if (g_ActiveConfig.stereo_mode == StereoMode::OpenXR && use_threaded_submission)
-  {
-    WARN_LOG_FMT(VIDEO,
-                 "OpenXR Vulkan: Disabling Backend Multithreading for this session to avoid "
-                 "threaded submission device-loss issues.");
-    use_threaded_submission = false;
-  }
-#endif
+  // Upstream Redux now keeps threaded submission enabled for desktop OpenXR. Queue-touching
+  // paths are guarded by the Vulkan/OpenXR queue lock, and timeline semaphore support is
+  // enabled when the runtime requires it.
+  const bool use_threaded_submission = g_Config.bBackendMultithreading;
   INFO_LOG_FMT(VIDEO,
                "Vulkan submit threading init: config={} active={} stereo_mode={} openxr={} "
                "surface={}.",

@@ -871,14 +871,43 @@ void Presenter::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
     {
       VR::IOpenXRSwapchain* sc = VR::g_openxr->GetSwapchain();
       AbstractFramebuffer* saved_fb = g_gfx->GetCurrentFramebuffer();
+      const MathUtil::Rectangle<int> eye_rect{
+          0, 0, static_cast<int>(sc->GetEyeWidth()), static_cast<int>(sc->GetEyeHeight())};
+      bool rendered_layered = false;
 
-      for (uint32_t eye = 0; eye < 2; ++eye)
+      if (sc->SupportsLayeredRendering() &&
+          m_post_processor->CanBlitFromTextureLayeredMultiview())
+      {
+        AbstractFramebuffer* layered_fb = sc->AcquireLayeredFramebuffer();
+        if (layered_fb)
+        {
+          g_gfx->SetAndClearFramebuffer(layered_fb, {0.f, 0.f, 0.f, 1.f});
+          if (m_post_processor->BlitFromTextureLayeredMultiview(eye_rect, source_rc,
+                                                                source_texture))
+          {
+            sc->ReleaseLayeredTexture();
+            rendered_layered = true;
+          }
+          else
+          {
+            static bool s_logged_layered_blit_fallback = false;
+            if (!s_logged_layered_blit_fallback)
+            {
+              WARN_LOG_FMT(VIDEO,
+                           "OpenXR: layered multiview post-process blit failed; falling back to "
+                           "per-eye swapchains.");
+              s_logged_layered_blit_fallback = true;
+            }
+            sc->ReleaseLayeredTexture();
+          }
+        }
+      }
+
+      for (uint32_t eye = 0; !rendered_layered && eye < 2; ++eye)
       {
         AbstractFramebuffer* eye_fb = sc->AcquireEyeFramebuffer(eye);
         if (eye_fb)
         {
-          const MathUtil::Rectangle<int> eye_rect{
-              0, 0, static_cast<int>(sc->GetEyeWidth()), static_cast<int>(sc->GetEyeHeight())};
           g_gfx->SetAndClearFramebuffer(eye_fb, {0.f, 0.f, 0.f, 1.f});
           const int source_layer = kForceOpenXRLayer0ToBothEyes ? 0 : static_cast<int>(eye);
           m_post_processor->BlitFromTexture(eye_rect, source_rc, source_texture,

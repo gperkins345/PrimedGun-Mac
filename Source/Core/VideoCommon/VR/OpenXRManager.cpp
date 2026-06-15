@@ -6,6 +6,7 @@
 #include "VideoCommon/VR/OpenXRManager.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -213,6 +214,7 @@ bool OpenXRManager::CreateInstance(const std::vector<const char*>& extra_extensi
 
   XrInstanceProperties props{XR_TYPE_INSTANCE_PROPERTIES};
   xrGetInstanceProperties(m_instance, &props);
+  m_runtime_name = props.runtimeName;
   INFO_LOG_FMT(OPENXR, "OpenXR: Runtime '{}' version {}.{}.{}", props.runtimeName,
                XR_VERSION_MAJOR(props.runtimeVersion), XR_VERSION_MINOR(props.runtimeVersion),
                XR_VERSION_PATCH(props.runtimeVersion));
@@ -1074,6 +1076,19 @@ bool OpenXRManager::IsExtensionEnabled(const char* extension_name) const
 bool OpenXRManager::ShouldUseVulkanLegacyProjectionFallback() const
 {
   return false;
+}
+
+bool OpenXRManager::IsQuestOrVirtualDesktopRuntime() const
+{
+  std::string runtime = m_runtime_name;
+  std::transform(runtime.begin(), runtime.end(), runtime.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+
+  return runtime.find("quest") != std::string::npos ||
+         runtime.find("oculus") != std::string::npos ||
+         runtime.find("meta") != std::string::npos ||
+         runtime.find("virtual desktop") != std::string::npos;
 }
 
 void OpenXRManager::RequestRecenter()
