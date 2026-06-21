@@ -18,6 +18,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
+#include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Common/MathUtil.h"
 #ifdef ENABLE_VR
@@ -159,6 +160,8 @@ constexpr u32 PLAYER_DISABLE_INPUT_FLAGS_OFFSET = 0x9C6u;
 constexpr u8 PLAYER_DISABLE_INPUT_MASK = 0x04u;
 constexpr u32 PLAYER_VELOCITY_OFFSET = 0x138u;
 constexpr u32 PLAYER_MOVEMENT_STATE_OFFSET = 0x258u;
+constexpr u32 PLAYER_ORBIT_STATE_OFFSET = 0x304u;
+constexpr u32 PLAYER_ORBIT_TARGET_ID_OFFSET = 0x310u;
 constexpr u32 PLAYER_FREE_LOOK_STATE_OFFSET = 0x3DCu;
 constexpr u32 PLAYER_FREE_LOOK_CENTER_TIME_OFFSET = 0x3E0u;
 constexpr u32 PLAYER_FREE_LOOK_YAW_ANGLE_OFFSET = 0x3E4u;
@@ -171,6 +174,18 @@ constexpr u32 GAME_OPTIONS_HELMET_ALPHA_OFFSET = 0x17Cu + 0x64u;
 bool RuntimeLoggingEnabled()
 {
   return ENABLE_PRIMEDGUN_RUNTIME_LOGGING;
+}
+
+void AppendScanDebugLine(std::string_view line)
+{
+  File::CreateFullPath(File::GetUserPath(D_LOGS_IDX));
+  File::IOFile file(File::GetUserPath(D_LOGS_IDX) + "PrimedGunScan.log", "ab");
+  if (!file)
+    return;
+
+  file.WriteBytes(line.data(), line.size());
+  static constexpr char newline = '\n';
+  file.WriteBytes(&newline, 1);
 }
 
 enum PatchGroup : u32
@@ -1083,6 +1098,12 @@ struct GunTargetPick
   float along = 0.0f;
   float perp = 0.0f;
   float score = 0.0f;
+  bool has_target = false;
+  bool has_character = false;
+  bool has_orbit = false;
+  bool has_scan = false;
+  bool targetable = false;
+  bool grapple_point = false;
   bool suppress_orbit_hook = false;
 };
 
@@ -1227,6 +1248,19 @@ void WriteGunTargetScratch(const Core::CPUThreadGuard& guard, u32 player, u16 ui
   TryWriteU16(guard, GUN_TARGET_SCRATCH + 4u, uid);
 }
 
+void WriteScanOrbitTarget(const Core::CPUThreadGuard& guard, u32 player, u16 uid, bool scanning)
+{
+  if (player < 0x80000000u)
+    return;
+
+  if (scanning && uid != 0xffffu)
+  {
+    const u32 uid_word = static_cast<u32>(uid) << 16;
+    TryWriteU32(guard, player + PLAYER_ORBIT_STATE_OFFSET, 1u);  // CPlayer::kOS_OrbitObject
+    TryWriteU32(guard, player + PLAYER_ORBIT_TARGET_ID_OFFSET, uid_word);
+  }
+}
+
 bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player, u32 gun,
                       u32 world_xf, const Matrix3x4& mat, const RuntimeSettings& settings,
                       bool strict_lock_aim, GunTargetPick* pick)
@@ -1326,6 +1360,9 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
     const bool orbit_candidate = has_orbit && targetable;
     const bool scan_candidate = has_scan;
     const bool grapple_candidate = grapple_point && has_orbit;
+    if (scan_mode && !scan_candidate)
+      continue;
+
     if (!combat_candidate && !orbit_candidate && !scan_candidate && !grapple_candidate)
       continue;
 
@@ -1338,13 +1375,12 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
       continue;
 
     float aim_cone_perp = candidate_max_perp;
-    if (strict_lock_aim)
+    if (strict_lock_aim && !scan_mode)
     {
-      const float strict_cone = 0.45f + along * (scan_mode ? 0.085f : 0.075f);
+      const float strict_cone = 0.45f + along * 0.075f;
       const float strict_candidate_cone =
-          scan_mode && scan_candidate ? strict_cone * scan_pick_radius_multiplier :
-          grapple_candidate           ? strict_cone * 1.30f :
-                                       strict_cone;
+          grapple_candidate ? strict_cone * 1.30f :
+                              strict_cone;
       aim_cone_perp = std::min(candidate_max_perp, strict_candidate_cone);
       if (perp > aim_cone_perp)
         continue;
@@ -1356,12 +1392,7 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
       score -= 0.15f;
     if (scan_mode)
     {
-      if (has_scan)
-        score -= 0.10f;
-      else if (!has_character)
-        score += 0.10f;
-      if (!has_scan && !has_target)
-        score += 0.15f;
+      score -= 0.10f;
     }
     else
     {
@@ -1384,6 +1415,12 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
       pick->along = along;
       pick->perp = perp;
       pick->score = score;
+      pick->has_target = has_target;
+      pick->has_character = has_character;
+      pick->has_orbit = has_orbit;
+      pick->has_scan = has_scan;
+      pick->targetable = targetable;
+      pick->grapple_point = grapple_point;
       pick->suppress_orbit_hook = false;
     }
   }
@@ -1912,6 +1949,13 @@ void UpdateScanTargetingFromHmd(const Core::CPUThreadGuard& guard,
                                 const Common::VR::OpenXRInputSnapshot& snapshot, u32 state_manager,
                                 u32 player, const RuntimeSettings& settings, float yaw_delta_deg)
 {
+  static u64 s_last_scan_candidate_log_frame = 0;
+  static u16 s_last_scan_candidate_uid = 0xffffu;
+  static bool s_last_scan_candidate_found = false;
+  static GunTargetPick s_latched_scan_pick = {};
+  static bool s_latched_scan_pick_valid = false;
+  static u32 s_latched_scan_pick_player = 0;
+
   const ScanVisorInfo scan_info = ReadScanVisorInfo(guard, player);
   if (!scan_info.active)
     return;
@@ -1924,13 +1968,78 @@ void UpdateScanTargetingFromHmd(const Core::CPUThreadGuard& guard,
   }
 
   GunTargetPick pick = {};
-  if (PickGunRayTarget(guard, state_manager, player, player, player + ADDRESS.transform_offset, hmd,
-                       settings, false, &pick))
+  const bool scan_button_held = OrbitLockButtonHeld(guard, state_manager);
+  const bool found_live = PickGunRayTarget(guard, state_manager, player, player,
+                                           player + ADDRESS.transform_offset, hmd, settings, false,
+                                           &pick);
+  if (!scan_button_held)
   {
+    s_latched_scan_pick_valid = false;
+    s_latched_scan_pick_player = 0;
+  }
+
+  const bool can_use_latched_scan_pick =
+      scan_button_held && s_latched_scan_pick_valid && s_latched_scan_pick_player == player &&
+      TargetUidStillExists(guard, state_manager, s_latched_scan_pick.uid,
+                           s_latched_scan_pick.obj);
+  if (can_use_latched_scan_pick)
+  {
+    pick = s_latched_scan_pick;
+  }
+  else if (scan_button_held && found_live)
+  {
+    s_latched_scan_pick = pick;
+    s_latched_scan_pick_valid = true;
+    s_latched_scan_pick_player = player;
+  }
+
+  const bool found = can_use_latched_scan_pick || found_live;
+
+  if (found)
+  {
+    AppendScanDebugLine(fmt::format(
+        "PrimedGun scan_candidate frame={} player={:08X} state={:08X} current_visor={} "
+        "transition_visor={} proxy_visor={} real_state={} uid={:04X} obj={:08X} score={:.3f} "
+        "along={:.3f} perp={:.3f} scan={} target={} orbit={} character={} targetable={} grapple={} "
+        "scan_button={} latched={}",
+        s_frame_counter, player, scan_info.player_state, scan_info.current_visor,
+        scan_info.transition_visor, scan_info.proxy_visor, scan_info.real_state, pick.uid,
+        pick.obj, pick.score, pick.along, pick.perp, pick.has_scan, pick.has_target,
+        pick.has_orbit, pick.has_character, pick.targetable, pick.grapple_point, scan_button_held,
+        can_use_latched_scan_pick));
+    if (RuntimeLoggingEnabled() &&
+        (pick.uid != s_last_scan_candidate_uid || !s_last_scan_candidate_found ||
+         s_frame_counter >= s_last_scan_candidate_log_frame + 30u))
+    {
+      NOTICE_LOG_FMT(CORE,
+                     "PrimedGun scan_candidate selected uid={:04X} obj={:08X} score={:.3f} "
+                     "along={:.3f} perp={:.3f} pos=({:.3f},{:.3f},{:.3f}) "
+                     "scan={} target={} orbit={} character={} targetable={} grapple={}",
+                     pick.uid, pick.obj, pick.score, pick.along, pick.perp, pick.x, pick.y,
+                     pick.z, pick.has_scan, pick.has_target, pick.has_orbit, pick.has_character,
+                     pick.targetable, pick.grapple_point);
+      s_last_scan_candidate_log_frame = s_frame_counter;
+      s_last_scan_candidate_uid = pick.uid;
+      s_last_scan_candidate_found = true;
+    }
     WriteGunTargetScratch(guard, player, pick.uid);
+    WriteScanOrbitTarget(guard, player, pick.uid, scan_button_held);
   }
   else
   {
+    AppendScanDebugLine(fmt::format(
+        "PrimedGun scan_candidate frame={} player={:08X} state={:08X} current_visor={} "
+        "transition_visor={} proxy_visor={} real_state={} uid=FFFF obj=00000000 none",
+        s_frame_counter, player, scan_info.player_state, scan_info.current_visor,
+        scan_info.transition_visor, scan_info.proxy_visor, scan_info.real_state));
+    if (RuntimeLoggingEnabled() &&
+        (s_last_scan_candidate_found || s_frame_counter >= s_last_scan_candidate_log_frame + 30u))
+    {
+      NOTICE_LOG_FMT(CORE, "PrimedGun scan_candidate selected none");
+      s_last_scan_candidate_log_frame = s_frame_counter;
+      s_last_scan_candidate_uid = 0xffffu;
+      s_last_scan_candidate_found = false;
+    }
     WriteGunTargetScratch(guard, player, 0xffffu);
   }
 }
@@ -3156,6 +3265,9 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
   TryWriteU32(guard, CANNON_EXPECTED_GUN_SCRATCH, gun);
 
   UpdateReticleBillboard(guard, snapshot, player, yaw_delta_deg);
+  if (scan_active)
+    return;
+
   UpdateGunTargeting(guard, ADDRESS.state_manager, player, gun, world_xf, mat, settings);
 #endif
 }
@@ -3763,13 +3875,15 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   }
 
   const bool gameplay_input_active = have_player && PlayerIsFirstPersonUnmorphed(guard, player);
-  const bool orbit_lock_active = gameplay_input_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager);
+  const bool scan_active = have_player && ScanVisorActive(guard, player);
+  const bool orbit_lock_active =
+      gameplay_input_active && !scan_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager);
   s_gameplay_input_active.store(gameplay_input_active, std::memory_order_relaxed);
   s_orbit_lock_active.store(orbit_lock_active, std::memory_order_relaxed);
   if (have_player)
   {
     LogModeProbe(guard, player, gameplay_input_active != s_last_logged_gameplay_input_active);
-    if (ScanVisorActive(guard, player))
+    if (scan_active)
       DumpScanIndicatorCodeOnce(guard);
     LogScanReticleTrace(guard, player);
   }
