@@ -1531,6 +1531,15 @@ float WrapRadians(float angle)
   return angle;
 }
 
+float WrapDegrees(float angle)
+{
+  while (angle > 180.0f)
+    angle -= 360.0f;
+  while (angle < -180.0f)
+    angle += 360.0f;
+  return angle;
+}
+
 bool ReadYawFromTransform2D(const Core::CPUThreadGuard& guard, u32 transform, float* yaw_deg)
 {
   float m00 = 0.0f;
@@ -1919,26 +1928,51 @@ void UpdateScanPitch(const Core::CPUThreadGuard& guard,
   if (scan_active)
   {
     s_scan_normal_frames = 0;
-    float pitch = 0.0f;
-    if (!HmdPitchFromSnapshot(snapshot, yaw_delta_deg, &pitch))
+    const Common::VR::OpenXRControllerState& right = snapshot.controllers[1];
+    if (!right.connected)
       return;
 
     constexpr float max_scan_pitch = 1.2217305f;  // 70 degrees
-    pitch = std::clamp(pitch, -max_scan_pitch, max_scan_pitch);
-    constexpr float pitch_smooth = 0.45f;
-    s_smooth_scan_pitch = s_smooth_scan_pitch * pitch_smooth + pitch * (1.0f - pitch_smooth);
+    constexpr float stick_deadzone = 0.15f;
+    constexpr float scan_pitch_speed = 1.7f;
+    float stick_y = right.thumbstick_y;
+    if (std::abs(stick_y) < stick_deadzone)
+      stick_y = 0.0f;
+    else
+      stick_y = (std::abs(stick_y) - stick_deadzone) / (1.0f - stick_deadzone) *
+                (stick_y < 0.0f ? -1.0f : 1.0f);
+
+    constexpr float frame_dt = 1.0f / 60.0f;
+    s_smooth_scan_pitch =
+        std::clamp(s_smooth_scan_pitch + stick_y * scan_pitch_speed * frame_dt,
+                   -max_scan_pitch, max_scan_pitch);
+    TryWriteFloat(guard, player + 0x3ECu, s_smooth_scan_pitch);
+    TryWriteFloat(guard, player + 0x3F0u, 0.0f);
+    TryWriteU8(guard, player + 0x3DCu, 1u);
+    TryWriteU8(guard, player + 0x3DEu, 1u);
+
+    float vz = 0.0f;
+    if (TryReadFloat(guard, player + PLAYER_VELOCITY_OFFSET + 0x08u, &vz) && vz > 0.0f)
+      TryWriteFloat(guard, player + PLAYER_VELOCITY_OFFSET + 0x08u, 0.0f);
   }
   else if (s_scan_was_active)
   {
     s_scan_normal_frames = 1;
+    s_smooth_scan_pitch = 0.0f;
+    TryWriteFloat(guard, player + PLAYER_FREE_LOOK_PITCH_ANGLE_OFFSET, 0.0f);
+    TryWriteFloat(guard, player + 0x3F0u, 0.0f);
   }
   else if (s_scan_normal_frames > 0 && s_scan_normal_frames < 8)
   {
     ++s_scan_normal_frames;
+    TryWriteFloat(guard, player + PLAYER_FREE_LOOK_PITCH_ANGLE_OFFSET, 0.0f);
+    TryWriteFloat(guard, player + 0x3F0u, 0.0f);
   }
   else if (s_scan_normal_frames == 8)
   {
     s_smooth_scan_pitch = 0.0f;
+    TryWriteFloat(guard, player + PLAYER_FREE_LOOK_PITCH_ANGLE_OFFSET, 0.0f);
+    TryWriteFloat(guard, player + 0x3F0u, 0.0f);
     ++s_scan_normal_frames;
   }
 
@@ -3204,15 +3238,15 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
 
   UpdateScanPitch(guard, snapshot, player, yaw_delta_deg);
   const bool scan_active = ScanVisorActive(guard, player);
-  if (scan_active)
-    UpdateScanTargetingFromHmd(guard, snapshot, ADDRESS.state_manager, player, settings, yaw_delta_deg);
 
   u32 gun = 0;
   if (!PlayerIsFirstPersonGunReady(guard, player) ||
       !TryReadU32(guard, player + ADDRESS.cannon_offset, &gun) || gun < 0x80000000u)
   {
     if (scan_active)
+    {
       UpdateReticleBillboard(guard, snapshot, player, yaw_delta_deg);
+    }
 
     if (scan_active)
       return;
@@ -3703,6 +3737,27 @@ bool ApplyConditionalElevationPitchPatch(const Core::CPUThreadGuard& guard, Dyna
   return patch.applied;
 }
 
+bool RestoreDynamicPatchOriginal(const Core::CPUThreadGuard& guard, DynamicPpcPatch& patch)
+{
+  if (patch.original == 0)
+    TryReadU32(guard, patch.cave + 0x18u, &patch.original);
+  if (patch.original == 0)
+    return false;
+
+  u32 current = 0;
+  if (!TryReadU32(guard, patch.address, &current))
+    return false;
+
+  const u32 branch = PpcBranch(patch.address, patch.cave);
+  if (current != branch && current != patch.replacement)
+    return false;
+
+  const bool restored = TryWriteInstruction(guard, patch.address, patch.original);
+  if (restored)
+    patch.applied = false;
+  return restored;
+}
+
 bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
 {
   bool wrote = false;
@@ -3710,7 +3765,18 @@ bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
   wrote = ApplyRenderModelOffsetPatch(guard) || wrote;
   wrote = ApplyScanReticleTracePatch(guard) || wrote;
   wrote = ApplyScanIndicatorViewBasisPatch(guard) || wrote;
-  wrote = ApplyFirstPersonPitchLoadPatch(guard) || wrote;
+
+  u32 player = 0;
+  const bool scan_active =
+      TryReadU32(guard, ADDRESS.state_manager + ADDRESS.player_offset, &player) &&
+      player >= 0x80000000u && ScanVisorActive(guard, player);
+  if (scan_active)
+  {
+    for (DynamicPpcPatch& patch : s_combat_pitch_patches)
+      wrote = RestoreDynamicPatchOriginal(guard, patch) || wrote;
+    wrote = RestoreDynamicPatchOriginal(guard, s_combat_elevation_pitch_patch) || wrote;
+    return wrote;
+  }
 
   for (DynamicPpcPatch& patch : s_combat_pitch_patches)
   {
