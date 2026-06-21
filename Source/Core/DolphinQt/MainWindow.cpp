@@ -1600,6 +1600,7 @@ void MainWindow::ConnectStack()
     QWidget { background: #101215; color: #edf0f4; font-family: Consolas, monospace; font-size: 12px; }
     QFrame#PrimedGunPanel, QTabWidget::pane { background: #121519; border: 1px solid #353a43; border-radius: 5px; }
     QLabel#PrimedGunTitle, QLabel#PrimedGunSection { color: #f0a12a; }
+    QLabel#PrimedGunNotice { color: #f0a12a; font-size: 14px; font-weight: bold; }
     QLabel#PrimedGunMuted { color: #858b94; }
     QLabel#PrimedGunBad { color: #ff5b45; }
     QLabel#PrimedGunGood { color: #38d86f; }
@@ -1733,6 +1734,13 @@ void MainWindow::ConnectStack()
   setup_layout->addLayout(play_control_row);
   setup_layout->addWidget(options_button);
   setup_layout->addSpacing(12);
+  auto* scan_notice =
+      new QLabel(tr("NOTE: Head-tracked scan visor is temporarily disabled in this build while "
+                    "scan-mode stability is being refined."),
+                 game_tab);
+  scan_notice->setObjectName(QStringLiteral("PrimedGunNotice"));
+  scan_notice->setWordWrap(true);
+  setup_layout->addWidget(scan_notice);
   auto* notes = new QLabel(tr("Setup notes\n"
                               "  * HMD refresh rate set to 120 Hz is recommended.\n"
                               "  * Meta's own OpenXR environment is not recommended; try SteamVR or VD instead.\n"
