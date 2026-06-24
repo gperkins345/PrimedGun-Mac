@@ -133,3 +133,6 @@
 [submodule "Externals/zstd/zstd"]
 	path = Externals/zstd/zstd
 	url = https://github.com/facebook/zstd.git
+[submodule "Externals/OpenXR"]
+	path = Externals/OpenXR
+	url = https://github.com/KhronosGroup/OpenXR-SDK
