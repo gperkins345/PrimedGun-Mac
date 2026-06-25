@@ -33,6 +33,8 @@ cmake --build build --parallel
 ln -sfn ../../Data/Sys build/Binaries/Sys
 ```
 
+For SteamOS-specific builds, see [PrimedSteam](https://github.com/josethevrtech/PrimedSteam).
+
 ## Features
 
 - Full directional movement.
@@ -47,11 +49,11 @@ ln -sfn ../../Data/Sys build/Binaries/Sys
 
 ## Setup Notes
 
-- HMD refresh rate set to 120 Hz is recommended.
-- Meta's own OpenXR environment is not recommended; try SteamVR or VD instead.
+- Setting the HMD refresh rate to 120 Hz is recommended; otherwise, frame pacing issues can occur.
+- Meta's own OpenXR environment is not recommended; try SteamVR or Virtual Desktop instead.
 - Run the app and select your Metroid Prime NTSC Revision 0 (1.0) game file.
-- Checkout the Layout tab for controller bindings.
-- Transfer your memory card into `User\GC` then select the save in dolphin settings if you want existing saves.
+- Check the Layout tab for controller bindings.
+- Transfer your memory card into `User\GC`, then select the save in Dolphin settings if you want existing saves.
 - Once in game, click the right stick to set your height.
 - Click the left thumbstick to open or close the in-headset settings menu.
 - Try to stay in the centre of your play space and face forward for the best interaction.
