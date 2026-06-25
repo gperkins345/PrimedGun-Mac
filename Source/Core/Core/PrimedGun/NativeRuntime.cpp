@@ -1700,44 +1700,35 @@ void UpdateGunTargeting(const Core::CPUThreadGuard& guard, u32 state_manager, u3
   const bool same_context = s_last_pick_valid && s_last_pick_player == player &&
                             s_last_pick_gun == gun;
   const bool lock_held = OrbitLockButtonHeld(guard, state_manager);
-  const bool throttle_scan = same_context && s_frame_counter - s_last_pick_frame < 4;
 
   GunTargetPick pick = {};
-  bool found = false;
-  if (throttle_scan)
+  const GunTargetPick previous = s_last_pick;
+  const bool previous_valid = s_last_pick_valid;
+  const bool found_live =
+      PickGunRayTarget(guard, state_manager, player, gun, world_xf, mat, settings, lock_held, &pick);
+  bool found = found_live;
+  s_last_pick_frame = s_frame_counter;
+  s_last_pick_player = player;
+  s_last_pick_gun = gun;
+
+  if (found_live)
   {
-    pick = s_last_pick;
+    s_last_pick = pick;
+    s_last_pick_valid = true;
+    s_last_success_frame = s_frame_counter;
+  }
+  else if (lock_held && same_context && previous_valid &&
+           s_frame_counter - s_last_success_frame <= 12u &&
+           TargetUidStillExists(guard, state_manager, previous.uid, previous.obj))
+  {
+    pick = previous;
     found = true;
+    s_last_pick = pick;
+    s_last_pick_valid = true;
   }
   else
   {
-    const GunTargetPick previous = s_last_pick;
-    const bool previous_valid = s_last_pick_valid;
-    found =
-        PickGunRayTarget(guard, state_manager, player, gun, world_xf, mat, settings, lock_held, &pick);
-    s_last_pick_frame = s_frame_counter;
-    s_last_pick_player = player;
-    s_last_pick_gun = gun;
-
-    if (found)
-    {
-      s_last_pick = pick;
-      s_last_pick_valid = true;
-      s_last_success_frame = s_frame_counter;
-    }
-    else if (same_context && previous_valid &&
-             s_frame_counter - s_last_success_frame <= (lock_held ? 21u : 11u) &&
-             TargetUidStillExists(guard, state_manager, previous.uid, previous.obj))
-    {
-      pick = previous;
-      found = true;
-      s_last_pick = pick;
-      s_last_pick_valid = true;
-    }
-    else
-    {
-      s_last_pick_valid = false;
-    }
+    s_last_pick_valid = false;
   }
 
   if (!found || pick.suppress_orbit_hook)
