@@ -2826,7 +2826,7 @@ u32 VrMenuItemCountForTab(u32 tab)
   case 1:
     return 7;
   case 2:
-    return 12;
+    return 15;
   case 3:
     return 9;
   case 4:
@@ -2847,7 +2847,7 @@ bool VrMenuRowIsNumeric(u32 tab, u32 index)
   case 1:
     return index <= 5;
   case 2:
-    return index == 2 || index == 5 || index == 8 || index == 9 || index == 10;
+    return index == 2 || index == 5 || index == 8 || index == 11 || index == 12 || index == 13;
   case 3:
     return index >= 3 && index <= 7;
   default:
@@ -2953,6 +2953,9 @@ void ResetControllerSettings(RuntimeSettings* settings)
   settings->use_right_hand = true;
   settings->require_trigger = false;
   settings->trigger_threshold = 0.5f;
+  settings->rumble_enabled = true;
+  settings->rumble_intensity = 0.35f;
+  settings->rumble_hand_mode = 2;
   settings->primegun_grip_inputs_enabled = true;
   settings->primegun_grip_inputs_use_trackpad = false;
   settings->primegun_trackpad_press_threshold = 0.5f;
@@ -3037,18 +3040,22 @@ void AdjustVrMenuSetting(RuntimeSettings* settings, int direction)
           std::clamp(settings->trigger_threshold + sign * 0.05f, 0.0f, 1.0f);
       break;
     case 5:
+      settings->rumble_intensity =
+          std::clamp(settings->rumble_intensity + sign * 0.05f, 0.0f, 1.0f);
+      break;
+    case 8:
       settings->primegun_trackpad_press_threshold =
           std::clamp(settings->primegun_trackpad_press_threshold + sign * 0.05f, 0.05f, 1.0f);
       break;
-    case 8:
+    case 11:
       settings->xr_dpad_head_radius =
           std::clamp(settings->xr_dpad_head_radius + sign * 0.01f, 0.05f, 0.60f);
       break;
-    case 9:
+    case 12:
       settings->xr_dpad_head_y_below =
           std::clamp(settings->xr_dpad_head_y_below + sign * 0.01f, 0.0f, 0.60f);
       break;
-    case 10:
+    case 13:
       settings->xr_dpad_deadzone =
           std::clamp(settings->xr_dpad_deadzone + sign * 0.05f, 0.0f, 0.95f);
       break;
@@ -3136,12 +3143,16 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
     else if (s_vr_menu_selected_index == 1)
       settings->require_trigger = !settings->require_trigger;
     else if (s_vr_menu_selected_index == 3)
-      settings->primegun_grip_inputs_enabled = !settings->primegun_grip_inputs_enabled;
+      settings->rumble_enabled = !settings->rumble_enabled;
     else if (s_vr_menu_selected_index == 4)
-      settings->primegun_grip_inputs_use_trackpad = !settings->primegun_grip_inputs_use_trackpad;
+      settings->rumble_hand_mode = (std::clamp(settings->rumble_hand_mode, 0, 2) + 1) % 3;
     else if (s_vr_menu_selected_index == 6)
+      settings->primegun_grip_inputs_enabled = !settings->primegun_grip_inputs_enabled;
+    else if (s_vr_menu_selected_index == 7)
+      settings->primegun_grip_inputs_use_trackpad = !settings->primegun_grip_inputs_use_trackpad;
+    else if (s_vr_menu_selected_index == 9)
       settings->xr_dpad_enabled = !settings->xr_dpad_enabled;
-    else if (s_vr_menu_selected_index == 11)
+    else if (s_vr_menu_selected_index == 14)
       ResetControllerSettings(settings);
     return;
   }
@@ -3232,6 +3243,9 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.use_right_hand = settings.use_right_hand;
   overlay.require_trigger = settings.require_trigger;
   overlay.trigger_threshold = settings.trigger_threshold;
+  overlay.rumble_enabled = settings.rumble_enabled;
+  overlay.rumble_intensity = settings.rumble_intensity;
+  overlay.rumble_hand_mode = settings.rumble_hand_mode;
   overlay.primegun_grip_inputs_enabled = settings.primegun_grip_inputs_enabled;
   overlay.primegun_grip_inputs_use_trackpad = settings.primegun_grip_inputs_use_trackpad;
   overlay.primegun_trackpad_press_threshold = settings.primegun_trackpad_press_threshold;
@@ -3284,9 +3298,12 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
     return;
   }
 
-  const auto& left = snapshot.controllers[0];
-  const auto& right = snapshot.controllers[1];
-  const bool menu_toggle = left.connected && (left.thumbstick_button || left.menu_button);
+  const u32 panel_hand_index = settings->use_right_hand ? 0 : 1;
+  const u32 pointer_hand_index = settings->use_right_hand ? 1 : 0;
+  const auto& panel_hand = snapshot.controllers[panel_hand_index];
+  const auto& pointer_hand = snapshot.controllers[pointer_hand_index];
+  const bool menu_toggle =
+      panel_hand.connected && (panel_hand.thumbstick_button || panel_hand.menu_button);
   if (menu_toggle && !s_last_vr_menu_thumbstick)
   {
     s_vr_menu_visible = !s_vr_menu_visible;
@@ -3299,9 +3316,9 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
   bool pointer_active = false;
   if (s_vr_menu_visible)
   {
-    const Pose left_pose = GripControllerPose(snapshot.controllers[0]);
-    const Pose right_pose = PoseFromOpenXR(snapshot.controllers[1].aim_pose);
-    pointer_active = VrMenuPointerHit(left_pose, right_pose, &pointer_x, &pointer_y);
+    const Pose panel_pose = GripControllerPose(panel_hand);
+    const Pose pointer_pose = PoseFromOpenXR(pointer_hand.aim_pose);
+    pointer_active = VrMenuPointerHit(panel_pose, pointer_pose, &pointer_x, &pointer_y);
     if (pointer_active)
     {
       constexpr float first_y = 154.0f / 512.0f;
@@ -3324,8 +3341,9 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
     s_last_vr_menu_stick_left = false;
     s_last_vr_menu_stick_right = false;
 
-    const bool primary = right.connected && right.primary_button;
-    const bool secondary = right.connected && right.secondary_button;
+    const bool primary =
+        pointer_hand.connected && (pointer_hand.primary_button || pointer_hand.trigger_button);
+    const bool secondary = pointer_hand.connected && pointer_hand.secondary_button;
     if (primary && !s_last_vr_menu_primary)
     {
       const float texture_x = std::clamp(pointer_x, 0.0f, 1.0f) * 1024.0f;
@@ -4592,6 +4610,13 @@ void SetRuntimeSettings(const RuntimeSettings& settings)
   s_settings = settings;
   s_settings.primegun_trackpad_press_threshold =
       std::clamp(s_settings.primegun_trackpad_press_threshold, 0.05f, 1.0f);
+  s_settings.rumble_intensity = std::clamp(s_settings.rumble_intensity, 0.0f, 1.0f);
+  s_settings.rumble_hand_mode = std::clamp(s_settings.rumble_hand_mode, 0, 2);
+#ifdef ENABLE_VR
+  Common::VR::OpenXRInputState::SetRumbleConfig(s_settings.rumble_enabled,
+                                                s_settings.rumble_intensity,
+                                                s_settings.rumble_hand_mode);
+#endif
 }
 
 void ResetCalibrationOffsets()

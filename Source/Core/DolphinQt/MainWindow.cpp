@@ -9,6 +9,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
@@ -1586,6 +1587,12 @@ void MainWindow::ConnectStack()
         settings.value(QStringLiteral("primegun/require_trigger"), runtime.require_trigger).toBool();
     runtime.trigger_threshold =
         settings.value(QStringLiteral("primegun/trigger_threshold"), runtime.trigger_threshold).toFloat();
+    runtime.rumble_enabled =
+        settings.value(QStringLiteral("primegun/rumble_enabled"), runtime.rumble_enabled).toBool();
+    runtime.rumble_intensity =
+        settings.value(QStringLiteral("primegun/rumble_intensity"), runtime.rumble_intensity).toFloat();
+    runtime.rumble_hand_mode =
+        settings.value(QStringLiteral("primegun/rumble_hand_mode"), runtime.rumble_hand_mode).toInt();
     runtime.primegun_grip_inputs_enabled =
         settings.value(QStringLiteral("primegun/primegun_grip_inputs_enabled"),
                        runtime.primegun_grip_inputs_enabled)
@@ -1694,6 +1701,9 @@ void MainWindow::ConnectStack()
     settings.setValue(QStringLiteral("primegun/world_scale"), runtime.world_scale);
     settings.setValue(QStringLiteral("primegun/require_trigger"), runtime.require_trigger);
     settings.setValue(QStringLiteral("primegun/trigger_threshold"), runtime.trigger_threshold);
+    settings.setValue(QStringLiteral("primegun/rumble_enabled"), runtime.rumble_enabled);
+    settings.setValue(QStringLiteral("primegun/rumble_intensity"), runtime.rumble_intensity);
+    settings.setValue(QStringLiteral("primegun/rumble_hand_mode"), runtime.rumble_hand_mode);
     settings.setValue(QStringLiteral("primegun/primegun_grip_inputs_enabled"),
                       runtime.primegun_grip_inputs_enabled);
     settings.setValue(QStringLiteral("primegun/primegun_grip_inputs_use_trackpad"),
@@ -1968,6 +1978,23 @@ void MainWindow::ConnectStack()
   auto* vr_overlays_enabled = new QCheckBox(tr("In-headset overlays"), game_tab);
   vr_overlays_enabled->setChecked(runtime->vr_overlays_enabled);
   controller_layout->addWidget(vr_overlays_enabled);
+  auto* rumble_enabled = new QCheckBox(tr("Rumble"), game_tab);
+  rumble_enabled->setChecked(runtime->rumble_enabled);
+  controller_layout->addWidget(rumble_enabled);
+  auto* rumble_hand_mode = new QComboBox(game_tab);
+  rumble_hand_mode->addItem(tr("Both"), 0);
+  rumble_hand_mode->addItem(tr("Left only"), 1);
+  rumble_hand_mode->addItem(tr("Right only"), 2);
+  rumble_hand_mode->setCurrentIndex(std::clamp(runtime->rumble_hand_mode, 0, 2));
+  rumble_hand_mode->installEventFilter(this);
+  auto* rumble_hand_row = new QHBoxLayout;
+  auto* rumble_hand_label = new QLabel(tr("Rumble target"), game_tab);
+  rumble_hand_label->setMinimumWidth(170);
+  rumble_hand_label->setMaximumWidth(170);
+  rumble_hand_row->addWidget(rumble_hand_label);
+  rumble_hand_row->addWidget(rumble_hand_mode, 0);
+  rumble_hand_row->addStretch();
+  controller_layout->addLayout(rumble_hand_row);
   separator(controller_layout);
   controller_layout->addWidget(section_label(tr("Left hand D-pad"), game_tab));
   auto* dpad_enabled = new QCheckBox(tr("Enable visor gesture input"), game_tab);
@@ -2039,6 +2066,10 @@ void MainWindow::ConnectStack()
       add_float_row(controller_layout, tr("Touchpad sensitivity"), 0.05, 1.00, 0.05,
                     runtime->primegun_trackpad_press_threshold,
                     [runtime](float v) { runtime->primegun_trackpad_press_threshold = v; });
+  auto* rumble_intensity_spin =
+      add_float_row(controller_layout, tr("Rumble intensity"), 0.00, 1.00, 0.05,
+                    runtime->rumble_intensity,
+                    [runtime](float v) { runtime->rumble_intensity = v; });
   auto* dpad_radius_spin =
       add_float_row(controller_layout, tr("Head radius"), 0.08, 0.28, 0.01,
                     runtime->xr_dpad_head_radius,
@@ -2582,6 +2613,8 @@ void MainWindow::ConnectStack()
     const QSignalBlocker right_hand_blocker{right_hand};
     const QSignalBlocker left_hand_blocker{left_hand};
     const QSignalBlocker vr_overlays_enabled_blocker{vr_overlays_enabled};
+    const QSignalBlocker rumble_enabled_blocker{rumble_enabled};
+    const QSignalBlocker rumble_hand_mode_blocker{rumble_hand_mode};
     const QSignalBlocker dpad_enabled_blocker{dpad_enabled};
     const QSignalBlocker primegun_grip_inputs_enabled_blocker{primegun_grip_inputs_enabled};
     const QSignalBlocker primegun_grip_inputs_use_trackpad_blocker{
@@ -2616,6 +2649,8 @@ void MainWindow::ConnectStack()
     right_hand->setChecked(runtime->use_right_hand);
     left_hand->setChecked(!runtime->use_right_hand);
     vr_overlays_enabled->setChecked(runtime->vr_overlays_enabled);
+    rumble_enabled->setChecked(runtime->rumble_enabled);
+    rumble_hand_mode->setCurrentIndex(std::clamp(runtime->rumble_hand_mode, 0, 2));
     dpad_enabled->setChecked(runtime->xr_dpad_enabled);
     primegun_grip_inputs_enabled->setChecked(runtime->primegun_grip_inputs_enabled);
     primegun_grip_inputs_use_trackpad->setChecked(runtime->primegun_grip_inputs_use_trackpad);
@@ -2628,6 +2663,7 @@ void MainWindow::ConnectStack()
     visor_helmet_enabled->setChecked(runtime->visor_helmet_enabled);
     set_float(dpad_radius_spin, runtime->xr_dpad_head_radius);
     set_float(trackpad_press_threshold_spin, runtime->primegun_trackpad_press_threshold);
+    set_float(rumble_intensity_spin, runtime->rumble_intensity);
     set_float(dpad_below_spin, runtime->xr_dpad_head_y_below);
     set_float(dpad_deadzone_spin, runtime->xr_dpad_deadzone);
     set_float(movement_deadzone_spin, runtime->directional_movement_deadzone);
@@ -2659,6 +2695,9 @@ void MainWindow::ConnectStack()
           [runtime, refresh_visible_settings, apply_runtime] {
     runtime->use_right_hand = true;
     runtime->vr_overlays_enabled = true;
+    runtime->rumble_enabled = true;
+    runtime->rumble_intensity = 0.35f;
+    runtime->rumble_hand_mode = 2;
     runtime->xr_dpad_enabled = true;
     runtime->primegun_grip_inputs_enabled = true;
     runtime->primegun_grip_inputs_use_trackpad = false;
@@ -2703,6 +2742,15 @@ void MainWindow::ConnectStack()
   connect(vr_overlays_enabled, &QCheckBox::toggled, this,
           [runtime, apply_runtime](bool checked) {
     runtime->vr_overlays_enabled = checked;
+    apply_runtime();
+  });
+  connect(rumble_enabled, &QCheckBox::toggled, this, [runtime, apply_runtime](bool checked) {
+    runtime->rumble_enabled = checked;
+    apply_runtime();
+  });
+  connect(rumble_hand_mode, qOverload<int>(&QComboBox::currentIndexChanged), this,
+          [runtime, apply_runtime](int index) {
+    runtime->rumble_hand_mode = std::clamp(index, 0, 2);
     apply_runtime();
   });
   connect(dpad_enabled, &QCheckBox::toggled, this, [runtime, apply_runtime](bool checked) {
@@ -3735,7 +3783,8 @@ void MainWindow::UpdateScreenSaverInhibition()
 bool MainWindow::eventFilter(QObject* object, QEvent* event)
 {
   if (event->type() == QEvent::Wheel &&
-      (qobject_cast<QSlider*>(object) || qobject_cast<QDoubleSpinBox*>(object)))
+      (qobject_cast<QSlider*>(object) || qobject_cast<QDoubleSpinBox*>(object) ||
+       qobject_cast<QComboBox*>(object)))
   {
     return true;
   }

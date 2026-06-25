@@ -6,6 +6,7 @@
 #include "VideoCommon/VR/OpenXRManager.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -641,7 +642,13 @@ void OpenXRManager::UpdateHaptics()
   const auto haptics = Common::VR::OpenXRInputState::GetHaptics();
 
   // Re-send short pulses while active to approximate continuous rumble.
-  constexpr XrDuration vibration_duration_ns = 50'000'000;
+  constexpr XrDuration vibration_duration_ns = 15'000'000;
+  constexpr int pulse_cycle_ms = 100;
+  const auto now = std::chrono::steady_clock::now();
+  const auto cycle_time_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() %
+      pulse_cycle_ms;
+  const float duty = std::clamp(haptics.intensity, 0.0f, 1.0f);
 
   for (size_t hand = 0; hand < m_input_hand_paths.size(); ++hand)
   {
@@ -650,12 +657,14 @@ void OpenXRManager::UpdateHaptics()
       continue;
 
     const float amplitude = std::clamp(haptics.amplitude[hand], 0.0f, 1.0f);
+    const bool pulse_on =
+        duty >= 0.99f || cycle_time_ms < static_cast<int>(pulse_cycle_ms * duty);
 
     XrHapticActionInfo action_info{XR_TYPE_HAPTIC_ACTION_INFO};
     action_info.action = m_action_haptic;
     action_info.subactionPath = hand_path;
 
-    if (amplitude > 0.001f)
+    if (amplitude > 0.001f && pulse_on)
     {
       XrHapticVibration vibration{XR_TYPE_HAPTIC_VIBRATION};
       vibration.amplitude = amplitude;

@@ -36,6 +36,9 @@ struct RuntimeSettings
   float world_scale = 1.50f;
   bool require_trigger = false;
   float trigger_threshold = 0.5f;
+  bool rumble_enabled = true;
+  float rumble_intensity = 0.35f;
+  int rumble_hand_mode = 2;
   bool primegun_grip_inputs_enabled = true;
   bool primegun_grip_inputs_use_trackpad = false;
   float primegun_trackpad_press_threshold = 0.5f;

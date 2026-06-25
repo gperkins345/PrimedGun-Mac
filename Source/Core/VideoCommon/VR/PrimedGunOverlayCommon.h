@@ -257,11 +257,24 @@ inline bool MenuRowIsNumeric(uint32_t tab, int index)
   case 1:
     return index >= 0 && index <= 5;
   case 2:
-    return index == 2 || index == 5 || index == 8 || index == 9 || index == 10;
+    return index == 2 || index == 5 || index == 8 || index == 11 || index == 12 || index == 13;
   case 3:
     return index >= 3 && index <= 7;
   default:
     return false;
+  }
+}
+
+inline std::string RumbleHandModeText(int mode)
+{
+  switch (mode)
+  {
+  case 1:
+    return "LEFT";
+  case 2:
+    return "RIGHT";
+  default:
+    return "BOTH";
   }
 }
 
@@ -279,8 +292,11 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
             {"RESET CALIBRATION", "PRESS"}};
   case 2:
     return {{"RIGHT HAND", s.use_right_hand ? "ON" : "OFF"},
-            {"REQUIRE TRIGGER", s.require_trigger ? "ON" : "OFF"},
-            {"TRIGGER", FloatText(s.trigger_threshold, 2)},
+            {"REQUIRE R TRIGGER", s.require_trigger ? "ON" : "OFF"},
+            {"R TRIGGER", FloatText(s.trigger_threshold, 2)},
+            {"RUMBLE", s.rumble_enabled ? "ON" : "OFF"},
+            {"RUMBLE TARGET", RumbleHandModeText(s.rumble_hand_mode)},
+            {"RUMBLE INTENSITY", FloatText(s.rumble_intensity, 2)},
             {"PRIMEDGUN GRIP INPUTS", s.primegun_grip_inputs_enabled ? "ON" : "OFF"},
             {"GRIP INPUT SOURCE", s.primegun_grip_inputs_use_trackpad ? "TRACKPAD" : "GRIP"},
             {"TRACKPAD SENSITIVITY", FloatText(s.primegun_trackpad_press_threshold, 2)},

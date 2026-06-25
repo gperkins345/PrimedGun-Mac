@@ -1465,21 +1465,29 @@ bool VulkanOpenXR::AppendPrimedGunOverlayLayers(std::vector<XrCompositionLayerBa
   m_primegun_overlay_layer.subImage.imageRect.extent = {static_cast<int32_t>(width),
                                                         static_cast<int32_t>(height)};
 
-  PGO::HybridControllerPose left_pose = PGO::MakeGripPose(snapshot.controllers[0]);
-  PGO::HybridControllerPose right_pose = PGO::MakeAimPose(snapshot.controllers[1]);
-  PGO::AddTrackingOrigin(&left_pose, snapshot);
-  PGO::AddTrackingOrigin(&right_pose, snapshot);
+  PGO::HybridControllerPose left_grip_pose = PGO::MakeGripPose(snapshot.controllers[0]);
+  PGO::HybridControllerPose right_grip_pose = PGO::MakeGripPose(snapshot.controllers[1]);
+  PGO::HybridControllerPose left_aim_pose = PGO::MakeAimPose(snapshot.controllers[0]);
+  PGO::HybridControllerPose right_aim_pose = PGO::MakeAimPose(snapshot.controllers[1]);
+  PGO::AddTrackingOrigin(&left_grip_pose, snapshot);
+  PGO::AddTrackingOrigin(&right_grip_pose, snapshot);
+  PGO::AddTrackingOrigin(&left_aim_pose, snapshot);
+  PGO::AddTrackingOrigin(&right_aim_pose, snapshot);
+  const PGO::HybridControllerPose& panel_pose =
+      overlay.use_right_hand ? left_grip_pose : right_grip_pose;
+  const PGO::HybridControllerPose& laser_pose =
+      overlay.use_right_hand ? right_aim_pose : left_aim_pose;
 
-  if (menu && left_pose.valid)
+  if (menu && panel_pose.valid)
   {
-    const XrQuaternionf q = left_pose.orientation;
+    const XrQuaternionf q = panel_pose.orientation;
     m_primegun_overlay_layer.pose.orientation = PGO::MulQuat(
         q, {-0.70710678f, 0.0f, 0.0f, 0.70710678f});
     const XrVector3f offset = PGO::RotateVector(m_primegun_overlay_layer.pose.orientation,
                                                 {0.0f, 0.10f, -0.18f});
-    m_primegun_overlay_layer.pose.position = {left_pose.position.x + offset.x,
-                                              left_pose.position.y + offset.y,
-                                              left_pose.position.z + offset.z};
+    m_primegun_overlay_layer.pose.position = {panel_pose.position.x + offset.x,
+                                              panel_pose.position.y + offset.y,
+                                              panel_pose.position.z + offset.z};
     m_primegun_overlay_layer.size = {1.05f, 0.72f};
   }
   else if (weapon_panel)
@@ -1516,9 +1524,9 @@ bool VulkanOpenXR::AppendPrimedGunOverlayLayers(std::vector<XrCompositionLayerBa
 
   layers->push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&m_primegun_overlay_layer));
 
-  if (menu && right_pose.valid && EnsurePrimedGunLaserSwapchain())
+  if (menu && laser_pose.valid && EnsurePrimedGunLaserSwapchain())
   {
-    const XrQuaternionf q = right_pose.orientation;
+    const XrQuaternionf q = laser_pose.orientation;
     const XrVector3f forward = PGO::RotateVector(q, {0.0f, 0.0f, -1.0f});
     m_primegun_laser_layer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
     m_primegun_laser_layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
@@ -1530,9 +1538,9 @@ bool VulkanOpenXR::AppendPrimedGunOverlayLayers(std::vector<XrCompositionLayerBa
     m_primegun_laser_layer.subImage.imageRect.extent = {16, 10};
     m_primegun_laser_layer.pose.orientation =
         PGO::MulQuat(q, {-0.70710678f, 0.0f, 0.0f, 0.70710678f});
-    m_primegun_laser_layer.pose.position = {right_pose.position.x + forward.x * 0.40f,
-                                            right_pose.position.y + forward.y * 0.40f,
-                                            right_pose.position.z + forward.z * 0.40f};
+    m_primegun_laser_layer.pose.position = {laser_pose.position.x + forward.x * 0.40f,
+                                            laser_pose.position.y + forward.y * 0.40f,
+                                            laser_pose.position.z + forward.z * 0.40f};
     m_primegun_laser_layer.size = {0.008f, 0.80f};
     layers->push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&m_primegun_laser_layer));
   }

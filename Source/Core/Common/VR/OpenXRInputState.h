@@ -66,6 +66,10 @@ struct OpenXRInputSnapshot
 struct OpenXRHapticsState
 {
   std::array<float, 2> amplitude{};
+  std::array<float, 2> requested_amplitude{};
+  bool enabled = true;
+  float intensity = 1.0f;
+  int hand_mode = 0;
 };
 
 struct PrimedGunVrOverlayState
@@ -90,6 +94,9 @@ struct PrimedGunVrOverlayState
   bool use_right_hand = true;
   bool require_trigger = false;
   float trigger_threshold = 0.5f;
+  bool rumble_enabled = true;
+  float rumble_intensity = 1.0f;
+  int rumble_hand_mode = 2;
   bool primegun_grip_inputs_enabled = true;
   bool primegun_grip_inputs_use_trackpad = false;
   float primegun_trackpad_press_threshold = 0.5f;
@@ -211,8 +218,9 @@ public:
   static void SetRumble(float left_amplitude, float right_amplitude)
   {
     std::lock_guard lk(s_state_mutex);
-    s_haptics.amplitude[0] = Clamp01(left_amplitude);
-    s_haptics.amplitude[1] = Clamp01(right_amplitude);
+    s_haptics.requested_amplitude[0] = Clamp01(left_amplitude);
+    s_haptics.requested_amplitude[1] = Clamp01(right_amplitude);
+    RefreshRumbleLocked();
   }
 
   static void SetRumbleForHand(std::size_t hand_index, float amplitude)
@@ -221,10 +229,42 @@ public:
       return;
 
     std::lock_guard lk(s_state_mutex);
-    s_haptics.amplitude[hand_index] = Clamp01(amplitude);
+    s_haptics.requested_amplitude[hand_index] = Clamp01(amplitude);
+    RefreshRumbleLocked();
+  }
+
+  static void SetRumbleConfig(bool enabled, float intensity, int hand_mode)
+  {
+    std::lock_guard lk(s_state_mutex);
+    s_haptics.enabled = enabled;
+    s_haptics.intensity = Clamp01(intensity);
+    s_haptics.hand_mode = ClampRumbleHandMode(hand_mode);
+    RefreshRumbleLocked();
   }
 
 private:
+  static void RefreshRumbleLocked()
+  {
+    const float scale = s_haptics.enabled ? s_haptics.intensity : 0.0f;
+    for (std::size_t i = 0; i < s_haptics.amplitude.size(); ++i)
+    {
+      const bool hand_enabled = s_haptics.hand_mode == 0 ||
+                                (s_haptics.hand_mode == 1 && i == 0) ||
+                                (s_haptics.hand_mode == 2 && i == 1);
+      s_haptics.amplitude[i] =
+          hand_enabled ? Clamp01(s_haptics.requested_amplitude[i] * scale) : 0.0f;
+    }
+  }
+
+  static int ClampRumbleHandMode(int value)
+  {
+    if (value < 0)
+      return 0;
+    if (value > 2)
+      return 2;
+    return value;
+  }
+
   static float Clamp01(float value)
   {
     if (value < 0.0f)

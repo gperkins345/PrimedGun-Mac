@@ -53,6 +53,16 @@ static u8 PrimedGunAxisToPadByte(float value, u8 center)
                                          0, 255));
 }
 
+static void SetPrimedGunNeutralPad(GCPadStatus* pad)
+{
+  *pad = {};
+  pad->isConnected = true;
+  pad->stickX = GCPadStatus::MAIN_STICK_CENTER_X;
+  pad->stickY = GCPadStatus::MAIN_STICK_CENTER_Y;
+  pad->substickX = GCPadStatus::C_STICK_CENTER_X;
+  pad->substickY = GCPadStatus::C_STICK_CENTER_Y;
+}
+
 struct PrimedGunQuat
 {
   float x = 0.0f;
@@ -241,7 +251,7 @@ static void ApplyPrimedGunGripInputs(const Common::VR::OpenXRControllerState& le
   {
     const bool left_grip_action =
         overlay.primegun_grip_inputs_use_trackpad ?
-            left.trackpad_force >= overlay.primegun_trackpad_press_threshold :
+            left.trackpad_touch && left.trackpad_force >= overlay.primegun_trackpad_press_threshold :
             left.squeeze_button;
     if (left_grip_action)
       pad->button |= PAD_TRIGGER_Z;
@@ -251,7 +261,7 @@ static void ApplyPrimedGunGripInputs(const Common::VR::OpenXRControllerState& le
   {
     const bool right_grip_action =
         overlay.primegun_grip_inputs_use_trackpad ?
-            right.trackpad_force >= overlay.primegun_trackpad_press_threshold :
+            right.trackpad_touch && right.trackpad_force >= overlay.primegun_trackpad_press_threshold :
             right.squeeze_button;
     if (right_grip_action)
       pad->button |= PAD_BUTTON_Y;
@@ -522,6 +532,7 @@ static void UpdatePrimedGunWeaponSelect(const Common::VR::OpenXRControllerState&
 static bool ApplyPrimedGunModernControls(GCPadStatus* pad)
 {
   static u64 s_primegun_pad_sample = 0;
+  static u64 s_grip_input_suppress_until_sample = 0;
   static bool s_last_gameplay = false;
   static bool s_last_overlay_visible = false;
   static bool s_last_left_primary = false;
@@ -561,13 +572,18 @@ static bool ApplyPrimedGunModernControls(GCPadStatus* pad)
     game_right.secondary_button = false;
   }
 
-  *pad = {};
-  pad->isConnected = true;
+  SetPrimedGunNeutralPad(pad);
 
-  const bool left_vr_menu_button = left.connected && (left.thumbstick_button || left.menu_button);
+  const auto& vr_menu_hand = overlay.use_right_hand ? left : right;
+  const bool vr_menu_button =
+      vr_menu_hand.connected && (vr_menu_hand.thumbstick_button || vr_menu_hand.menu_button);
   const bool suppress_left_stick = false;
 
   const bool gameplay = PrimedGun::IsGameplayInputActive();
+  if (gameplay && !s_last_gameplay)
+    s_grip_input_suppress_until_sample = s_primegun_pad_sample + 30;
+  const bool suppress_grip_inputs =
+      gameplay && s_primegun_pad_sample < s_grip_input_suppress_until_sample;
   const bool orbit_lock_active = gameplay && PrimedGun::IsOrbitLockActive();
   const bool log_now =
       (++s_primegun_pad_sample % 120) == 0 || gameplay != s_last_gameplay ||
@@ -601,6 +617,9 @@ static bool ApplyPrimedGunModernControls(GCPadStatus* pad)
     s_last_right_menu = right.menu_button;
     s_last_right_thumbstick = right.thumbstick_button;
   }
+
+  if (overlay.menu_visible)
+    return true;
 
   if (!gameplay)
   {
@@ -653,7 +672,7 @@ static bool ApplyPrimedGunModernControls(GCPadStatus* pad)
   {
     if (game_left.primary_button)
       pad->button |= PAD_BUTTON_X;
-    if (game_left.secondary_button && !left_vr_menu_button && !weapon_modifier)
+    if (game_left.secondary_button && !vr_menu_button && !weapon_modifier)
       pad->button |= PAD_BUTTON_START;
     if (game_left.trigger_button)
     {
@@ -672,14 +691,8 @@ static bool ApplyPrimedGunModernControls(GCPadStatus* pad)
       pad->button |= PAD_BUTTON_B;
   }
 
-  ApplyPrimedGunGripInputs(game_left, game_right, overlay, pad);
-
-  if (overlay.menu_visible)
-  {
-    pad->button &= ~(PAD_BUTTON_A | PAD_BUTTON_B);
-    pad->analogA = 0;
-    pad->analogB = 0;
-  }
+  if (!suppress_grip_inputs)
+    ApplyPrimedGunGripInputs(game_left, game_right, overlay, pad);
 
   if (pad->button & PAD_BUTTON_A)
     pad->analogA = 0xFF;
@@ -860,6 +873,10 @@ void GCPad::SetOutput(const ControlState strength)
 {
   const auto lock = GetStateLock();
   m_rumble->controls[0]->control_ref->State(strength);
+#ifdef ENABLE_VR
+  if (m_index == 0 && Common::VR::OpenXRInputState::GetSnapshot().runtime_active)
+    Common::VR::OpenXRInputState::SetRumble(static_cast<float>(strength));
+#endif
 }
 
 void GCPad::LoadDefaults(const ControllerInterface& ciface)
