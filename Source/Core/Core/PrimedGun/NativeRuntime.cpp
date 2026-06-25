@@ -1225,10 +1225,6 @@ struct ScanTargetCandidate
   u32 obj = 0;
 };
 
-std::vector<ScanTargetCandidate> s_scan_target_candidates;
-u32 s_scan_target_cache_player = 0;
-u64 s_scan_target_cache_frame = 0;
-
 bool ReadTransformTranslation(const Core::CPUThreadGuard& guard, u32 transform, float* x,
                               float* y, float* z)
 {
@@ -1385,11 +1381,13 @@ bool ObjectByUid(const Core::CPUThreadGuard& guard, u32 state_manager, u16 uid, 
          static_cast<u16>(live_uid_word >> 16) == uid;
 }
 
-bool RefreshScanTargetCandidates(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player)
+bool RefreshScanTargetCandidates(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player,
+                                 std::vector<ScanTargetCandidate>* candidates)
 {
-  s_scan_target_candidates.clear();
-  s_scan_target_cache_player = player;
-  s_scan_target_cache_frame = s_frame_counter;
+  if (candidates == nullptr)
+    return false;
+
+  candidates->clear();
 
   u32 count = 0;
   u32 items = 0;
@@ -1400,7 +1398,7 @@ bool RefreshScanTargetCandidates(const Core::CPUThreadGuard& guard, u32 state_ma
     return false;
   }
 
-  s_scan_target_candidates.reserve(count);
+  candidates->reserve(count);
   for (u32 i = 0; i < count; ++i)
   {
     u16 uid = 0xffffu;
@@ -1411,10 +1409,10 @@ bool RefreshScanTargetCandidates(const Core::CPUThreadGuard& guard, u32 state_ma
     if (!ObjectByUid(guard, state_manager, uid, &obj) || obj == player)
       continue;
 
-    s_scan_target_candidates.push_back({uid, obj});
+    candidates->push_back({uid, obj});
   }
 
-  return !s_scan_target_candidates.empty();
+  return !candidates->empty();
 }
 
 bool PickScanTargetFromHmd(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player,
@@ -1427,7 +1425,8 @@ bool PickScanTargetFromHmd(const Core::CPUThreadGuard& guard, u32 state_manager,
     return false;
   }
 
-  if (!RefreshScanTargetCandidates(guard, state_manager, player))
+  std::vector<ScanTargetCandidate> candidates;
+  if (!RefreshScanTargetCandidates(guard, state_manager, player, &candidates))
     return false;
 
   float ray_x = 0.0f;
@@ -1448,7 +1447,7 @@ bool PickScanTargetFromHmd(const Core::CPUThreadGuard& guard, u32 state_manager,
   const float max_perp_sq = max_perp * max_perp;
   bool found = false;
 
-  for (const ScanTargetCandidate& candidate : s_scan_target_candidates)
+  for (const ScanTargetCandidate& candidate : candidates)
   {
     if (!TargetUidStillExists(guard, state_manager, candidate.uid, candidate.obj))
       continue;
@@ -3627,7 +3626,8 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
   UpdateScanPitch(guard, snapshot, player, yaw_delta_deg);
   const bool scan_active = ScanVisorActive(guard, player);
   if (scan_active)
-    UpdateScanTargetingFromHmd(guard, snapshot, ADDRESS.state_manager, player, settings, yaw_delta_deg);
+    UpdateScanTargetingFromHmd(guard, snapshot, ADDRESS.state_manager, player, settings,
+                               yaw_delta_deg);
 
   u32 gun = 0;
   if (!PlayerIsFirstPersonGunReady(guard, player) ||
@@ -3886,6 +3886,39 @@ bool ApplyScanReticleTracePatch(const Core::CPUThreadGuard& guard)
   }
 
   return wrote;
+}
+
+bool RestoreTracePatchIfInstalled(const Core::CPUThreadGuard& guard, DynamicPpcPatch& patch,
+                                  u32 original_cave_offset)
+{
+  const u32 branch = PpcBranch(patch.address, patch.cave);
+  u32 current = 0;
+  if (!TryReadU32(guard, patch.address, &current) || current != branch)
+    return false;
+
+  u32 original = patch.original;
+  if (original == 0)
+    TryReadU32(guard, patch.cave + original_cave_offset, &original);
+  if (original == 0)
+    return false;
+
+  const bool restored = TryWriteInstruction(guard, patch.address, original);
+  if (restored)
+  {
+    patch.original = original;
+    patch.applied = false;
+  }
+  return restored;
+}
+
+bool RestoreScanReticleTracePatches(const Core::CPUThreadGuard& guard)
+{
+  bool restored = false;
+  restored = RestoreTracePatchIfInstalled(guard, s_scan_reticle_trace_patch, 0x18u) || restored;
+  restored = RestoreTracePatchIfInstalled(guard, s_scan_reticle_trace_curr_patch, 0x18u) || restored;
+  restored =
+      RestoreTracePatchIfInstalled(guard, s_scan_indicator_update_trace_patch, 0x14u) || restored;
+  return restored;
 }
 
 bool ApplyScanIndicatorViewBasisPatch(const Core::CPUThreadGuard& guard)
@@ -4181,7 +4214,8 @@ bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
   bool wrote = false;
   wrote = ApplyGameFlowFlagPatches(guard) || wrote;
   wrote = ApplyRenderModelOffsetPatch(guard) || wrote;
-  wrote = ApplyScanReticleTracePatch(guard) || wrote;
+  wrote = RuntimeLoggingEnabled() ? (ApplyScanReticleTracePatch(guard) || wrote) :
+                                    (RestoreScanReticleTracePatches(guard) || wrote);
   wrote = ApplyScanIndicatorViewBasisPatch(guard) || wrote;
   wrote = ApplyFirstPersonPitchLoadPatch(guard) || wrote;
 
@@ -4437,7 +4471,10 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
       gameplay_input_active && !scan_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager);
   s_gameplay_input_active.store(gameplay_input_active, std::memory_order_relaxed);
   s_orbit_lock_active.store(orbit_lock_active, std::memory_order_relaxed);
-  if (have_player)
+  if (!have_player || (!scan_active && !gameplay_input_active))
+    WriteGunTargetScratch(guard, 0, 0xffffu);
+
+  if (have_player && RuntimeLoggingEnabled())
   {
     LogModeProbe(guard, player, gameplay_input_active != s_last_logged_gameplay_input_active);
     if (scan_active)
@@ -4499,9 +4536,6 @@ void ResetNativeRuntime()
   s_scan_was_active = false;
   s_scan_last_player = 0;
   s_scan_normal_frames = 0;
-  s_scan_target_candidates.clear();
-  s_scan_target_cache_player = 0;
-  s_scan_target_cache_frame = 0;
   s_smooth_scan_pitch = 0.0f;
   s_translation_base_valid = false;
   s_dpad_forced_input_disabled = false;

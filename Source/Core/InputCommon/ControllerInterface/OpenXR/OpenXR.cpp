@@ -39,6 +39,13 @@ Common::Vec3 ToVec3(const std::array<float, 3>& vec)
   return {vec[0], vec[1], vec[2]};
 }
 
+bool IsValveIndexProfile(std::string_view profile)
+{
+  return profile.find("/interaction_profiles/valve/index_controller") != std::string_view::npos ||
+         (profile.find("valve") != std::string_view::npos &&
+          profile.find("index") != std::string_view::npos);
+}
+
 class OpenXRDevice final : public Core::Device
 {
 public:
@@ -120,6 +127,11 @@ private:
   };
 
   std::string GetHandPrefix(Hand hand) const { return hand == Hand::Left ? "Left" : "Right"; }
+
+  bool IsValveIndexController(Hand hand) const
+  {
+    return IsValveIndexProfile(m_snapshot.interaction_profiles[static_cast<size_t>(hand)]);
+  }
 
   void SetRumbleState(ControlState state, RumbleTarget target)
   {
@@ -264,6 +276,8 @@ private:
           return 0.0;
         return state.trigger_button ? 1.0 : 0.0;
       case DigitalControl::Squeeze:
+        if (m_device.IsValveIndexController(m_hand))
+          return 0.0;
         return state.squeeze_button ? 1.0 : 0.0;
       case DigitalControl::Thumbstick:
         return state.thumbstick_button ? 1.0 : 0.0;
@@ -321,6 +335,8 @@ private:
           return 0.0;
         return state.trigger_value;
       case AnalogControl::Squeeze:
+        if (m_device.IsValveIndexController(m_hand))
+          return 0.0;
         return state.squeeze_value;
       case AnalogControl::TrackpadForce:
         return state.trackpad_force;

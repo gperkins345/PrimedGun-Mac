@@ -703,6 +703,27 @@ void OpenXRManager::UpdateInputActions()
   }
 
   std::array<Common::VR::OpenXRControllerState, 2> controllers{};
+  std::array<std::string, 2> interaction_profiles{};
+
+  const auto path_to_string = [this](XrPath path) {
+    if (path == XR_NULL_PATH)
+      return std::string{};
+
+    uint32_t count = 0;
+    const XrResult count_result = xrPathToString(m_instance, path, 0, &count, nullptr);
+    if (XR_FAILED(count_result) || count == 0)
+      return std::string{};
+
+    std::string result(count, '\0');
+    const XrResult string_result =
+        xrPathToString(m_instance, path, count, &count, result.data());
+    if (XR_FAILED(string_result) || count == 0)
+      return std::string{};
+
+    if (!result.empty() && result.back() == '\0')
+      result.pop_back();
+    return result;
+  };
 
   const auto locate_space_state = [this](XrSpace space, Common::VR::OpenXRPoseState* pose_state,
                                          Common::VR::OpenXRVelocityState* velocity_state) {
@@ -754,6 +775,9 @@ void OpenXRManager::UpdateInputActions()
   {
     const XrPath hand_path = m_input_hand_paths[hand];
     auto& controller = controllers[hand];
+    XrInteractionProfileState profile_state{XR_TYPE_INTERACTION_PROFILE_STATE};
+    if (XR_SUCCEEDED(xrGetCurrentInteractionProfile(m_session, hand_path, &profile_state)))
+      interaction_profiles[hand] = path_to_string(profile_state.interactionProfile);
 
     bool action_seen = false;
     const auto get_boolean = [this, hand_path, &action_seen](XrAction action) -> bool {
@@ -857,6 +881,7 @@ void OpenXRManager::UpdateInputActions()
 
   const std::array<float, 3> tracking_origin_position{m_home_position.x, m_home_position.y,
                                                       m_home_position.z};
+  Common::VR::OpenXRInputState::SetInteractionProfiles(interaction_profiles);
   Common::VR::OpenXRInputState::SetControllers(controllers, true, head_pose,
                                                tracking_origin_position);
   UpdateHaptics();
