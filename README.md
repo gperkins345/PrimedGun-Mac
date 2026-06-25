@@ -53,7 +53,7 @@ For SteamOS-specific builds, see [PrimedSteam](https://github.com/josethevrtech/
 - Meta's own OpenXR environment is not recommended; try SteamVR or Virtual Desktop instead.
 - Run the app and select your Metroid Prime NTSC Revision 0 (1.0) game file.
 - Check the Layout tab for controller bindings.
-- Transfer your memory card into `User\GC`, then select the save in Dolphin settings if you want existing saves.
+- To transfer your old saves go to `User\GC` then go to Dolphin settings then gamecube tab and select the save in there.
 - Once in game, click the right stick to set your height.
 - Click the left thumbstick to open or close the in-headset settings menu.
 - Try to stay in the centre of your play space and face forward for the best interaction.

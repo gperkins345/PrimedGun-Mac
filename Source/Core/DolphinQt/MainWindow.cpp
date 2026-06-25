@@ -1931,13 +1931,6 @@ void MainWindow::ConnectStack()
   setup_layout->addLayout(play_control_row);
   setup_layout->addWidget(options_button);
   setup_layout->addSpacing(12);
-  auto* scan_notice =
-      new QLabel(tr("NOTE: Head-tracked scan visor is temporarily disabled in this build while "
-                    "scan-mode stability is being refined. Original scan mode has been restored."),
-                 game_tab);
-  scan_notice->setObjectName(QStringLiteral("PrimedGunNotice"));
-  scan_notice->setWordWrap(true);
-  setup_layout->addWidget(scan_notice);
   setup_layout->addStretch();
   auto* setup_art = new QLabel(game_tab);
   setup_art->setAlignment(Qt::AlignLeft | Qt::AlignBottom);

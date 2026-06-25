@@ -179,6 +179,7 @@ constexpr u32 PLAYER_VELOCITY_OFFSET = 0x138u;
 constexpr u32 PLAYER_MOVEMENT_STATE_OFFSET = 0x258u;
 constexpr u32 PLAYER_ORBIT_STATE_OFFSET = 0x304u;
 constexpr u32 PLAYER_ORBIT_TARGET_ID_OFFSET = 0x310u;
+constexpr u32 PLAYER_NEARBY_ORBIT_OBJECTS_OFFSET = 0x344u;
 constexpr u32 PLAYER_FREE_LOOK_STATE_OFFSET = 0x3DCu;
 constexpr u32 PLAYER_FREE_LOOK_CENTER_TIME_OFFSET = 0x3E0u;
 constexpr u32 PLAYER_FREE_LOOK_YAW_ANGLE_OFFSET = 0x3E4u;
@@ -582,6 +583,16 @@ bool TryReadU32(const Core::CPUThreadGuard& guard, u32 address, u32* out)
 bool TryReadU8(const Core::CPUThreadGuard& guard, u32 address, u8* out)
 {
   const auto value = PowerPC::MMU::HostTryRead<u8>(guard, address);
+  if (!value)
+    return false;
+
+  *out = value->value;
+  return true;
+}
+
+bool TryReadU16(const Core::CPUThreadGuard& guard, u32 address, u16* out)
+{
+  const auto value = PowerPC::MMU::HostTryRead<u16>(guard, address);
   if (!value)
     return false;
 
@@ -1208,6 +1219,16 @@ struct GunTargetPick
   bool suppress_orbit_hook = false;
 };
 
+struct ScanTargetCandidate
+{
+  u16 uid = 0xffffu;
+  u32 obj = 0;
+};
+
+std::vector<ScanTargetCandidate> s_scan_target_candidates;
+u32 s_scan_target_cache_player = 0;
+u64 s_scan_target_cache_frame = 0;
+
 bool ReadTransformTranslation(const Core::CPUThreadGuard& guard, u32 transform, float* x,
                               float* y, float* z)
 {
@@ -1349,17 +1370,137 @@ void WriteGunTargetScratch(const Core::CPUThreadGuard& guard, u32 player, u16 ui
   TryWriteU16(guard, GUN_TARGET_SCRATCH + 4u, uid);
 }
 
-void WriteScanOrbitTarget(const Core::CPUThreadGuard& guard, u32 player, u16 uid, bool scanning)
+bool ObjectByUid(const Core::CPUThreadGuard& guard, u32 state_manager, u16 uid, u32* obj)
 {
-  if (player < 0x80000000u)
-    return;
+  if (uid == 0xffffu || state_manager < 0x80000000u || obj == nullptr)
+    return false;
 
-  if (scanning && uid != 0xffffu)
+  u32 object_list = 0;
+  if (!TryReadU32(guard, state_manager + 0x810u, &object_list) || object_list < 0x80000000u)
+    return false;
+
+  u32 live_uid_word = 0;
+  return TryReadU32(guard, object_list + ((uid & 0x03ffu) << 3) + 4u, obj) &&
+         *obj >= 0x80000000u && TryReadU32(guard, *obj + 0x8u, &live_uid_word) &&
+         static_cast<u16>(live_uid_word >> 16) == uid;
+}
+
+bool RefreshScanTargetCandidates(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player)
+{
+  s_scan_target_candidates.clear();
+  s_scan_target_cache_player = player;
+  s_scan_target_cache_frame = s_frame_counter;
+
+  u32 count = 0;
+  u32 items = 0;
+  if (!TryReadU32(guard, player + PLAYER_NEARBY_ORBIT_OBJECTS_OFFSET + 4u, &count) ||
+      !TryReadU32(guard, player + PLAYER_NEARBY_ORBIT_OBJECTS_OFFSET + 12u, &items) ||
+      count > 128u || items < 0x80000000u)
   {
-    const u32 uid_word = static_cast<u32>(uid) << 16;
-    TryWriteU32(guard, player + PLAYER_ORBIT_STATE_OFFSET, 1u);  // CPlayer::kOS_OrbitObject
-    TryWriteU32(guard, player + PLAYER_ORBIT_TARGET_ID_OFFSET, uid_word);
+    return false;
   }
+
+  s_scan_target_candidates.reserve(count);
+  for (u32 i = 0; i < count; ++i)
+  {
+    u16 uid = 0xffffu;
+    if (!TryReadU16(guard, items + i * 2u, &uid) || uid == 0xffffu)
+      continue;
+
+    u32 obj = 0;
+    if (!ObjectByUid(guard, state_manager, uid, &obj) || obj == player)
+      continue;
+
+    s_scan_target_candidates.push_back({uid, obj});
+  }
+
+  return !s_scan_target_candidates.empty();
+}
+
+bool PickScanTargetFromHmd(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player,
+                           const Matrix3x4& hmd, const RuntimeSettings& settings,
+                           GunTargetPick* pick)
+{
+  if (!settings.gun_targeting_enabled || state_manager < 0x80000000u ||
+      player < 0x80000000u)
+  {
+    return false;
+  }
+
+  if (!RefreshScanTargetCandidates(guard, state_manager, player))
+    return false;
+
+  float ray_x = 0.0f;
+  float ray_y = 0.0f;
+  float ray_z = 0.0f;
+  if (!ReadTransformTranslation(guard, player + ADDRESS.transform_offset, &ray_x, &ray_y, &ray_z))
+    return false;
+
+  float dir_x = 0.0f;
+  float dir_y = 0.0f;
+  float dir_z = 0.0f;
+  if (!GunAimDirectionFromMatrix(hmd, &dir_x, &dir_y, &dir_z))
+    return false;
+
+  constexpr float scan_pick_radius_multiplier = 1.5f;
+  const float max_along = settings.gun_targeting_distance;
+  const float max_perp = settings.gun_targeting_radius * scan_pick_radius_multiplier;
+  const float max_perp_sq = max_perp * max_perp;
+  bool found = false;
+
+  for (const ScanTargetCandidate& candidate : s_scan_target_candidates)
+  {
+    if (!TargetUidStillExists(guard, state_manager, candidate.uid, candidate.obj))
+      continue;
+
+    float ox = 0.0f;
+    float oy = 0.0f;
+    float oz = 0.0f;
+    if (!ReadTransformTranslation(guard, candidate.obj + ADDRESS.transform_offset, &ox, &oy, &oz))
+      continue;
+
+    const float vx = ox - ray_x;
+    const float vy = oy - ray_y;
+    const float vz = oz - ray_z;
+    const float along = vx * dir_x + vy * dir_y + vz * dir_z;
+    if (along < 0.5f || along > max_along)
+      continue;
+
+    const float nearest_x = ray_x + dir_x * along;
+    const float nearest_y = ray_y + dir_y * along;
+    const float nearest_z = ray_z + dir_z * along;
+    const float dx = ox - nearest_x;
+    const float dy = oy - nearest_y;
+    const float dz = oz - nearest_z;
+    const float perp_sq = dx * dx + dy * dy + dz * dz;
+    if (!std::isfinite(perp_sq) || perp_sq > max_perp_sq)
+      continue;
+
+    const float perp = std::sqrt(perp_sq);
+    const float cone_fraction = perp / std::max(max_perp, 0.001f);
+    const float score = cone_fraction * 1.50f + perp * 0.35f + along * 0.003f;
+    if (!found || score < pick->score)
+    {
+      found = true;
+      pick->uid = candidate.uid;
+      pick->obj = candidate.obj;
+      pick->ray_x = ray_x;
+      pick->ray_y = ray_y;
+      pick->ray_z = ray_z;
+      pick->dir_x = dir_x;
+      pick->dir_y = dir_y;
+      pick->dir_z = dir_z;
+      pick->x = ox;
+      pick->y = oy;
+      pick->z = oz;
+      pick->along = along;
+      pick->perp = perp;
+      pick->score = score;
+      pick->has_scan = true;
+    }
+  }
+
+  return found;
 }
 
 bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player, u32 gun,
@@ -1464,7 +1605,10 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
     if (scan_mode && !scan_candidate)
       continue;
 
-    if (!combat_candidate && !orbit_candidate && !scan_candidate && !grapple_candidate)
+    if (!scan_mode && !combat_candidate && !grapple_candidate)
+      continue;
+
+    if (scan_mode && !combat_candidate && !orbit_candidate && !scan_candidate && !grapple_candidate)
       continue;
 
     const float perp = std::sqrt(perp_sq);
@@ -2171,12 +2315,8 @@ void ClearScanPitchState(const Core::CPUThreadGuard& guard, u32 player)
   if (player < 0x80000000u)
     return;
 
-  TryWriteU8(guard, player + PLAYER_FREE_LOOK_STATE_OFFSET, 0);
-  TryWriteU8(guard, player + PLAYER_FREE_LOOK_STATE_OFFSET + 1, 0);
   TryWriteU8(guard, player + PLAYER_FREE_LOOK_STATE_OFFSET + 2, 0);
   TryWriteFloat(guard, player + PLAYER_FREE_LOOK_CENTER_TIME_OFFSET, 0.0f);
-  TryWriteFloat(guard, player + PLAYER_FREE_LOOK_YAW_ANGLE_OFFSET, 0.0f);
-  TryWriteFloat(guard, player + PLAYER_FREE_LOOK_YAW_VEL_OFFSET, 0.0f);
   TryWriteFloat(guard, player + PLAYER_FREE_LOOK_PITCH_ANGLE_OFFSET, 0.0f);
   TryWriteFloat(guard, player + 0x3F0u, 0.0f);
 }
@@ -2197,54 +2337,26 @@ void UpdateScanPitch(const Core::CPUThreadGuard& guard,
   if (scan_active)
   {
     s_scan_normal_frames = 0;
-    if (!ScanPitchFieldsWritable(guard, player))
-    {
-      s_scan_was_active = true;
-      return;
-    }
-
-    const Common::VR::OpenXRControllerState& right = snapshot.controllers[1];
-    if (!right.connected)
+    float pitch = 0.0f;
+    if (!HmdPitchFromSnapshot(snapshot, yaw_delta_deg, &pitch))
       return;
 
     constexpr float max_scan_pitch = 1.2217305f;  // 70 degrees
-    constexpr float stick_deadzone = 0.15f;
-    constexpr float scan_pitch_speed = 1.7f;
-    float stick_y = right.thumbstick_y;
-    if (std::abs(stick_y) < stick_deadzone)
-      stick_y = 0.0f;
-    else
-      stick_y = (std::abs(stick_y) - stick_deadzone) / (1.0f - stick_deadzone) *
-                (stick_y < 0.0f ? -1.0f : 1.0f);
-
-    constexpr float frame_dt = 1.0f / 60.0f;
-    s_smooth_scan_pitch =
-        std::clamp(s_smooth_scan_pitch + stick_y * scan_pitch_speed * frame_dt,
-                   -max_scan_pitch, max_scan_pitch);
-    TryWriteFloat(guard, player + 0x3ECu, s_smooth_scan_pitch);
-    TryWriteFloat(guard, player + 0x3F0u, 0.0f);
-    TryWriteU8(guard, player + 0x3DCu, 1u);
-    TryWriteU8(guard, player + 0x3DEu, 1u);
-
-    float vz = 0.0f;
-    if (TryReadFloat(guard, player + PLAYER_VELOCITY_OFFSET + 0x08u, &vz) && vz > 0.0f)
-      TryWriteFloat(guard, player + PLAYER_VELOCITY_OFFSET + 0x08u, 0.0f);
+    pitch = std::clamp(pitch, -max_scan_pitch, max_scan_pitch);
+    constexpr float pitch_smooth = 0.45f;
+    s_smooth_scan_pitch = s_smooth_scan_pitch * pitch_smooth + pitch * (1.0f - pitch_smooth);
   }
   else if (s_scan_was_active)
   {
     s_scan_normal_frames = 1;
-    s_smooth_scan_pitch = 0.0f;
-    ClearScanPitchState(guard, player);
   }
   else if (s_scan_normal_frames > 0 && s_scan_normal_frames < 8)
   {
     ++s_scan_normal_frames;
-    ClearScanPitchState(guard, player);
   }
   else if (s_scan_normal_frames == 8)
   {
     s_smooth_scan_pitch = 0.0f;
-    ClearScanPitchState(guard, player);
     ++s_scan_normal_frames;
   }
 
@@ -2258,13 +2370,13 @@ void UpdateScanTargetingFromHmd(const Core::CPUThreadGuard& guard,
   static u64 s_last_scan_candidate_log_frame = 0;
   static u16 s_last_scan_candidate_uid = 0xffffu;
   static bool s_last_scan_candidate_found = false;
-  static GunTargetPick s_latched_scan_pick = {};
-  static bool s_latched_scan_pick_valid = false;
-  static u32 s_latched_scan_pick_player = 0;
 
   const ScanVisorInfo scan_info = ReadScanVisorInfo(guard, player);
   if (!scan_info.active)
+  {
+    WriteGunTargetScratch(guard, player, 0xffffu);
     return;
+  }
 
   Matrix3x4 hmd = {};
   if (!MatrixFromHmdSnapshot(snapshot, yaw_delta_deg, &hmd))
@@ -2274,49 +2386,22 @@ void UpdateScanTargetingFromHmd(const Core::CPUThreadGuard& guard,
   }
 
   GunTargetPick pick = {};
-  const bool scan_button_held = OrbitLockButtonHeld(guard, state_manager);
-  const bool found_live = PickGunRayTarget(guard, state_manager, player, player,
-                                           player + ADDRESS.transform_offset, hmd, settings, false,
-                                           &pick);
-  if (!scan_button_held)
-  {
-    s_latched_scan_pick_valid = false;
-    s_latched_scan_pick_player = 0;
-  }
-
-  const bool can_use_latched_scan_pick =
-      scan_button_held && s_latched_scan_pick_valid && s_latched_scan_pick_player == player &&
-      TargetUidStillExists(guard, state_manager, s_latched_scan_pick.uid,
-                           s_latched_scan_pick.obj);
-  if (can_use_latched_scan_pick)
-  {
-    pick = s_latched_scan_pick;
-  }
-  else if (scan_button_held && found_live)
-  {
-    s_latched_scan_pick = pick;
-    s_latched_scan_pick_valid = true;
-    s_latched_scan_pick_player = player;
-  }
-
-  const bool found = can_use_latched_scan_pick || found_live;
+  const bool found = PickScanTargetFromHmd(guard, state_manager, player, hmd, settings, &pick);
 
   if (found)
   {
-    AppendScanDebugLine(fmt::format(
-        "PrimedGun scan_candidate frame={} player={:08X} state={:08X} current_visor={} "
-        "transition_visor={} proxy_visor={} real_state={} uid={:04X} obj={:08X} score={:.3f} "
-        "along={:.3f} perp={:.3f} scan={} target={} orbit={} character={} targetable={} grapple={} "
-        "scan_button={} latched={}",
-        s_frame_counter, player, scan_info.player_state, scan_info.current_visor,
-        scan_info.transition_visor, scan_info.proxy_visor, scan_info.real_state, pick.uid,
-        pick.obj, pick.score, pick.along, pick.perp, pick.has_scan, pick.has_target,
-        pick.has_orbit, pick.has_character, pick.targetable, pick.grapple_point, scan_button_held,
-        can_use_latched_scan_pick));
     if (RuntimeLoggingEnabled() &&
         (pick.uid != s_last_scan_candidate_uid || !s_last_scan_candidate_found ||
          s_frame_counter >= s_last_scan_candidate_log_frame + 30u))
     {
+      AppendScanDebugLine(fmt::format(
+          "PrimedGun scan_candidate frame={} player={:08X} state={:08X} current_visor={} "
+          "transition_visor={} proxy_visor={} real_state={} uid={:04X} obj={:08X} score={:.3f} "
+          "along={:.3f} perp={:.3f} scan={} target={} orbit={} character={} targetable={} grapple={}",
+          s_frame_counter, player, scan_info.player_state, scan_info.current_visor,
+          scan_info.transition_visor, scan_info.proxy_visor, scan_info.real_state, pick.uid,
+          pick.obj, pick.score, pick.along, pick.perp, pick.has_scan, pick.has_target,
+          pick.has_orbit, pick.has_character, pick.targetable, pick.grapple_point));
       NOTICE_LOG_FMT(CORE,
                      "PrimedGun scan_candidate selected uid={:04X} obj={:08X} score={:.3f} "
                      "along={:.3f} perp={:.3f} pos=({:.3f},{:.3f},{:.3f}) "
@@ -2329,18 +2414,17 @@ void UpdateScanTargetingFromHmd(const Core::CPUThreadGuard& guard,
       s_last_scan_candidate_found = true;
     }
     WriteGunTargetScratch(guard, player, pick.uid);
-    WriteScanOrbitTarget(guard, player, pick.uid, scan_button_held);
   }
   else
   {
-    AppendScanDebugLine(fmt::format(
-        "PrimedGun scan_candidate frame={} player={:08X} state={:08X} current_visor={} "
-        "transition_visor={} proxy_visor={} real_state={} uid=FFFF obj=00000000 none",
-        s_frame_counter, player, scan_info.player_state, scan_info.current_visor,
-        scan_info.transition_visor, scan_info.proxy_visor, scan_info.real_state));
     if (RuntimeLoggingEnabled() &&
         (s_last_scan_candidate_found || s_frame_counter >= s_last_scan_candidate_log_frame + 30u))
     {
+      AppendScanDebugLine(fmt::format(
+          "PrimedGun scan_candidate frame={} player={:08X} state={:08X} current_visor={} "
+          "transition_visor={} proxy_visor={} real_state={} uid=FFFF obj=00000000 none",
+          s_frame_counter, player, scan_info.player_state, scan_info.current_visor,
+          scan_info.transition_visor, scan_info.proxy_visor, scan_info.real_state));
       NOTICE_LOG_FMT(CORE, "PrimedGun scan_candidate selected none");
       s_last_scan_candidate_log_frame = s_frame_counter;
       s_last_scan_candidate_uid = 0xffffu;
@@ -3533,6 +3617,8 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
 
   UpdateScanPitch(guard, snapshot, player, yaw_delta_deg);
   const bool scan_active = ScanVisorActive(guard, player);
+  if (scan_active)
+    UpdateScanTargetingFromHmd(guard, snapshot, ADDRESS.state_manager, player, settings, yaw_delta_deg);
 
   u32 gun = 0;
   if (!PlayerIsFirstPersonGunReady(guard, player) ||
@@ -3796,32 +3882,62 @@ bool ApplyScanReticleTracePatch(const Core::CPUThreadGuard& guard)
 bool ApplyScanIndicatorViewBasisPatch(const Core::CPUThreadGuard& guard)
 {
   auto& patch = s_scan_indicator_view_basis_patch;
-  if (patch.original == 0)
-    patch.original = DRAW_SCAN_INDICATOR_MODEL_BASIS_ORIGINAL;
-
-  const u32 return_addr = patch.address + 4u;
-  const bool safe_cave_wrote = !InstructionBlockMatches(
-                                   guard, patch.cave,
-                                   {{0x00u, patch.original},
-                                    {0x04u, PpcBranch(patch.cave + 0x04u, return_addr)}}) &&
-                               TryWriteInstructionBlock(
-                                   guard, patch.cave,
-                                   {{0x00u, patch.original},
-                                    {0x04u, PpcBranch(patch.cave + 0x04u, return_addr)}});
-
   u32 current = 0;
   if (!TryReadU32(guard, patch.address, &current))
-    return safe_cave_wrote;
+    return false;
 
   const u32 branch = PpcBranch(patch.address, patch.cave);
+  constexpr u32 basis_hi = (RETICLE_BILLBOARD_SCRATCH >> 16) & 0xffffu;
+  constexpr u32 basis_lo = RETICLE_BILLBOARD_SCRATCH & 0xffffu;
+  const u32 return_addr = patch.address + 4u;
+
+  const std::initializer_list<HookWrite> cave_writes{
+      {0x00u, 0x3D800000u | basis_hi},
+      {0x04u, 0x618C0000u | basis_lo},
+
+      // Copy only the 3x3 orientation rows into the per-indicator model transform.
+      // Translation remains the scan indicator position the game already selected.
+      {0x08u, 0xC00C0004u},  // lfs f0, 4(r12)
+      {0x0Cu, 0xD0010148u},  // stfs f0, 0x148(r1)
+      {0x10u, 0xC00C0008u},
+      {0x14u, 0xD001014Cu},
+      {0x18u, 0xC00C000Cu},
+      {0x1Cu, 0xD0010150u},
+
+      {0x20u, 0xC00C0010u},
+      {0x24u, 0xD0010158u},
+      {0x28u, 0xC00C0014u},
+      {0x2Cu, 0xD001015Cu},
+      {0x30u, 0xC00C0018u},
+      {0x34u, 0xD0010160u},
+
+      {0x38u, 0xC00C001Cu},
+      {0x3Cu, 0xD0010168u},
+      {0x40u, 0xC00C0020u},
+      {0x44u, 0xD001016Cu},
+      {0x48u, 0xC00C0024u},
+      {0x4Cu, 0xD0010170u},
+
+      {0x50u, patch.original},
+      {0x54u, PpcBranch(patch.cave + 0x54u, return_addr)}};
+
   if (current == branch)
   {
-    patch.applied = false;
-    return TryWriteInstruction(guard, patch.address, patch.original) || safe_cave_wrote;
+    const bool cave_matches = InstructionBlockMatches(guard, patch.cave, cave_writes);
+    patch.applied = cave_matches || TryWriteInstructionBlock(guard, patch.cave, cave_writes);
+    return !cave_matches && patch.applied;
   }
 
-  patch.applied = false;
-  return safe_cave_wrote;
+  if (current != patch.original)
+  {
+    patch.applied = false;
+    return false;
+  }
+
+  patch.original = current;
+  patch.applied =
+      InstallBranchAfterCaveWrite(guard, patch.address, patch.cave, cave_writes);
+  return patch.applied;
 }
 
 bool ApplyProjectileTransformPatch(const Core::CPUThreadGuard& guard, ProjectileTransformPatch& patch)
@@ -4043,6 +4159,14 @@ bool ApplyConditionalElevationPitchPatch(const Core::CPUThreadGuard& guard, Dyna
   return patch.applied;
 }
 
+void UpdatePitchZeroHookEnabled(const Core::CPUThreadGuard& guard, bool scan_active)
+{
+  // Keep the original pitch-zero behavior active in scan mode too; otherwise Prime's
+  // scan/orbit path recenters pitch when the reticle resolves a target.
+  (void)scan_active;
+  TryWriteU32(guard, PITCH_ZERO_ENABLE_SCRATCH, 1u);
+}
+
 bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
 {
   bool wrote = false;
@@ -4056,7 +4180,7 @@ bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
   const bool scan_active =
       TryReadU32(guard, ADDRESS.state_manager + ADDRESS.player_offset, &player) &&
       player >= 0x80000000u && ScanVisorActive(guard, player);
-  TryWriteU32(guard, PITCH_ZERO_ENABLE_SCRATCH, scan_active ? 0u : 1u);
+  UpdatePitchZeroHookEnabled(guard, scan_active);
 
   for (DynamicPpcPatch& patch : s_combat_pitch_patches)
   {
@@ -4168,6 +4292,12 @@ void VerifyCannonFeedWatchdog(Core::System& system, const Core::CPUThreadGuard& 
                               const RuntimeSettings& settings, bool have_player, u32 player)
 {
   if (!settings.enabled || !settings.builtin_patches_enabled || !have_player)
+  {
+    s_cannon_feed_stall_frames = 0;
+    return;
+  }
+
+  if (ScanVisorActive(guard, player))
   {
     s_cannon_feed_stall_frames = 0;
     return;
@@ -4293,6 +4423,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
 
   const bool gameplay_input_active = have_player && PlayerIsFirstPersonUnmorphed(guard, player);
   const bool scan_active = have_player && ScanVisorActive(guard, player);
+  UpdatePitchZeroHookEnabled(guard, scan_active);
   const bool orbit_lock_active =
       gameplay_input_active && !scan_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager);
   s_gameplay_input_active.store(gameplay_input_active, std::memory_order_relaxed);
@@ -4359,6 +4490,9 @@ void ResetNativeRuntime()
   s_scan_was_active = false;
   s_scan_last_player = 0;
   s_scan_normal_frames = 0;
+  s_scan_target_candidates.clear();
+  s_scan_target_cache_player = 0;
+  s_scan_target_cache_frame = 0;
   s_smooth_scan_pitch = 0.0f;
   s_translation_base_valid = false;
   s_dpad_forced_input_disabled = false;
