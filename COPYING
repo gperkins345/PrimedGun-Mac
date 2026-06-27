@@ -1,10 +1,20 @@
-Most of Dolphin's original source code is licensed under GPLv2+. Part of the
-source code distributed in this repository is derived from other projects and
-may have stronger or weaker licensing requirement. Overall, in aggregate, the
-entirety of this repository is compatible with the GPLv3 license.
+PrimedGun is a Dolphin ReduX/Dolphin-derived project focused on Metroid Prime
+VR support. It is not the upstream Dolphin Emulator project.
 
-Per-file licensing information is provided via SPDX tags [1]. The licenses
-referenced in these tags can be found in the LICENSES/ directory within this
-source repository.
+Most of the original Dolphin-derived source code in this repository is licensed
+under the GNU General Public License version 2 or later. PrimedGun changes and
+new source files are distributed under the same GPL-2.0-or-later terms unless a
+file states a different compatible license through its SPDX header.
 
-[1] https://spdx.dev/
+Some source files and bundled third-party components are derived from other
+projects and may carry different GPL-compatible license terms. Per-file license
+information is provided through SPDX tags where available. The license texts
+referenced by those tags are kept in the LICENSES/ directory.
+
+PrimedGun does not include or license any commercial game data. Users must
+provide their own legally obtained game file and saves.
+
+This repository preserves Dolphin/Dolphin ReduX attribution and licensing
+requirements because PrimedGun remains a derivative work.
+
+SPDX information: https://spdx.dev/
