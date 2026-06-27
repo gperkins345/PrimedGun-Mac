@@ -811,9 +811,9 @@ void PrimedGunDumpMem1(QWidget* parent)
 
     context += "\nPrimedGun scratch\n";
     for (const u32 address :
-         {0x817FE000u, 0x817FE038u, 0x817FE040u, 0x817FE050u, 0x817FE400u,
-          0x817FE500u, 0x817FE540u, 0x817FE5A0u, 0x817FE680u, 0x817FE684u,
-          0x817FE688u, 0x817FE68Cu, 0x817FE690u})
+         {0x817F9600u, 0x817F9638u, 0x817F9640u, 0x817F9650u, 0x817F9A00u,
+          0x817F9B00u, 0x817F9B40u, 0x817F9BA0u, 0x817F9C80u, 0x817F9C84u,
+          0x817F9C88u, 0x817F9C8Cu, 0x817F9C90u})
     {
       context += fmt::format("{:08X}={}\n", address, format_u32(read_mem1_u32(address)));
     }

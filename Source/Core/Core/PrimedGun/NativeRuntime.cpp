@@ -78,6 +78,38 @@ struct Matrix3x4
   const float& At(int row, int col) const { return m[row * 4 + col]; }
 };
 
+bool PoseNumbersLookValid(const Pose& pose)
+{
+  if (!pose.valid || !std::isfinite(pose.px) || !std::isfinite(pose.py) ||
+      !std::isfinite(pose.pz) || !std::isfinite(pose.qx) || !std::isfinite(pose.qy) ||
+      !std::isfinite(pose.qz) || !std::isfinite(pose.qw))
+  {
+    return false;
+  }
+
+  const float quat_len_sq =
+      pose.qx * pose.qx + pose.qy * pose.qy + pose.qz * pose.qz + pose.qw * pose.qw;
+  return std::isfinite(quat_len_sq) && quat_len_sq >= 0.25f && quat_len_sq <= 4.0f;
+}
+
+bool MatrixNumbersLookValid(const Matrix3x4& mat)
+{
+  for (float value : mat.m)
+  {
+    if (!std::isfinite(value))
+      return false;
+  }
+
+  return true;
+}
+
+float ClampFinite(float value, float fallback, float min_value, float max_value)
+{
+  if (!std::isfinite(value))
+    return fallback;
+  return std::clamp(value, min_value, max_value);
+}
+
 struct GameAddresses
 {
   u32 state_manager = 0x8045A1A8;
@@ -105,8 +137,9 @@ constexpr float DEFAULT_ROT_OFFSET_Z = 0.0f;
 constexpr u32 MEM1_BASE = 0x80000000u;
 constexpr u32 MEM1_END = 0x81800000u;
 constexpr u32 PATCH_CODE_ARENA_BASE = 0x817F8000u;
-constexpr u32 PATCH_CODE_ARENA_SIZE = 0x1000u;
-constexpr u32 SCRATCH_BASE = 0x817FE000u;
+constexpr u32 PATCH_CODE_ARENA_SIZE = 0x2000u;
+constexpr u32 SCRATCH_BASE = 0x817F9600u;
+constexpr u32 SCRATCH_ARENA_SIZE = 0x800u;
 constexpr u32 CANNON_BASIS_SCRATCH = SCRATCH_BASE + 0x000u;
 constexpr u32 CANNON_EXPECTED_GUN_SCRATCH = SCRATCH_BASE + 0x038u;
 constexpr u32 MODEL_OFFSET_WORLD_SCRATCH = SCRATCH_BASE + 0x040u;
@@ -180,6 +213,7 @@ constexpr u32 FINAL_INPUT_DPAD_HELD_1 = FINAL_INPUT_OFFSET + 0x2Du;
 constexpr u32 STATE_MANAGER_PLAYER_STATE_OFFSET = 0x8B8u;
 constexpr u32 PLAYER_STATE_CURRENT_VISOR_OFFSET = 0x14u;
 constexpr u32 PLAYER_STATE_TRANSITION_VISOR_OFFSET = 0x18u;
+constexpr u32 PLAYER_STATE_MAX_VISOR = 3u;
 constexpr u32 PLAYER_STATE_SCAN_VISOR = 2u;
 constexpr u32 FINAL_INPUT_DPAD_PRESSED_0 = FINAL_INPUT_OFFSET + 0x2Eu;
 constexpr u32 PLAYER_DISABLE_INPUT_FLAGS_OFFSET = 0x9C6u;
@@ -630,7 +664,7 @@ bool IsWritablePrimeMem1Address(u32 address, u32 size)
 
 bool TryWriteFloat(const Core::CPUThreadGuard& guard, u32 address, float value)
 {
-  return IsWritablePrimeMem1Address(address, sizeof(value)) &&
+  return std::isfinite(value) && IsWritablePrimeMem1Address(address, sizeof(value)) &&
          PowerPC::MMU::HostTryWrite<float>(guard, value, address).has_value();
 }
 
@@ -663,9 +697,37 @@ bool PrimePointerLooksValid(u32 address, u32 size)
   return (address & 3u) == 0 && IsWritablePrimeMem1Address(address, size);
 }
 
+bool RangeOverlaps(u32 address, u32 size, u32 range_start, u32 range_end)
+{
+  if (size == 0)
+    return false;
+
+  const u64 start = address;
+  const u64 end = start + size;
+  return start < range_end && end > range_start;
+}
+
+bool OverlapsPrimedGunRuntimeArena(u32 address, u32 size)
+{
+  return RangeOverlaps(address, size, PATCH_CODE_ARENA_BASE,
+                      PATCH_CODE_ARENA_BASE + PATCH_CODE_ARENA_SIZE) ||
+         RangeOverlaps(address, size, SCRATCH_BASE, SCRATCH_BASE + SCRATCH_ARENA_SIZE);
+}
+
+bool PrimeGameObjectPointerLooksValid(u32 address, u32 size)
+{
+  return PrimePointerLooksValid(address, size) && !OverlapsPrimedGunRuntimeArena(address, size);
+}
+
+bool PrimeDataPointerLooksValid(u32 address, u32 size)
+{
+  return IsWritablePrimeMem1Address(address, size) &&
+         !OverlapsPrimedGunRuntimeArena(address, size);
+}
+
 bool PlayerObjectLooksValid(const Core::CPUThreadGuard& guard, u32 player)
 {
-  if (!PrimePointerLooksValid(player, PLAYER_DISABLE_INPUT_FLAGS_OFFSET + 1u))
+  if (!PrimeGameObjectPointerLooksValid(player, PLAYER_DISABLE_INPUT_FLAGS_OFFSET + 1u))
     return false;
 
   u32 camera_state = 0xffffffffu;
@@ -779,31 +841,55 @@ u32 PpcLwzR0(u32 base, u32 offset)
   return 0x80000000u | ((base & 31u) << 16) | (offset & 0xffffu);
 }
 
-void WriteBasisScratch(const Core::CPUThreadGuard& guard, const Matrix3x4& mat)
+void ClearCannonRuntimeScratch(const Core::CPUThreadGuard& guard)
 {
-  int index = 0;
-  for (int row = 0; row < 3; ++row)
+  for (u32 offset = 0; offset <= 0x38u; offset += 4u)
+    TryWriteU32(guard, CANNON_BASIS_SCRATCH + offset, 0);
+
+  for (u32 offset = 0; offset < 0x0Cu; offset += 4u)
   {
-    for (int col = 0; col < 3; ++col)
-    {
-      TryWriteFloat(guard, CANNON_BASIS_SCRATCH + static_cast<u32>(index * 4),
-                    mat.At(row, col));
-      ++index;
-    }
+    TryWriteU32(guard, MODEL_OFFSET_WORLD_SCRATCH + offset, 0);
+    TryWriteU32(guard, ADJUSTED_GUN_POS_SCRATCH + offset, 0);
   }
 }
 
-void WriteBasis9(const Core::CPUThreadGuard& guard, u32 address, const Matrix3x4& mat)
+bool WriteBasisScratch(const Core::CPUThreadGuard& guard, const Matrix3x4& mat)
 {
+  if (!MatrixNumbersLookValid(mat))
+    return false;
+
   int index = 0;
   for (int row = 0; row < 3; ++row)
   {
     for (int col = 0; col < 3; ++col)
     {
-      TryWriteFloat(guard, address + static_cast<u32>(index * 4), mat.At(row, col));
+      if (!TryWriteFloat(guard, CANNON_BASIS_SCRATCH + static_cast<u32>(index * 4),
+                         mat.At(row, col)))
+      {
+        return false;
+      }
       ++index;
     }
   }
+  return true;
+}
+
+bool WriteBasis9(const Core::CPUThreadGuard& guard, u32 address, const Matrix3x4& mat)
+{
+  if (!MatrixNumbersLookValid(mat))
+    return false;
+
+  int index = 0;
+  for (int row = 0; row < 3; ++row)
+  {
+    for (int col = 0; col < 3; ++col)
+    {
+      if (!TryWriteFloat(guard, address + static_cast<u32>(index * 4), mat.At(row, col)))
+        return false;
+      ++index;
+    }
+  }
+  return true;
 }
 
 Matrix3x4 CannonModelMatrixForHand(const Matrix3x4& mat, const RuntimeSettings& settings)
@@ -866,13 +952,32 @@ bool ScanVisorActive(const Core::CPUThreadGuard& guard, u32 player)
   return ReadScanVisorInfo(guard, player).active;
 }
 
+bool PlayerIsInMenuMapOrMorphball(const Core::CPUThreadGuard& guard, u32 player)
+{
+  u32 gameflow_menu = 0;
+  if (TryReadU32(guard, GAMEFLOW_MENU_SCRATCH, &gameflow_menu) && gameflow_menu == 1)
+    return true;
+
+  u32 morph_state = 0xffffffffu;
+  if (!TryReadU32(guard, player + 0x2F8u, &morph_state))
+    return true;
+
+  return morph_state != 0;
+}
+
+bool InputDisableIsOwnedByPrimedGunDpad(u32 player)
+{
+  return s_dpad_forced_input_disabled && !s_dpad_input_was_disabled &&
+         s_dpad_input_player == player &&
+         s_dpad_input_flags_addr == player + PLAYER_DISABLE_INPUT_FLAGS_OFFSET;
+}
+
 bool PlayerIsFirstPersonUnmorphed(const Core::CPUThreadGuard& guard, u32 player)
 {
   if (!PlayerObjectLooksValid(guard, player))
     return false;
 
-  u32 gameflow_menu = 0;
-  if (TryReadU32(guard, GAMEFLOW_MENU_SCRATCH, &gameflow_menu) && gameflow_menu == 1)
+  if (PlayerIsInMenuMapOrMorphball(guard, player))
     return false;
 
   u32 camera_state = 0xffffffffu;
@@ -894,7 +999,8 @@ bool PlayerIsFirstPersonUnmorphed(const Core::CPUThreadGuard& guard, u32 player)
 
   u8 input_flags = 0;
   if (!TryReadU8(guard, player + PLAYER_DISABLE_INPUT_FLAGS_OFFSET, &input_flags) ||
-      (input_flags & PLAYER_DISABLE_INPUT_MASK) != 0)
+      (((input_flags & PLAYER_DISABLE_INPUT_MASK) != 0) &&
+       !InputDisableIsOwnedByPrimedGunDpad(player)))
   {
     return false;
   }
@@ -902,6 +1008,42 @@ bool PlayerIsFirstPersonUnmorphed(const Core::CPUThreadGuard& guard, u32 player)
   u32 movement_state = 0xffffffffu;
   return TryReadU32(guard, player + PLAYER_MOVEMENT_STATE_OFFSET, &movement_state) &&
          movement_state <= 6;
+}
+
+bool PlayerIsChangingVisorsInFirstPerson(const Core::CPUThreadGuard& guard, u32 player)
+{
+  if (!PlayerObjectLooksValid(guard, player))
+    return false;
+
+  if (PlayerIsInMenuMapOrMorphball(guard, player))
+    return false;
+
+  u32 player_state = 0;
+  u32 current_visor = 0xffffffffu;
+  u32 transition_visor = 0xffffffffu;
+  if (!TryReadU32(guard, ADDRESS.state_manager + STATE_MANAGER_PLAYER_STATE_OFFSET,
+                  &player_state) ||
+      player_state < 0x80000000u ||
+      !TryReadU32(guard, player_state + PLAYER_STATE_CURRENT_VISOR_OFFSET, &current_visor) ||
+      !TryReadU32(guard, player_state + PLAYER_STATE_TRANSITION_VISOR_OFFSET,
+                  &transition_visor) ||
+      current_visor > PLAYER_STATE_MAX_VISOR || transition_visor > PLAYER_STATE_MAX_VISOR ||
+      current_visor == transition_visor)
+  {
+    return false;
+  }
+
+  u32 camera_state = 0xffffffffu;
+  u32 morph_state = 0xffffffffu;
+  u32 movement_state = 0xffffffffu;
+  if (!TryReadU32(guard, player + 0x2F4u, &camera_state) ||
+      !TryReadU32(guard, player + 0x2F8u, &morph_state) ||
+      !TryReadU32(guard, player + PLAYER_MOVEMENT_STATE_OFFSET, &movement_state))
+  {
+    return false;
+  }
+
+  return camera_state == 0 && morph_state == 0 && movement_state <= 8;
 }
 
 bool PlayerIsFirstPersonGunReady(const Core::CPUThreadGuard& guard, u32 player)
@@ -1329,7 +1471,7 @@ bool LooksLikeTransformMatrix(const Core::CPUThreadGuard& guard, u32 transform)
 
 bool ActorHasMaterial(const Core::CPUThreadGuard& guard, u32 obj, int bit)
 {
-  if (obj < 0x80000000u || bit < 0 || bit >= 64)
+  if (!PrimeGameObjectPointerLooksValid(obj, 0x70u) || bit < 0 || bit >= 64)
     return false;
 
   u32 hi = 0;
@@ -1344,14 +1486,14 @@ bool ActorHasMaterial(const Core::CPUThreadGuard& guard, u32 obj, int bit)
 bool ActorIsTargetable(const Core::CPUThreadGuard& guard, u32 obj)
 {
   u8 flags = 0;
-  return obj >= 0x80000000u && TryReadU8(guard, obj + 0xe7u, &flags) &&
+  return PrimeGameObjectPointerLooksValid(obj, 0xe8u) && TryReadU8(guard, obj + 0xe7u, &flags) &&
          (flags & 0x01u) != 0;
 }
 
 bool ActorIsGrapplePoint(const Core::CPUThreadGuard& guard, u32 obj)
 {
   u32 vtable = 0;
-  return obj >= 0x80000000u && TryReadU32(guard, obj, &vtable) &&
+  return PrimeGameObjectPointerLooksValid(obj, sizeof(u32)) && TryReadU32(guard, obj, &vtable) &&
          vtable >= 0x803E0D00u && vtable < 0x803E0D70u;
 }
 
@@ -1416,7 +1558,8 @@ bool TargetUidStillExists(const Core::CPUThreadGuard& guard, u32 state_manager, 
   u32 obj = 0;
   u32 live_uid_word = 0;
   return TryReadU32(guard, object_list + ((uid & 0x03ffu) << 3) + 4u, &obj) &&
-         obj >= 0x80000000u && (expected_obj < 0x80000000u || obj == expected_obj) &&
+         PrimeGameObjectPointerLooksValid(obj, ADDRESS.transform_offset + 0x30u) &&
+         (expected_obj < 0x80000000u || obj == expected_obj) &&
          TryReadU32(guard, obj + 0x8u, &live_uid_word) &&
          static_cast<u16>(live_uid_word >> 16) == uid;
 }
@@ -1439,7 +1582,8 @@ bool ObjectByUid(const Core::CPUThreadGuard& guard, u32 state_manager, u16 uid, 
 
   u32 live_uid_word = 0;
   return TryReadU32(guard, object_list + ((uid & 0x03ffu) << 3) + 4u, obj) &&
-         *obj >= 0x80000000u && TryReadU32(guard, *obj + 0x8u, &live_uid_word) &&
+         PrimeGameObjectPointerLooksValid(*obj, ADDRESS.transform_offset + 0x30u) &&
+         TryReadU32(guard, *obj + 0x8u, &live_uid_word) &&
          static_cast<u16>(live_uid_word >> 16) == uid;
 }
 
@@ -1455,7 +1599,7 @@ bool RefreshScanTargetCandidates(const Core::CPUThreadGuard& guard, u32 state_ma
   u32 items = 0;
   if (!TryReadU32(guard, player + PLAYER_NEARBY_ORBIT_OBJECTS_OFFSET + 4u, &count) ||
       !TryReadU32(guard, player + PLAYER_NEARBY_ORBIT_OBJECTS_OFFSET + 12u, &items) ||
-      count > 128u || items < 0x80000000u)
+      count > 128u || !PrimeDataPointerLooksValid(items, count * sizeof(u16)))
   {
     return false;
   }
@@ -1612,7 +1756,8 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
   {
     u32 obj = 0;
     if (!TryReadU32(guard, object_list + (i << 3) + 4u, &obj) ||
-        obj < 0x80000000u || obj == player || obj == gun)
+        !PrimeGameObjectPointerLooksValid(obj, ADDRESS.transform_offset + 0x30u) ||
+        obj == player || obj == gun)
     {
       continue;
     }
@@ -2145,6 +2290,12 @@ bool RestoreDpadDisableAt(const Core::CPUThreadGuard& guard, u32 flags_addr, u8 
   if (!IsWritablePrimeMem1Address(flags_addr, sizeof(u8)))
     return false;
 
+  if (flags_addr < PLAYER_DISABLE_INPUT_FLAGS_OFFSET ||
+      !PlayerObjectLooksValid(guard, flags_addr - PLAYER_DISABLE_INPUT_FLAGS_OFFSET))
+  {
+    return false;
+  }
+
   u8 flags = 0;
   if (!TryReadU8(guard, flags_addr, &flags))
     return false;
@@ -2286,7 +2437,7 @@ void SuppressCStickForDpad(const Core::CPUThreadGuard& guard, u32 state_manager)
 #ifdef ENABLE_VR
 Pose PoseFromOpenXR(const Common::VR::OpenXRPoseState& xr_pose)
 {
-  return {
+  Pose pose{
       xr_pose.position[0],
       xr_pose.position[1],
       xr_pose.position[2],
@@ -2296,6 +2447,8 @@ Pose PoseFromOpenXR(const Common::VR::OpenXRPoseState& xr_pose)
       xr_pose.orientation[3],
       xr_pose.valid,
   };
+  pose.valid = PoseNumbersLookValid(pose);
+  return pose;
 }
 
 void UpdateReticleBillboard(const Core::CPUThreadGuard& guard,
@@ -2318,8 +2471,13 @@ void UpdateReticleBillboard(const Core::CPUThreadGuard& guard,
   if (scan_info.active)
     RemoveRollFromAimBasis(&billboard_basis);
 
+  if (!WriteBasis9(guard, RETICLE_BILLBOARD_SCRATCH + 4, billboard_basis))
+  {
+    TryWriteU32(guard, RETICLE_BILLBOARD_SCRATCH, 0);
+    return;
+  }
+
   TryWriteU32(guard, RETICLE_BILLBOARD_SCRATCH, 1);
-  WriteBasis9(guard, RETICLE_BILLBOARD_SCRATCH + 4, billboard_basis);
 }
 
 bool HmdPitchFromSnapshot(const Common::VR::OpenXRInputSnapshot& snapshot, float yaw_delta_deg,
@@ -3735,7 +3893,7 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
     s_cannon_hand_pose_ready = true;
     s_smooth_matrix_valid = false;
     s_last_validated_gun = 0;
-    TryWriteU32(guard, CANNON_EXPECTED_GUN_SCRATCH, 0);
+    ClearCannonRuntimeScratch(guard);
     WriteGunTargetScratch(guard, 0, 0xffffu);
     TryWriteU32(guard, RETICLE_BILLBOARD_SCRATCH, 0);
   }
@@ -3765,6 +3923,8 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
   Matrix3x4 mat =
       PoseToPrimeMatrix(adjusted_pose, 0.0f, 0.0f, 0.0f, settings.rot_offset_x,
                         settings.rot_offset_y, settings.rot_offset_z, settings.world_scale);
+  if (!MatrixNumbersLookValid(controller_mat_no_offset) || !MatrixNumbersLookValid(mat))
+    return;
 
   if (!s_translation_base_valid)
   {
@@ -3805,6 +3965,13 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
   }
   for (int i = 0; i < 12; ++i)
     mat.m[i] = s_smooth_matrix[i];
+  if (!MatrixNumbersLookValid(mat))
+    return;
+
+  auto clear_active_cannon_feed = [&] {
+    TryWriteU32(guard, CANNON_EXPECTED_GUN_SCRATCH, 0);
+    TryWriteU32(guard, RETICLE_BILLBOARD_SCRATCH, 0);
+  };
 
   u32 player = 0;
   if (!TryReadU32(guard, ADDRESS.state_manager + ADDRESS.player_offset, &player) ||
@@ -3812,9 +3979,8 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
   {
     s_smooth_matrix_valid = false;
     s_last_validated_gun = 0;
-    TryWriteU32(guard, CANNON_EXPECTED_GUN_SCRATCH, 0);
+    clear_active_cannon_feed();
     WriteGunTargetScratch(guard, 0, 0xffffu);
-    TryWriteU32(guard, RETICLE_BILLBOARD_SCRATCH, 0);
     return;
   }
 
@@ -3838,9 +4004,8 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
 
     s_smooth_matrix_valid = false;
     s_last_validated_gun = 0;
-    TryWriteU32(guard, CANNON_EXPECTED_GUN_SCRATCH, 0);
+    clear_active_cannon_feed();
     WriteGunTargetScratch(guard, 0, 0xffffu);
-    TryWriteU32(guard, RETICLE_BILLBOARD_SCRATCH, 0);
     return;
   }
 
@@ -3855,15 +4020,21 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
   {
     s_smooth_matrix_valid = false;
     s_last_validated_gun = 0;
-    TryWriteU32(guard, CANNON_EXPECTED_GUN_SCRATCH, 0);
+    clear_active_cannon_feed();
     WriteGunTargetScratch(guard, 0, 0xffffu);
-    TryWriteU32(guard, RETICLE_BILLBOARD_SCRATCH, 0);
     return;
   }
   s_last_validated_gun = gun;
 
   const Matrix3x4 model_mat = CannonModelMatrixForHand(mat, settings);
-  WriteBasisScratch(guard, model_mat);
+  if (!WriteBasisScratch(guard, model_mat))
+  {
+    s_smooth_matrix_valid = false;
+    s_last_validated_gun = 0;
+    clear_active_cannon_feed();
+    WriteGunTargetScratch(guard, 0, 0xffffu);
+    return;
+  }
   TryWriteFloat(guard, ADDRESS.gun_pos + 0, mat.At(0, 3));
   TryWriteFloat(guard, ADDRESS.gun_pos + 4, mat.At(1, 3));
   TryWriteFloat(guard, ADDRESS.gun_pos + 8, mat.At(2, 3));
@@ -3881,6 +4052,11 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
   const float model_world_z =
       model_mat.m[8] * model_local_x + model_mat.m[9] * model_local_y +
       model_mat.m[10] * model_local_z;
+  if (!std::isfinite(model_world_x) || !std::isfinite(model_world_y) ||
+      !std::isfinite(model_world_z))
+  {
+    return;
+  }
   TryWriteFloat(guard, MODEL_OFFSET_WORLD_SCRATCH + 0, model_world_x);
   TryWriteFloat(guard, MODEL_OFFSET_WORLD_SCRATCH + 4, model_world_y);
   TryWriteFloat(guard, MODEL_OFFSET_WORLD_SCRATCH + 8, model_world_z);
@@ -4503,7 +4679,7 @@ void ResetCannonTrackingFeedState(const Core::CPUThreadGuard& guard)
   s_cannon_hand_pose_ready = false;
   s_smooth_matrix_valid = false;
   s_last_validated_gun = 0;
-  TryWriteU32(guard, CANNON_EXPECTED_GUN_SCRATCH, 0);
+  ClearCannonRuntimeScratch(guard);
   WriteGunTargetScratch(guard, 0, 0xffffu);
   TryWriteU32(guard, RETICLE_BILLBOARD_SCRATCH, 0);
 }
@@ -4527,6 +4703,8 @@ bool CannonFeedScratchLooksEmpty(const Core::CPUThreadGuard& guard)
 void VerifyCannonFeedWatchdog(Core::System& system, const Core::CPUThreadGuard& guard,
                               const RuntimeSettings& settings, bool have_player, u32 player)
 {
+  (void)system;
+
   if (!settings.enabled || !settings.builtin_patches_enabled || !have_player)
   {
     s_cannon_feed_stall_frames = 0;
@@ -4565,12 +4743,6 @@ void VerifyCannonFeedWatchdog(Core::System& system, const Core::CPUThreadGuard& 
 
   s_cannon_feed_stall_frames = 0;
   ResetCannonTrackingFeedState(guard);
-  s_patches_applied_this_boot = false;
-  ApplyBuiltinPatches(system, guard);
-  ApplyCombatPitchPatches(guard);
-  if (settings.patch_beam_projectile_timing)
-    ApplyProjectileTransformPatches(guard);
-  InvalidatePrimedGunPatchICache(system);
 }
 
 void UpdateShaderHunterGameFlowFlags(const Core::CPUThreadGuard& guard)
@@ -4657,8 +4829,14 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
     s_patches_applied_this_boot = true;
   }
 
-  const bool gameplay_input_active = have_player && PlayerIsFirstPersonUnmorphed(guard, player);
-  const bool scan_active = have_player && ScanVisorActive(guard, player);
+  const bool default_controls_active = have_player && PlayerIsInMenuMapOrMorphball(guard, player);
+  const bool scan_active = have_player && !default_controls_active && ScanVisorActive(guard, player);
+  const bool raw_gameplay_input_active =
+      have_player && !default_controls_active && PlayerIsFirstPersonUnmorphed(guard, player);
+  const bool visor_transition_input_active =
+      !raw_gameplay_input_active && have_player && !default_controls_active &&
+      PlayerIsChangingVisorsInFirstPerson(guard, player);
+  const bool gameplay_input_active = raw_gameplay_input_active || visor_transition_input_active;
   UpdatePitchZeroHookEnabled(guard, scan_active);
   const bool orbit_lock_active =
       gameplay_input_active && !scan_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager);
@@ -4837,10 +5015,55 @@ void SetRuntimeSettings(const RuntimeSettings& settings)
 {
   std::lock_guard lock{s_settings_mutex};
   s_settings = settings;
+  const RuntimeSettings defaults{};
+  s_settings.offset_x = ClampFinite(s_settings.offset_x, defaults.offset_x, -10.0f, 10.0f);
+  s_settings.offset_y = ClampFinite(s_settings.offset_y, defaults.offset_y, -10.0f, 10.0f);
+  s_settings.offset_z = ClampFinite(s_settings.offset_z, defaults.offset_z, -10.0f, 10.0f);
+  s_settings.model_offset_x =
+      ClampFinite(s_settings.model_offset_x, defaults.model_offset_x, -10.0f, 10.0f);
+  s_settings.model_offset_y =
+      ClampFinite(s_settings.model_offset_y, defaults.model_offset_y, -10.0f, 10.0f);
+  s_settings.model_offset_z =
+      ClampFinite(s_settings.model_offset_z, defaults.model_offset_z, -10.0f, 10.0f);
+  s_settings.rot_offset_x =
+      ClampFinite(s_settings.rot_offset_x, defaults.rot_offset_x, -360.0f, 360.0f);
+  s_settings.rot_offset_y =
+      ClampFinite(s_settings.rot_offset_y, defaults.rot_offset_y, -360.0f, 360.0f);
+  s_settings.rot_offset_z =
+      ClampFinite(s_settings.rot_offset_z, defaults.rot_offset_z, -360.0f, 360.0f);
+  s_settings.world_scale = ClampFinite(s_settings.world_scale, defaults.world_scale, 0.1f, 10.0f);
+  s_settings.trigger_threshold =
+      ClampFinite(s_settings.trigger_threshold, defaults.trigger_threshold, 0.0f, 1.0f);
   s_settings.primegun_trackpad_press_threshold =
-      std::clamp(s_settings.primegun_trackpad_press_threshold, 0.05f, 1.0f);
-  s_settings.rumble_intensity = std::clamp(s_settings.rumble_intensity, 0.0f, 1.0f);
+      ClampFinite(s_settings.primegun_trackpad_press_threshold,
+                  defaults.primegun_trackpad_press_threshold, 0.05f, 1.0f);
+  s_settings.rumble_intensity =
+      ClampFinite(s_settings.rumble_intensity, defaults.rumble_intensity, 0.0f, 1.0f);
   s_settings.rumble_hand_mode = std::clamp(s_settings.rumble_hand_mode, 0, 2);
+  s_settings.gun_targeting_distance =
+      ClampFinite(s_settings.gun_targeting_distance, defaults.gun_targeting_distance, 1.0f, 500.0f);
+  s_settings.gun_targeting_radius =
+      ClampFinite(s_settings.gun_targeting_radius, defaults.gun_targeting_radius, 0.1f, 50.0f);
+  s_settings.xr_dpad_head_radius =
+      ClampFinite(s_settings.xr_dpad_head_radius, defaults.xr_dpad_head_radius, 0.02f, 2.0f);
+  s_settings.xr_dpad_head_y_below =
+      ClampFinite(s_settings.xr_dpad_head_y_below, defaults.xr_dpad_head_y_below, 0.0f, 2.0f);
+  s_settings.xr_dpad_deadzone =
+      ClampFinite(s_settings.xr_dpad_deadzone, defaults.xr_dpad_deadzone, 0.0f, 1.0f);
+  s_settings.directional_movement_deadzone =
+      ClampFinite(s_settings.directional_movement_deadzone,
+                  defaults.directional_movement_deadzone, 0.0f, 1.0f);
+  s_settings.directional_movement_speed =
+      ClampFinite(s_settings.directional_movement_speed, defaults.directional_movement_speed, 0.0f,
+                  100.0f);
+  s_settings.directional_movement_accel =
+      ClampFinite(s_settings.directional_movement_accel, defaults.directional_movement_accel, 0.0f,
+                  500.0f);
+  s_settings.directional_movement_air_accel =
+      ClampFinite(s_settings.directional_movement_air_accel,
+                  defaults.directional_movement_air_accel, 0.0f, 500.0f);
+  s_settings.look_yaw_sensitivity =
+      ClampFinite(s_settings.look_yaw_sensitivity, defaults.look_yaw_sensitivity, 0.1f, 5.0f);
 #ifdef ENABLE_VR
   Common::VR::OpenXRInputState::SetRumbleConfig(s_settings.rumble_enabled,
                                                 s_settings.rumble_intensity,
