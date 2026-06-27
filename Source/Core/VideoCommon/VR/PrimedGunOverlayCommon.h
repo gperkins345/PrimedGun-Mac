@@ -297,6 +297,14 @@ inline std::string RumbleHandModeText(int mode)
   }
 }
 
+inline int MenuRowTextY(const Common::VR::PrimedGunVrOverlayState& s, int index)
+{
+  int y = 156 + index * 25;
+  if (s.tab == 6 && index >= 1)
+    y += 20;
+  return y;
+}
+
 inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlayState& s)
 {
   switch (s.tab)
@@ -362,7 +370,8 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
             {"SLOT 4", slot_status(4)}, {"CUSTOM", slot_status(5)}};
   }
   case 6:
-    return {{"LOAD STATE", "PRESS"}, {"SAVE STATE", "PRESS"}};
+    return {{"LOAD STATE", s.state_confirm_action == 1 ? "ARE YOU SURE?" : "PRESS"},
+            {"SAVE STATE", s.state_confirm_action == 2 ? "ARE YOU SURE?" : "PRESS"}};
   default:
     return {{"TARGETING", s.gun_targeting_enabled ? "ON" : "OFF"},
             {"TARGET DISTANCE", FloatText(s.gun_targeting_distance, 1)},
@@ -431,7 +440,7 @@ inline std::vector<uint32_t> BuildMenuPixels(uint32_t width, uint32_t height,
   const int row_w = static_cast<int>(width) - 104;
   for (int i = 0; i < static_cast<int>(rows.size()); ++i)
   {
-    const int y = 156 + i * 25;
+    const int y = MenuRowTextY(s, i);
     const bool selected = i == static_cast<int>(s.selected_index);
     FillRect(pixels, width, height, row_x, y - 9, row_w, 31,
              selected ? 0xE04A2C12u : 0x70201810u);

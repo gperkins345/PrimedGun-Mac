@@ -155,6 +155,11 @@ constexpr u32 VR_MENU_CANNON_TAB = 5;
 constexpr u32 VR_MENU_STATE_TAB = 6;
 constexpr u32 VR_MENU_CONTROL_FIRST_PAGE_ITEMS = 7;
 constexpr u32 VR_MENU_CONTROL_PAGE_COUNT = 2;
+constexpr float VR_MENU_ROW_TEXT_Y = 156.0f;
+constexpr float VR_MENU_ROW_STEP_Y = 25.0f;
+constexpr float VR_MENU_ROW_HIT_HALF_HEIGHT = 15.5f;
+constexpr float VR_MENU_STATE_ROW_GAP_Y = 20.0f;
+constexpr u64 VR_MENU_STATE_CONFIRM_FRAMES = 360;
 constexpr const char* PRIMEGUN_CANNON_GAME_ID = "GM8E01";
 constexpr const char* PRIMEGUN_CANNON_PACK_FOLDER = "000_PrimedGunCannon";
 constexpr const char* PRIMEGUN_CANNON_LIBRARY_FOLDER = "PrimedGun" DIR_SEP "CannonTextures";
@@ -262,6 +267,8 @@ u64 s_vr_cannon_texture_notice_until_frame = 0;
 bool s_vr_settings_save_requested = false;
 std::atomic_bool s_vr_state_load_requested{false};
 std::atomic_bool s_vr_state_save_requested{false};
+u32 s_vr_state_confirm_action = 0;
+u64 s_vr_state_confirm_until_frame = 0;
 u64 s_height_prompt_until_frame = 0;
 u64 s_prompt_gameplay_ready_since_frame = 0;
 u64 s_prompt_first_ready_timeout_frame = 0;
@@ -797,6 +804,18 @@ void WriteBasis9(const Core::CPUThreadGuard& guard, u32 address, const Matrix3x4
       ++index;
     }
   }
+}
+
+Matrix3x4 CannonModelMatrixForHand(const Matrix3x4& mat, const RuntimeSettings& settings)
+{
+  Matrix3x4 model_mat = mat;
+  if (!settings.use_right_hand)
+  {
+    for (int row = 0; row < 3; ++row)
+      model_mat.At(row, 0) = -model_mat.At(row, 0);
+  }
+
+  return model_mat;
 }
 
 struct ScanVisorInfo
@@ -2892,6 +2911,46 @@ u32 VrMenuItemCountForTab(u32 tab)
   }
 }
 
+float VrMenuRowCenterY(u32 tab, u32 index)
+{
+  float y = VR_MENU_ROW_TEXT_Y + static_cast<float>(index) * VR_MENU_ROW_STEP_Y;
+  if (tab == VR_MENU_STATE_TAB && index >= 1)
+    y += VR_MENU_STATE_ROW_GAP_Y;
+  return y;
+}
+
+int VrMenuRowFromTextureY(u32 tab, float texture_y, u32 item_count)
+{
+  int best_index = -1;
+  float best_distance = VR_MENU_ROW_HIT_HALF_HEIGHT;
+  for (u32 i = 0; i < item_count; ++i)
+  {
+    const float distance = std::fabs(texture_y - VrMenuRowCenterY(tab, i));
+    if (distance <= best_distance)
+    {
+      best_distance = distance;
+      best_index = static_cast<int>(i);
+    }
+  }
+  return best_index;
+}
+
+void ClearVrStateConfirmation()
+{
+  if (s_vr_state_confirm_action == 0)
+    return;
+
+  s_vr_state_confirm_action = 0;
+  s_vr_state_confirm_until_frame = 0;
+  ++s_vr_menu_generation;
+}
+
+void RefreshVrStateConfirmation()
+{
+  if (s_vr_state_confirm_action != 0 && s_frame_counter >= s_vr_state_confirm_until_frame)
+    ClearVrStateConfirmation();
+}
+
 int VrMenuControlActualIndex(u32 local_index)
 {
   if (local_index == 0)
@@ -3309,10 +3368,27 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
 
   if (s_vr_menu_tab == VR_MENU_STATE_TAB)
   {
-    if (s_vr_menu_selected_index == 0)
-      s_vr_state_load_requested.store(true, std::memory_order_release);
-    else if (s_vr_menu_selected_index == 1)
-      s_vr_state_save_requested.store(true, std::memory_order_release);
+    const u32 requested_action = s_vr_menu_selected_index == 0 ? 1u :
+                                 s_vr_menu_selected_index == 1 ? 2u :
+                                                                 0u;
+    if (requested_action == 0)
+      return;
+
+    RefreshVrStateConfirmation();
+    if (s_vr_state_confirm_action == requested_action)
+    {
+      if (requested_action == 1)
+        s_vr_state_load_requested.store(true, std::memory_order_release);
+      else
+        s_vr_state_save_requested.store(true, std::memory_order_release);
+      s_vr_state_confirm_action = 0;
+      s_vr_state_confirm_until_frame = 0;
+    }
+    else
+    {
+      s_vr_state_confirm_action = requested_action;
+      s_vr_state_confirm_until_frame = s_frame_counter + VR_MENU_STATE_CONFIRM_FRAMES;
+    }
     return;
   }
 }
@@ -3326,6 +3402,7 @@ void SaveVrMenuSettingsNotice()
 
 void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
 {
+  RefreshVrStateConfirmation();
   const Common::VR::PrimedGunVrOverlayState previous =
       Common::VR::OpenXRInputState::GetPrimedGunOverlay();
   Common::VR::PrimedGunVrOverlayState overlay{};
@@ -3340,6 +3417,7 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.control_page = s_vr_menu_control_page;
   overlay.cannon_texture_slot = s_vr_cannon_texture_slot;
   overlay.cannon_texture_notice = s_frame_counter < s_vr_cannon_texture_notice_until_frame;
+  overlay.state_confirm_action = s_vr_state_confirm_action;
   overlay.weapon_panel_visible = settings.vr_overlays_enabled && previous.weapon_panel_visible;
   overlay.weapon_selected_index = previous.weapon_selected_index;
   overlay.weapon_panel_position = previous.weapon_panel_position;
@@ -3391,6 +3469,7 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
     if (s_vr_menu_visible)
     {
       s_vr_menu_visible = false;
+      ClearVrStateConfirmation();
       ++s_vr_menu_generation;
     }
     s_last_vr_menu_thumbstick = false;
@@ -3413,6 +3492,8 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
   if (menu_toggle && !s_last_vr_menu_thumbstick)
   {
     s_vr_menu_visible = !s_vr_menu_visible;
+    if (!s_vr_menu_visible)
+      ClearVrStateConfirmation();
     ++s_vr_menu_generation;
   }
   s_last_vr_menu_thumbstick = menu_toggle;
@@ -3427,14 +3508,13 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
     pointer_active = VrMenuPointerHit(panel_pose, pointer_pose, &pointer_x, &pointer_y);
     if (pointer_active)
     {
-      constexpr float first_y = 154.0f / 512.0f;
-      constexpr float step_y = 25.0f / 512.0f;
       const u32 item_count = VrMenuItemCountForTab(s_vr_menu_tab);
-      if (item_count > 0 && pointer_y >= first_y)
+      if (item_count > 0)
       {
-        int hovered = static_cast<int>((pointer_y - first_y + step_y * 0.5f) / step_y);
-        hovered = std::clamp(hovered, 0, static_cast<int>(item_count) - 1);
-        if (s_vr_menu_selected_index != static_cast<u32>(hovered))
+        const int hovered =
+            VrMenuRowFromTextureY(s_vr_menu_tab, std::clamp(pointer_y, 0.0f, 1.0f) * 512.0f,
+                                  item_count);
+        if (hovered >= 0 && s_vr_menu_selected_index != static_cast<u32>(hovered))
         {
           s_vr_menu_selected_index = static_cast<u32>(hovered);
           ++s_vr_menu_generation;
@@ -3466,6 +3546,7 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
             tab_local_x <= tab_width &&
             s_vr_menu_tab != static_cast<u32>(tab))
         {
+          ClearVrStateConfirmation();
           s_vr_menu_tab = static_cast<u32>(tab);
           s_vr_menu_selected_index = 0;
           ++s_vr_menu_generation;
@@ -3487,18 +3568,23 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
         constexpr float row_width = 920.0f;
         constexpr float value_width = 170.0f;
         constexpr float value_box_x = row_x + row_width - 190.0f;
-        if (texture_y >= 154.0f && texture_x >= value_box_x &&
-            texture_x <= value_box_x + value_width)
+        const int row_hit =
+            VrMenuRowFromTextureY(s_vr_menu_tab, texture_y, VrMenuItemCountForTab(s_vr_menu_tab));
+        if (row_hit >= 0)
         {
-          if (VrMenuRowIsNumeric(s_vr_menu_tab, s_vr_menu_selected_index))
-            AdjustVrMenuSetting(settings, texture_x >= value_box_x + value_width * 0.5f ? 1 : -1);
+          if (s_vr_menu_selected_index != static_cast<u32>(row_hit))
+            s_vr_menu_selected_index = static_cast<u32>(row_hit);
+
+          if (texture_x >= value_box_x && texture_x <= value_box_x + value_width &&
+              VrMenuRowIsNumeric(s_vr_menu_tab, s_vr_menu_selected_index))
+          {
+            AdjustVrMenuSetting(settings,
+                                texture_x >= value_box_x + value_width * 0.5f ? 1 : -1);
+          }
           else
+          {
             ActivateVrMenuSelection(settings);
-          ++s_vr_menu_generation;
-        }
-        else
-        {
-          ActivateVrMenuSelection(settings);
+          }
           ++s_vr_menu_generation;
         }
       }
@@ -3776,7 +3862,8 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
   }
   s_last_validated_gun = gun;
 
-  WriteBasisScratch(guard, mat);
+  const Matrix3x4 model_mat = CannonModelMatrixForHand(mat, settings);
+  WriteBasisScratch(guard, model_mat);
   TryWriteFloat(guard, ADDRESS.gun_pos + 0, mat.At(0, 3));
   TryWriteFloat(guard, ADDRESS.gun_pos + 4, mat.At(1, 3));
   TryWriteFloat(guard, ADDRESS.gun_pos + 8, mat.At(2, 3));
@@ -3786,11 +3873,14 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
       (BASE_MODEL_FORWARD_BACK_OFFSET + settings.model_offset_y) * settings.world_scale;
   const float model_local_z = settings.model_offset_z * settings.world_scale;
   const float model_world_x =
-      mat.m[0] * model_local_x + mat.m[1] * model_local_y + mat.m[2] * model_local_z;
+      model_mat.m[0] * model_local_x + model_mat.m[1] * model_local_y +
+      model_mat.m[2] * model_local_z;
   const float model_world_y =
-      mat.m[4] * model_local_x + mat.m[5] * model_local_y + mat.m[6] * model_local_z;
+      model_mat.m[4] * model_local_x + model_mat.m[5] * model_local_y +
+      model_mat.m[6] * model_local_z;
   const float model_world_z =
-      mat.m[8] * model_local_x + mat.m[9] * model_local_y + mat.m[10] * model_local_z;
+      model_mat.m[8] * model_local_x + model_mat.m[9] * model_local_y +
+      model_mat.m[10] * model_local_z;
   TryWriteFloat(guard, MODEL_OFFSET_WORLD_SCRATCH + 0, model_world_x);
   TryWriteFloat(guard, MODEL_OFFSET_WORLD_SCRATCH + 4, model_world_y);
   TryWriteFloat(guard, MODEL_OFFSET_WORLD_SCRATCH + 8, model_world_z);
@@ -4689,6 +4779,8 @@ void ResetNativeRuntime()
   ++s_vr_menu_generation;
   s_vr_menu_saved_notice_until_frame = 0;
   s_vr_cannon_texture_notice_until_frame = 0;
+  s_vr_state_confirm_action = 0;
+  s_vr_state_confirm_until_frame = 0;
   s_height_prompt_until_frame = 0;
   s_prompt_gameplay_ready_since_frame = 0;
   s_prompt_first_ready_timeout_frame = 0;

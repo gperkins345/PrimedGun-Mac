@@ -21,6 +21,9 @@
 #include "Common/Logging/Log.h"
 #include "Common/MathUtil.h"
 #include "Common/SmallVector.h"
+#ifdef ENABLE_VR
+#include "Common/VR/OpenXRInputState.h"
+#endif
 
 #include "Core/DolphinAnalytics.h"
 #include "Core/HW/SystemTimers.h"
@@ -95,6 +98,41 @@ int GetFullscreenMonoPerEyeTextureLayer()
 bool WithinElementSignatureTolerance(int value, int expected, int tolerance)
 {
   return value >= expected - tolerance && value <= expected + tolerance;
+}
+
+float PositionMatrixDeterminant(u32 matrix_index)
+{
+  if (matrix_index + 2 >= XFMEM_POSMATRICES_END / 4)
+    return 1.0f;
+
+  const float* m = &xfmem.posMatrices[matrix_index * 4];
+  return m[0] * (m[5] * m[10] - m[6] * m[9]) -
+         m[1] * (m[4] * m[10] - m[6] * m[8]) +
+         m[2] * (m[4] * m[9] - m[5] * m[8]);
+}
+
+bool IsMirroredPositionMatrix(u32 matrix_index)
+{
+  return PositionMatrixDeterminant(matrix_index) < -0.001f;
+}
+
+bool DrawUsesMirroredPositionMatrix(const NativeVertexFormat* format)
+{
+  if (format == nullptr)
+    return false;
+
+  const PortableVertexDeclaration& vertex_declaration = format->GetVertexDeclaration();
+  if (vertex_declaration.posmtx.enable)
+  {
+    for (const u32 matrix_index : VertexLoaderManager::position_matrix_index_cache)
+    {
+      if (IsMirroredPositionMatrix(matrix_index))
+        return true;
+    }
+    return false;
+  }
+
+  return IsMirroredPositionMatrix(g_main_cp_state.matrix_index_a.PosNormalMtxIdx);
 }
 
 const char* HandlingToDebugName(ShaderHunter::HandlingType handling)
@@ -1055,7 +1093,8 @@ void VertexManagerBase::Flush()
     pixel_shader_manager.constants.time_ms = seconds_elapsed * 1000;
   }
 
-  CalculateNormals(VertexLoaderManager::GetCurrentVertexFormat());
+  NativeVertexFormat* current_vertex_format = VertexLoaderManager::GetCurrentVertexFormat();
+  CalculateNormals(current_vertex_format);
   // Calculate ZSlope for zfreeze
   const auto used_textures = UsedTextures();
   std::vector<std::string> texture_names;
@@ -1099,7 +1138,7 @@ void VertexManagerBase::Flush()
   if (!bpmem.genMode.zfreeze)
   {
     // Must be done after VertexShaderManager::SetConstants()
-    CalculateZSlope(VertexLoaderManager::GetCurrentVertexFormat());
+    CalculateZSlope(current_vertex_format);
   }
   else if (m_zslope.dirty && !m_cull_all)  // or apply any dirty ZSlopes
   {
@@ -1146,8 +1185,24 @@ void VertexManagerBase::Flush()
 
     if (!skip)
     {
+#ifdef ENABLE_VR
+      const bool primegun_left_hand_mirrored_position_draw =
+          g_ActiveConfig.stereo_mode == StereoMode::OpenXR &&
+          !Common::VR::OpenXRInputState::GetPrimedGunOverlay().use_right_hand &&
+          DrawUsesMirroredPositionMatrix(current_vertex_format);
+#else
+      constexpr bool primegun_left_hand_mirrored_position_draw = false;
+#endif
+
       UpdatePipelineConfig();
       UpdatePipelineObject();
+      if (primegun_left_hand_mirrored_position_draw)
+      {
+        m_current_pipeline_config.rasterization_state.cull_mode = CullMode::None;
+        m_current_uber_pipeline_config.rasterization_state.cull_mode = CullMode::None;
+        m_pipeline_config_changed = true;
+        UpdatePipelineObject();
+      }
       bool shader_hunter_force_pink = false;
       if (m_current_pipeline_object)
       {
