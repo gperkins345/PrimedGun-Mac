@@ -225,6 +225,7 @@ constexpr u32 PLAYER_ORBIT_STATE_OFFSET = 0x304u;
 constexpr u32 PLAYER_ORBIT_TARGET_ID_OFFSET = 0x310u;
 constexpr u32 PLAYER_ORBIT_LOCK_ID_OFFSET = 0x33Cu;
 constexpr u32 PLAYER_NEARBY_ORBIT_OBJECTS_OFFSET = 0x344u;
+constexpr u32 PLAYER_ONSCREEN_ORBIT_OBJECTS_OFFSET = 0x354u;
 constexpr u32 PLAYER_FREE_LOOK_STATE_OFFSET = 0x3DCu;
 constexpr u32 PLAYER_AIM_TARGET_ID_OFFSET = 0x3F4u;
 constexpr u32 PLAYER_FREE_LOOK_CENTER_TIME_OFFSET = 0x3E0u;
@@ -1493,6 +1494,11 @@ bool AabbLooksUsable(const ActorAabb& box)
          std::fabs(center_z) <= 100000.0f;
 }
 
+float AabbMaxExtent(const ActorAabb& box)
+{
+  return std::max({box.max_x - box.min_x, box.max_y - box.min_y, box.max_z - box.min_z});
+}
+
 bool ReadActorRenderAabb(const Core::CPUThreadGuard& guard, u32 obj, ActorAabb* box)
 {
   return PrimeGameObjectPointerLooksValid(obj, 0xb4u) && ReadAabb(guard, obj + 0x9cu, box) &&
@@ -1707,7 +1713,7 @@ bool PreferRayMetrics(const RayCandidateMetrics& candidate, const RayCandidateMe
 
 RayCandidateMetrics ResolveActorRayMetrics(const Core::CPUThreadGuard& guard, u32 obj, float ray_x,
                                            float ray_y, float ray_z, float dir_x, float dir_y,
-                                           float dir_z, float max_along)
+                                           float dir_z, float max_along, bool allow_physics_aabb)
 {
   RayCandidateMetrics best = {};
   float ox = 0.0f;
@@ -1730,7 +1736,7 @@ RayCandidateMetrics ResolveActorRayMetrics(const Core::CPUThreadGuard& guard, u3
     best = metrics;
   }
 
-  if (ReadActorPhysicsAabb(guard, obj, &box) &&
+  if (allow_physics_aabb && ReadActorPhysicsAabb(guard, obj, &box) &&
       RayMetricsForAabb(ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, box, max_along, &metrics) &&
       PreferRayMetrics(metrics, best))
   {
@@ -1937,8 +1943,8 @@ bool ReadVanillaTargetUid(const Core::CPUThreadGuard& guard, u32 state_manager, 
 
 bool ResolveActiveCameraTransform(const Core::CPUThreadGuard& guard, u32* transform);
 
-bool RefreshScanTargetCandidates(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player,
-                                 std::vector<ScanTargetCandidate>* candidates)
+bool RefreshOrbitTargetCandidates(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player,
+                                  u32 vector_offset, std::vector<ScanTargetCandidate>* candidates)
 {
   if (candidates == nullptr)
     return false;
@@ -1947,8 +1953,8 @@ bool RefreshScanTargetCandidates(const Core::CPUThreadGuard& guard, u32 state_ma
 
   u32 count = 0;
   u32 items = 0;
-  if (!TryReadU32(guard, player + PLAYER_NEARBY_ORBIT_OBJECTS_OFFSET + 4u, &count) ||
-      !TryReadU32(guard, player + PLAYER_NEARBY_ORBIT_OBJECTS_OFFSET + 12u, &items) ||
+  if (!TryReadU32(guard, player + vector_offset + 4u, &count) ||
+      !TryReadU32(guard, player + vector_offset + 12u, &items) ||
       count > 128u || !PrimeDataPointerLooksValid(items, count * sizeof(u16)))
   {
     return false;
@@ -1969,6 +1975,13 @@ bool RefreshScanTargetCandidates(const Core::CPUThreadGuard& guard, u32 state_ma
   }
 
   return !candidates->empty();
+}
+
+bool RefreshScanTargetCandidates(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player,
+                                 std::vector<ScanTargetCandidate>* candidates)
+{
+  return RefreshOrbitTargetCandidates(guard, state_manager, player,
+                                      PLAYER_NEARBY_ORBIT_OBJECTS_OFFSET, candidates);
 }
 
 bool CandidateListContainsUid(const std::vector<ScanTargetCandidate>& candidates, u16 uid)
@@ -2024,7 +2037,7 @@ bool PickScanTargetFromHmd(const Core::CPUThreadGuard& guard, u32 state_manager,
 
     const RayCandidateMetrics metrics =
         ResolveActorRayMetrics(guard, candidate.obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z,
-                               max_along);
+                               max_along, true);
     if (!metrics.valid || metrics.perp > max_perp)
       continue;
 
@@ -2111,7 +2124,8 @@ bool TryPreferPairedGrapplePoint(const Core::CPUThreadGuard& guard, u32 object_l
       continue;
 
     const RayCandidateMetrics metrics =
-        ResolveActorRayMetrics(guard, obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, max_along);
+        ResolveActorRayMetrics(guard, obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, max_along,
+                               true);
     if (!metrics.valid || metrics.perp > max_perp)
       continue;
 
@@ -2208,8 +2222,14 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
   const bool scan_mode = ScanVisorActive(guard, player);
   std::vector<ScanTargetCandidate> nearby_orbit_candidates;
   const bool have_nearby_orbit_candidates =
-      !scan_mode && RefreshScanTargetCandidates(guard, state_manager, player,
-                                                &nearby_orbit_candidates);
+      !scan_mode && RefreshOrbitTargetCandidates(guard, state_manager, player,
+                                                 PLAYER_NEARBY_ORBIT_OBJECTS_OFFSET,
+                                                 &nearby_orbit_candidates);
+  std::vector<ScanTargetCandidate> onscreen_orbit_candidates;
+  const bool have_onscreen_orbit_candidates =
+      !scan_mode && RefreshOrbitTargetCandidates(guard, state_manager, player,
+                                                 PLAYER_ONSCREEN_ORBIT_OBJECTS_OFFSET,
+                                                 &onscreen_orbit_candidates);
   bool found = false;
 
   for (u32 i = 0; i < 1024u; ++i)
@@ -2245,20 +2265,17 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
     const bool grapple_point = ActorIsGrapplePoint(guard, obj);
     const bool nearby_orbit_candidate =
         have_nearby_orbit_candidates && CandidateListContainsUid(nearby_orbit_candidates, uid);
+    const bool onscreen_orbit_candidate =
+        have_onscreen_orbit_candidates && CandidateListContainsUid(onscreen_orbit_candidates, uid);
     const bool orbit_candidate = has_orbit && targetable;
     const bool scan_candidate = has_scan;
     const bool grapple_candidate = grapple_point && has_orbit;
     const bool vanilla_orbit_candidate =
-        !scan_mode && nearby_orbit_candidate && orbit_candidate;
+        !scan_mode && onscreen_orbit_candidate && orbit_candidate;
 
     const bool has_any_target_hint =
         has_target || has_orbit || scan_candidate || grapple_candidate;
     if (!has_any_target_hint)
-      continue;
-
-    const RayCandidateMetrics metrics =
-        ResolveActorRayMetrics(guard, obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, max_along);
-    if (!metrics.valid)
       continue;
 
     const bool combat_candidate = has_target && (targetable || nearby_orbit_candidate);
@@ -2270,6 +2287,26 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
       continue;
 
     if (scan_mode && !combat_candidate && !orbit_candidate && !scan_candidate && !grapple_candidate)
+      continue;
+
+    ActorAabb render_box = {};
+    const bool has_render_bounds = ReadActorRenderAabb(guard, obj, &render_box);
+    const bool allow_physics_aabb =
+        scan_mode || grapple_candidate || vanilla_orbit_candidate || has_render_bounds;
+    if (!scan_mode && !grapple_candidate && !vanilla_orbit_candidate && !has_render_bounds)
+      continue;
+
+    const bool target_only_helper_point =
+        !scan_mode && combat_candidate && !has_character && !has_orbit && !grapple_candidate &&
+        !nearby_orbit_candidate && !onscreen_orbit_candidate && has_render_bounds &&
+        AabbMaxExtent(render_box) <= 0.05f;
+    if (target_only_helper_point)
+      continue;
+
+    const RayCandidateMetrics metrics =
+        ResolveActorRayMetrics(guard, obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, max_along,
+                               allow_physics_aabb);
+    if (!metrics.valid)
       continue;
 
     const float candidate_max_perp =
