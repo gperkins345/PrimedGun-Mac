@@ -30,10 +30,62 @@
 #include "VideoCommon/VideoConfig.h"
 #include "VideoCommon/VR/OpenXRD3D11Common.h"
 #include "VideoCommon/VR/OpenXRManager.h"
+#include "VideoCommon/VR/PrimedGunOverlayCommon.h"
 
 namespace DX11
 {
 std::unique_ptr<D3DOpenXR> g_openxr_d3d;
+namespace PGO = PrimedGun::Overlay;
+
+namespace
+{
+bool BuildCinematicScreenLayer(const std::array<XREyeSwapchain, 2>& eye_swapchains,
+                               XrCompositionLayerQuad* layer)
+{
+  if (!VR::g_openxr || !layer || eye_swapchains[0].swapchain == XR_NULL_HANDLE)
+    return false;
+
+  const Common::VR::OpenXRInputSnapshot snapshot = Common::VR::OpenXRInputState::GetSnapshot();
+  XrQuaternionf orientation{};
+  XrVector3f position{};
+  bool pose_valid = false;
+
+  if (snapshot.head_pose.valid)
+  {
+    orientation = {snapshot.head_pose.orientation[0], snapshot.head_pose.orientation[1],
+                   snapshot.head_pose.orientation[2], snapshot.head_pose.orientation[3]};
+    position = {snapshot.head_pose.position[0] + snapshot.tracking_origin_position[0],
+                snapshot.head_pose.position[1] + snapshot.tracking_origin_position[1],
+                snapshot.head_pose.position[2] + snapshot.tracking_origin_position[2]};
+    pose_valid = true;
+  }
+  else if (VR::g_openxr->AreSubmittedEyeViewsValid())
+  {
+    const auto& eyes = VR::g_openxr->GetSubmittedEyeViews();
+    orientation = eyes[0].pose.orientation;
+    position = {0.5f * (eyes[0].pose.position.x + eyes[1].pose.position.x),
+                0.5f * (eyes[0].pose.position.y + eyes[1].pose.position.y),
+                0.5f * (eyes[0].pose.position.z + eyes[1].pose.position.z)};
+    pose_valid = true;
+  }
+
+  if (!pose_valid)
+    return false;
+
+  const XrVector3f offset = PGO::RotateVector(orientation, {0.0f, 0.0f, -2.0f});
+  *layer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+  layer->space = VR::g_openxr->GetReferenceSpace();
+  layer->eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+  layer->subImage.swapchain = eye_swapchains[0].swapchain;
+  layer->subImage.imageRect.offset = {0, 0};
+  layer->subImage.imageRect.extent = {static_cast<int32_t>(eye_swapchains[0].width),
+                                      static_cast<int32_t>(eye_swapchains[0].height)};
+  layer->pose.orientation = orientation;
+  layer->pose.position = {position.x + offset.x, position.y + offset.y, position.z + offset.z};
+  layer->size = {2.2f, 1.2375f};
+  return true;
+}
+}  // namespace
 
 D3DOpenXR::D3DOpenXR() = default;
 
@@ -317,6 +369,16 @@ void D3DOpenXR::ReleaseEyeTexture(uint32_t eye_index)
 bool D3DOpenXR::SubmitFrame()
 {
   ASSERT(VR::g_openxr != nullptr);
+
+  const auto overlay = Common::VR::OpenXRInputState::GetPrimedGunOverlay();
+  if (overlay.cinematic_screen_active &&
+      BuildCinematicScreenLayer(m_eye_swapchains, &m_cinematic_screen_layer))
+  {
+    std::vector<XrCompositionLayerBaseHeader*> layers = {
+        reinterpret_cast<XrCompositionLayerBaseHeader*>(&m_cinematic_screen_layer)};
+    m_primegun_overlay.AppendLayers(&layers);
+    return VR::g_openxr->EndFrame(layers);
+  }
 
   // Use the submit snapshot captured when the GS pose cache was last refreshed. Using
   // live m_eye_views here would pick up LocateViews that ran between the last draw and

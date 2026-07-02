@@ -83,6 +83,7 @@ struct PrimedGunVrOverlayState
   uint32_t tab = 0;
   uint32_t selected_index = 0;
   uint32_t item_count = 0;
+  uint32_t calibration_page = 0;
   uint32_t control_page = 0;
   uint32_t cannon_texture_slot = 0;
   bool cannon_texture_notice = false;
@@ -108,8 +109,12 @@ struct PrimedGunVrOverlayState
   float gun_targeting_distance = 60.0f;
   float gun_targeting_radius = 4.0f;
   bool visor_helmet_enabled = false;
+  bool vr_overlays_enabled = true;
   bool xr_dpad_enabled = true;
   bool vr_menu_hold_left_stick = false;
+  bool vr_menu_requires_head_zone = false;
+  bool cinematic_screen_enabled = false;
+  bool cinematic_screen_active = false;
   bool position_marker_visible = false;
   float xr_dpad_head_radius = 0.18f;
   float xr_dpad_head_y_below = 0.14f;
@@ -122,6 +127,8 @@ struct PrimedGunVrOverlayState
   float directional_movement_accel = 45.0f;
   float directional_movement_air_accel = 8.0f;
   float look_yaw_sensitivity = 1.0f;
+  bool snap_turn_enabled = false;
+  int snap_turn_degrees = 45;
   float offset_x = 0.0f;
   float offset_y = 0.0f;
   float offset_z = 0.0f;

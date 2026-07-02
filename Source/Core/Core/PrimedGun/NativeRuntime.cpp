@@ -79,6 +79,9 @@ struct Matrix3x4
   const float& At(int row, int col) const { return m[row * 4 + col]; }
 };
 
+Pose PoseFromOpenXR(const Common::VR::OpenXRPoseState& xr_pose);
+bool LeftControllerNearHead(const Pose& left, const Pose& hmd, const RuntimeSettings& settings);
+
 bool PoseNumbersLookValid(const Pose& pose)
 {
   if (!pose.valid || !std::isfinite(pose.px) || !std::isfinite(pose.py) ||
@@ -194,13 +197,17 @@ constexpr u32 DRAW_SCAN_INDICATOR_MODEL_BASIS = 0x801122CCu;
 constexpr u32 DRAW_SCAN_INDICATOR_MODEL_BASIS_ORIGINAL = 0xC0410074u;
 
 constexpr u32 VR_MENU_TAB_COUNT = 5;
+constexpr u32 VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS = 7;
+constexpr u32 VR_MENU_CALIBRATION_TOTAL_ITEMS = 17;
+constexpr u32 VR_MENU_CALIBRATION_PAGE_COUNT = 2;
 constexpr u32 VR_MENU_CONTROL_TAB = 1;
 constexpr u32 VR_MENU_MOVEMENT_TAB = 2;
 constexpr u32 VR_MENU_CANNON_TAB = 3;
 constexpr u32 VR_MENU_STATE_TAB = 4;
-constexpr u32 VR_MENU_CONTROL_FIRST_PAGE_ITEMS = 7;
-constexpr u32 VR_MENU_CONTROL_TOTAL_ITEMS = 15;
+constexpr u32 VR_MENU_CONTROL_FIRST_PAGE_ITEMS = 8;
+constexpr u32 VR_MENU_CONTROL_TOTAL_ITEMS = 16;
 constexpr u32 VR_MENU_CONTROL_PAGE_COUNT = 2;
+constexpr std::array<int, 4> SNAP_TURN_DEGREES_CHOICES = {30, 45, 60, 90};
 constexpr float VR_MENU_ROW_TEXT_Y = 146.0f;
 constexpr float VR_MENU_ROW_STEP_Y = 22.0f;
 constexpr float VR_MENU_ROW_HIT_HALF_HEIGHT = 13.0f;
@@ -313,8 +320,13 @@ bool s_last_vr_menu_stick_down = false;
 bool s_last_vr_menu_stick_left = false;
 bool s_last_vr_menu_stick_right = false;
 bool s_vr_menu_visible = false;
+bool s_cinematic_screen_active = false;
+u64 s_cinematic_screen_hold_until_frame = 0;
+bool s_snap_turn_ready = true;
+u64 s_snap_turn_cooldown_until_frame = 0;
 u32 s_vr_menu_tab = 0;
 u32 s_vr_menu_selected_index = 0;
+u32 s_vr_menu_calibration_page = 0;
 u32 s_vr_menu_control_page = 0;
 u32 s_vr_menu_generation = 1;
 u64 s_vr_menu_saved_notice_until_frame = 0;
@@ -369,6 +381,7 @@ u64 s_last_scan_reticle_watchdog_frame = 0;
 u32 s_scan_reticle_bad_samples = 0;
 bool s_cannon_hand_pose_ready = false;
 bool s_smooth_matrix_valid = false;
+u64 s_cannon_smoothing_bypass_until_frame = 0;
 float s_smooth_matrix[12] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
                              0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
 
@@ -2943,7 +2956,7 @@ void ApplyLookYawSensitivityBoost(const Core::CPUThreadGuard& guard,
                                   const RuntimeSettings& settings, u32 player)
 {
   if (settings.look_yaw_sensitivity <= 1.0f || player < 0x80000000u ||
-      !PlayerIsFirstPersonUnmorphed(guard, player))
+      settings.snap_turn_enabled || !PlayerIsFirstPersonUnmorphed(guard, player))
   {
     return;
   }
@@ -2963,6 +2976,101 @@ void ApplyLookYawSensitivityBoost(const Core::CPUThreadGuard& guard,
   const float yaw_delta_rad = stick_x * extra_scale * max_extra_yaw_deg_per_second * frame_dt *
                               (static_cast<float>(MathUtil::PI) / 180.0f);
   RotateTransformYaw2D(guard, player + ADDRESS.transform_offset, yaw_delta_rad);
+}
+
+int SnapTurnStepDegrees(int current, int direction)
+{
+  int closest_index = 1;
+  int closest_delta = std::numeric_limits<int>::max();
+  for (int i = 0; i < static_cast<int>(SNAP_TURN_DEGREES_CHOICES.size()); ++i)
+  {
+    const int delta = std::abs(current - SNAP_TURN_DEGREES_CHOICES[i]);
+    if (delta < closest_delta)
+    {
+      closest_delta = delta;
+      closest_index = i;
+    }
+  }
+
+  const int next_index = std::clamp(closest_index + direction, 0,
+                                    static_cast<int>(SNAP_TURN_DEGREES_CHOICES.size()) - 1);
+  return SNAP_TURN_DEGREES_CHOICES[next_index];
+}
+
+bool UpdateSnapTurn(const Core::CPUThreadGuard& guard,
+                    const Common::VR::OpenXRInputSnapshot& snapshot,
+                    const RuntimeSettings& settings, float* applied_yaw_deg)
+{
+  if (applied_yaw_deg != nullptr)
+    *applied_yaw_deg = 0.0f;
+
+  if (!settings.snap_turn_enabled || !snapshot.runtime_active ||
+      s_frame_counter < s_vr_menu_input_suppress_until_frame || s_vr_menu_visible)
+  {
+    if (!settings.snap_turn_enabled)
+      s_snap_turn_ready = true;
+    return false;
+  }
+
+  constexpr size_t right_hand_index = 1;
+  const Common::VR::OpenXRControllerState& controller = snapshot.controllers[right_hand_index];
+  if (!controller.connected)
+  {
+    s_snap_turn_ready = true;
+    s_snap_turn_cooldown_until_frame = 0;
+    return false;
+  }
+
+  constexpr float snap_enter_threshold = 0.72f;
+  constexpr float snap_exit_threshold = 0.32f;
+  const float stick_x = std::clamp(controller.thumbstick_x, -1.0f, 1.0f);
+  if (std::fabs(stick_x) <= snap_exit_threshold)
+  {
+    s_snap_turn_ready = true;
+    return false;
+  }
+
+  if (snapshot.head_pose.valid && controller.aim_pose.valid &&
+      LeftControllerNearHead(PoseFromOpenXR(controller.aim_pose), PoseFromOpenXR(snapshot.head_pose),
+                             settings))
+  {
+    s_snap_turn_ready = false;
+    return false;
+  }
+
+  if (!s_snap_turn_ready || std::fabs(stick_x) < snap_enter_threshold ||
+      s_frame_counter < s_snap_turn_cooldown_until_frame)
+  {
+    return false;
+  }
+
+  // Consume the flick even if gameplay is currently unavailable, so holding the stick through
+  // a menu, loading transition, or invalid player state cannot snap on the next valid frame.
+  s_snap_turn_ready = false;
+
+  u32 player = 0;
+  if (!TryReadU32(guard, ADDRESS.state_manager + ADDRESS.player_offset, &player) ||
+      player < 0x80000000u || !PlayerIsFirstPersonUnmorphed(guard, player) ||
+      ScanVisorActive(guard, player) || PlayerIsChangingVisorsInFirstPerson(guard, player))
+  {
+    return false;
+  }
+
+  const int degrees =
+      std::clamp(settings.snap_turn_degrees, SNAP_TURN_DEGREES_CHOICES.front(),
+                 SNAP_TURN_DEGREES_CHOICES.back());
+  const float signed_degrees = (stick_x > 0.0f ? 1.0f : -1.0f) * static_cast<float>(degrees);
+  const float yaw_delta_rad = signed_degrees * (static_cast<float>(MathUtil::PI) / 180.0f);
+  if (RotateTransformYaw2D(guard, player + ADDRESS.transform_offset, yaw_delta_rad))
+  {
+    s_snap_turn_cooldown_until_frame = s_frame_counter + 8;
+    s_cannon_smoothing_bypass_until_frame = s_frame_counter + 10;
+    s_smooth_matrix_valid = false;
+    if (applied_yaw_deg != nullptr)
+      *applied_yaw_deg = signed_degrees;
+    return true;
+  }
+  return false;
 }
 
 DpadDir StickToDpad(float x, float y, float deadzone, DpadDir last_dir)
@@ -3815,13 +3923,15 @@ u32 VrMenuItemCountForTab(u32 tab)
   switch (tab)
   {
   case 0:
-    return 15;
+    return s_vr_menu_calibration_page == 0 ?
+               VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS + 1 :
+               VR_MENU_CALIBRATION_TOTAL_ITEMS - VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS + 1;
   case VR_MENU_CONTROL_TAB:
     return s_vr_menu_control_page == 0 ? VR_MENU_CONTROL_FIRST_PAGE_ITEMS + 1 :
                                          VR_MENU_CONTROL_TOTAL_ITEMS -
                                              VR_MENU_CONTROL_FIRST_PAGE_ITEMS + 1;
   case VR_MENU_MOVEMENT_TAB:
-    return 9;
+    return 11;
   case VR_MENU_CANNON_TAB:
     return 6;
   case VR_MENU_STATE_TAB:
@@ -3924,18 +4034,28 @@ int VrMenuControlActualIndex(u32 local_index)
              static_cast<int>(VR_MENU_CONTROL_FIRST_PAGE_ITEMS + local_index - 1);
 }
 
+int VrMenuCalibrationActualIndex(u32 local_index)
+{
+  if (local_index == 0)
+    return -1;
+
+  return s_vr_menu_calibration_page == 0 ?
+             static_cast<int>(local_index - 1) :
+             static_cast<int>(VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS + local_index - 1);
+}
+
 u32 VrMenuResetActionForSelection()
 {
-  if (s_vr_menu_tab == 0 && s_vr_menu_selected_index == 4)
+  if (s_vr_menu_tab == 0 && VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 6)
     return VR_MENU_RESET_TARGETING_ACTION;
-  if (s_vr_menu_tab == 0 && s_vr_menu_selected_index == 12)
+  if (s_vr_menu_tab == 0 && VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 14)
     return VR_MENU_RESET_CALIBRATION_ACTION;
   if (s_vr_menu_tab == VR_MENU_CONTROL_TAB &&
-      VrMenuControlActualIndex(s_vr_menu_selected_index) == 14)
+      VrMenuControlActualIndex(s_vr_menu_selected_index) == 15)
   {
     return VR_MENU_RESET_CONTROLLER_ACTION;
   }
-  if (s_vr_menu_tab == VR_MENU_MOVEMENT_TAB && s_vr_menu_selected_index == 8)
+  if (s_vr_menu_tab == VR_MENU_MOVEMENT_TAB && s_vr_menu_selected_index == 10)
     return VR_MENU_RESET_MOVEMENT_ACTION;
   return 0;
 }
@@ -3945,18 +4065,24 @@ bool VrMenuRowIsNumeric(u32 tab, u32 index)
   switch (tab)
   {
   case 0:
-    return index == 1 || index == 2 || (index >= 5 && index <= 10);
+  {
+    if (index == 0)
+      return true;
+
+    const int actual_index = VrMenuCalibrationActualIndex(index);
+    return actual_index == 3 || actual_index == 4 || (actual_index >= 7 && actual_index <= 12);
+  }
   case VR_MENU_CONTROL_TAB:
   {
     if (index == 0)
       return true;
 
     const int actual_index = VrMenuControlActualIndex(index);
-    return actual_index == 3 || actual_index == 8 || actual_index == 11 ||
-           actual_index == 12 || actual_index == 13;
+    return actual_index == 3 || actual_index == 9 || actual_index == 12 ||
+           actual_index == 13 || actual_index == 14;
   }
   case VR_MENU_MOVEMENT_TAB:
-    return index >= 3 && index <= 7;
+    return (index >= 3 && index <= 7) || index == 9;
   default:
     return false;
   }
@@ -3974,6 +4100,12 @@ void ClampVrMenuSelection()
 void SetVrMenuControlPage(u32 page)
 {
   s_vr_menu_control_page = page % VR_MENU_CONTROL_PAGE_COUNT;
+  ClampVrMenuSelection();
+}
+
+void SetVrMenuCalibrationPage(u32 page)
+{
+  s_vr_menu_calibration_page = page % VR_MENU_CALIBRATION_PAGE_COUNT;
   ClampVrMenuSelection();
 }
 
@@ -4074,6 +4206,7 @@ void ResetControllerSettings(RuntimeSettings* settings)
   settings->primegun_trackpad_press_threshold = 0.5f;
   settings->combat_jump_use_primary_button = false;
   settings->vr_menu_hold_left_stick = false;
+  settings->vr_menu_requires_head_zone = false;
   settings->xr_dpad_enabled = true;
   settings->xr_dpad_head_radius = 0.28f;
   settings->xr_dpad_head_y_below = 0.02f;
@@ -4090,6 +4223,38 @@ void ResetMovementSettings(RuntimeSettings* settings)
   settings->directional_movement_accel = 45.0f;
   settings->directional_movement_air_accel = 8.0f;
   settings->look_yaw_sensitivity = 1.0f;
+  settings->snap_turn_enabled = false;
+  settings->snap_turn_degrees = 45;
+}
+
+bool CinematicCameraActive(const Core::CPUThreadGuard& guard)
+{
+  u32 camera_manager = 0;
+  u32 cine_camera_count = 0;
+  return TryReadU32(guard, ADDRESS.state_manager + ADDRESS.camera_manager_offset, &camera_manager) &&
+         camera_manager >= 0x80000000u &&
+         TryReadU32(guard, camera_manager + 0x08u, &cine_camera_count) &&
+         cine_camera_count > 0 && cine_camera_count < 16;
+}
+
+void UpdateCinematicScreenState(const Core::CPUThreadGuard& guard, const RuntimeSettings& settings)
+{
+  if (!settings.cinematic_screen_enabled)
+  {
+    s_cinematic_screen_active = false;
+    s_cinematic_screen_hold_until_frame = 0;
+    return;
+  }
+
+  if (CinematicCameraActive(guard))
+  {
+    s_cinematic_screen_active = true;
+    s_cinematic_screen_hold_until_frame = s_frame_counter + 20;
+    return;
+  }
+
+  if (s_frame_counter >= s_cinematic_screen_hold_until_frame)
+    s_cinematic_screen_active = false;
 }
 
 void ResetVrRuntimeSettings(RuntimeSettings* settings)
@@ -4123,38 +4288,48 @@ void AdjustVrMenuSetting(RuntimeSettings* settings, int direction)
   switch (s_vr_menu_tab)
   {
   case 0:
-    switch (s_vr_menu_selected_index)
+  {
+    if (s_vr_menu_selected_index == 0)
     {
-    case 1:
+      SetVrMenuCalibrationPage(direction < 0 ?
+                                   s_vr_menu_calibration_page + VR_MENU_CALIBRATION_PAGE_COUNT - 1 :
+                                   s_vr_menu_calibration_page + 1);
+      break;
+    }
+
+    switch (VrMenuCalibrationActualIndex(s_vr_menu_selected_index))
+    {
+    case 3:
       settings->gun_targeting_distance =
           std::clamp(settings->gun_targeting_distance + sign * 1.0f, 1.0f, 200.0f);
       break;
-    case 2:
+    case 4:
       settings->gun_targeting_radius =
           std::clamp(settings->gun_targeting_radius + sign * 0.1f, 0.1f, 25.0f);
       break;
-    case 5:
+    case 7:
       settings->model_offset_x += sign * 0.01f;
       break;
-    case 6:
+    case 8:
       settings->model_offset_y += sign * 0.01f;
       break;
-    case 7:
+    case 9:
       settings->model_offset_z += sign * 0.01f;
       break;
-    case 8:
+    case 10:
       settings->rot_offset_x += sign * 1.0f;
       break;
-    case 9:
+    case 11:
       settings->rot_offset_y += sign * 1.0f;
       break;
-    case 10:
+    case 12:
       settings->rot_offset_z += sign * 1.0f;
       break;
     default:
       break;
     }
     break;
+  }
   case VR_MENU_CONTROL_TAB:
   {
     if (s_vr_menu_selected_index == 0)
@@ -4170,19 +4345,19 @@ void AdjustVrMenuSetting(RuntimeSettings* settings, int direction)
       settings->rumble_intensity =
           std::clamp(settings->rumble_intensity + sign * 0.05f, 0.0f, 1.0f);
       break;
-    case 8:
+    case 9:
       settings->primegun_trackpad_press_threshold =
           std::clamp(settings->primegun_trackpad_press_threshold + sign * 0.05f, 0.05f, 1.0f);
       break;
-    case 11:
+    case 12:
       settings->xr_dpad_head_radius =
           std::clamp(settings->xr_dpad_head_radius + sign * 0.01f, 0.05f, 0.60f);
       break;
-    case 12:
+    case 13:
       settings->xr_dpad_head_y_below =
           std::clamp(settings->xr_dpad_head_y_below + sign * 0.01f, 0.0f, 0.60f);
       break;
-    case 13:
+    case 14:
       settings->xr_dpad_deadzone =
           std::clamp(settings->xr_dpad_deadzone + sign * 0.05f, 0.0f, 0.95f);
       break;
@@ -4214,6 +4389,10 @@ void AdjustVrMenuSetting(RuntimeSettings* settings, int direction)
       settings->look_yaw_sensitivity =
           std::clamp(settings->look_yaw_sensitivity + sign * 0.05f, 0.20f, 3.00f);
       break;
+    case 9:
+      settings->snap_turn_degrees =
+          SnapTurnStepDegrees(settings->snap_turn_degrees, direction < 0 ? -1 : 1);
+      break;
     default:
       break;
     }
@@ -4232,10 +4411,21 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
   if (s_vr_menu_tab == 0)
   {
     if (s_vr_menu_selected_index == 0)
+    {
+      SetVrMenuCalibrationPage(s_vr_menu_calibration_page + 1);
+      return;
+    }
+
+    const int actual_index = VrMenuCalibrationActualIndex(s_vr_menu_selected_index);
+    if (actual_index == 0)
+      settings->vr_overlays_enabled = !settings->vr_overlays_enabled;
+    else if (actual_index == 1)
+      settings->cinematic_screen_enabled = !settings->cinematic_screen_enabled;
+    else if (actual_index == 2)
       settings->gun_targeting_enabled = !settings->gun_targeting_enabled;
-    else if (s_vr_menu_selected_index == 3)
+    else if (actual_index == 5)
       settings->visor_helmet_enabled = !settings->visor_helmet_enabled;
-    else if (s_vr_menu_selected_index == 4)
+    else if (actual_index == 6)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4245,9 +4435,9 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->gun_targeting_radius = 4.0f;
       settings->visor_helmet_enabled = false;
     }
-    else if (s_vr_menu_selected_index == 11)
+    else if (actual_index == 13)
       settings->position_marker_enabled = !settings->position_marker_enabled;
-    else if (s_vr_menu_selected_index == 12)
+    else if (actual_index == 14)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4259,7 +4449,7 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->rot_offset_y = DEFAULT_ROT_OFFSET_Y;
       settings->rot_offset_z = DEFAULT_ROT_OFFSET_Z;
     }
-    else if (s_vr_menu_selected_index == 13)
+    else if (actual_index == 15)
     {
       settings->offset_x = 0.0f;
       settings->offset_y = 0.0f;
@@ -4271,7 +4461,7 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->rot_offset_y = DEFAULT_ROT_OFFSET_Y;
       settings->rot_offset_z = DEFAULT_ROT_OFFSET_Z;
     }
-    else if (s_vr_menu_selected_index == 14)
+    else if (actual_index == 16)
     {
       settings->offset_x = 0.0f;
       settings->offset_y = 0.0f;
@@ -4308,10 +4498,12 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
     else if (actual_index == 6)
       settings->vr_menu_hold_left_stick = !settings->vr_menu_hold_left_stick;
     else if (actual_index == 7)
+      settings->vr_menu_requires_head_zone = !settings->vr_menu_requires_head_zone;
+    else if (actual_index == 8)
       settings->primegun_grip_inputs_use_trackpad = !settings->primegun_grip_inputs_use_trackpad;
-    else if (actual_index == 9)
+    else if (actual_index == 10 || actual_index == 11)
       settings->xr_dpad_enabled = !settings->xr_dpad_enabled;
-    else if (actual_index == 14)
+    else if (actual_index == 15)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4331,6 +4523,8 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->directional_movement_use_hmd_direction =
           !settings->directional_movement_use_hmd_direction;
     else if (s_vr_menu_selected_index == 8)
+      settings->snap_turn_enabled = !settings->snap_turn_enabled;
+    else if (s_vr_menu_selected_index == 10)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4403,6 +4597,7 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.tab = s_vr_menu_tab;
   overlay.selected_index = s_vr_menu_selected_index;
   overlay.item_count = VrMenuItemCountForTab(s_vr_menu_tab);
+  overlay.calibration_page = s_vr_menu_calibration_page;
   overlay.control_page = s_vr_menu_control_page;
   overlay.cannon_texture_slot = s_vr_cannon_texture_slot;
   overlay.cannon_texture_notice = s_frame_counter < s_vr_cannon_texture_notice_until_frame;
@@ -4424,12 +4619,16 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.primegun_trackpad_press_threshold = settings.primegun_trackpad_press_threshold;
   overlay.combat_jump_use_primary_button = settings.combat_jump_use_primary_button;
   overlay.vr_menu_hold_left_stick = settings.vr_menu_hold_left_stick;
+  overlay.vr_menu_requires_head_zone = settings.vr_menu_requires_head_zone;
   overlay.gun_targeting_enabled = settings.gun_targeting_enabled;
   overlay.gun_targeting_distance = settings.gun_targeting_distance;
   overlay.gun_targeting_radius = settings.gun_targeting_radius;
   overlay.visor_helmet_enabled = settings.visor_helmet_enabled;
+  overlay.vr_overlays_enabled = settings.vr_overlays_enabled;
   overlay.position_marker_visible = settings.vr_overlays_enabled && settings.position_marker_enabled;
   overlay.xr_dpad_enabled = settings.xr_dpad_enabled;
+  overlay.cinematic_screen_enabled = settings.cinematic_screen_enabled;
+  overlay.cinematic_screen_active = settings.cinematic_screen_enabled && s_cinematic_screen_active;
   overlay.xr_dpad_head_radius = settings.xr_dpad_head_radius;
   overlay.xr_dpad_head_y_below = settings.xr_dpad_head_y_below;
   overlay.xr_dpad_deadzone = settings.xr_dpad_deadzone;
@@ -4441,6 +4640,8 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.directional_movement_accel = settings.directional_movement_accel;
   overlay.directional_movement_air_accel = settings.directional_movement_air_accel;
   overlay.look_yaw_sensitivity = settings.look_yaw_sensitivity;
+  overlay.snap_turn_enabled = settings.snap_turn_enabled;
+  overlay.snap_turn_degrees = settings.snap_turn_degrees;
   overlay.offset_x = settings.offset_x;
   overlay.offset_y = settings.offset_y;
   overlay.offset_z = settings.offset_z;
@@ -4479,8 +4680,15 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
   const u32 pointer_hand_index = settings->use_right_hand ? 1 : 0;
   const auto& panel_hand = snapshot.controllers[panel_hand_index];
   const auto& pointer_hand = snapshot.controllers[pointer_hand_index];
-  const bool menu_input =
+  const bool menu_input_raw =
       panel_hand.connected && (panel_hand.thumbstick_button || panel_hand.menu_button);
+  const bool menu_hand_near_head =
+      panel_hand.connected && panel_hand.aim_pose.valid && snapshot.head_pose.valid &&
+      LeftControllerNearHead(PoseFromOpenXR(panel_hand.aim_pose),
+                             PoseFromOpenXR(snapshot.head_pose), *settings);
+  const bool menu_input =
+      menu_input_raw && (!settings->vr_menu_requires_head_zone || s_vr_menu_visible ||
+                         menu_hand_near_head);
   if (settings->vr_menu_hold_left_stick)
   {
     if (s_vr_menu_visible)
@@ -4743,6 +4951,8 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
   if (!settings.enabled)
     return;
 
+  UpdateCinematicScreenState(guard, settings);
+
   const Common::VR::OpenXRInputSnapshot snapshot = Common::VR::OpenXRInputState::GetSnapshot();
   if (!snapshot.runtime_active)
   {
@@ -4758,10 +4968,15 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
   UpdateVrMenu(snapshot, &settings, prompt_visible);
   SetRuntimeSettings(settings);
 
-  const float yaw_delta_deg = GetPlayerYawDeltaDegrees(guard);
+  float yaw_delta_deg = GetPlayerYawDeltaDegrees(guard);
   UpdateDirectionalMovement(guard, snapshot, settings, yaw_delta_deg);
   UpdateXrDpad(guard, snapshot, settings);
-  ApplyLookYawSensitivityBoost(guard, snapshot, settings, prompt_player);
+  float snap_turn_yaw_deg = 0.0f;
+  const bool snap_turn_applied = UpdateSnapTurn(guard, snapshot, settings, &snap_turn_yaw_deg);
+  if (snap_turn_applied)
+    yaw_delta_deg = WrapDegrees(yaw_delta_deg - snap_turn_yaw_deg);
+  if (!snap_turn_applied)
+    ApplyLookYawSensitivityBoost(guard, snapshot, settings, prompt_player);
 
   const Common::VR::OpenXRControllerState& hand =
       snapshot.controllers[settings.use_right_hand ? 1 : 0];
@@ -4834,7 +5049,8 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
       smooth_dx * smooth_dx + smooth_dy * smooth_dy + smooth_dz * smooth_dz;
   constexpr float cannon_smooth_keep = 0.24f;
   constexpr float cannon_smooth_snap_distance = 2.0f;
-  if (!s_smooth_matrix_valid ||
+  const bool bypass_cannon_smoothing = s_frame_counter < s_cannon_smoothing_bypass_until_frame;
+  if (bypass_cannon_smoothing || !s_smooth_matrix_valid ||
       smooth_jump_sq > cannon_smooth_snap_distance * cannon_smooth_snap_distance)
   {
     for (int i = 0; i < 12; ++i)
@@ -5878,6 +6094,8 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   if (!settings.enabled)
   {
     TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
+    s_cinematic_screen_active = false;
+    s_cinematic_screen_hold_until_frame = 0;
     s_gameplay_input_active.store(false, std::memory_order_relaxed);
     s_orbit_lock_active.store(false, std::memory_order_relaxed);
     return;
@@ -5887,6 +6105,8 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   if (!game_active)
   {
     TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
+    s_cinematic_screen_active = false;
+    s_cinematic_screen_hold_until_frame = 0;
     s_gameplay_input_active.store(false, std::memory_order_relaxed);
     s_orbit_lock_active.store(false, std::memory_order_relaxed);
     if (s_game_was_active)
@@ -5907,6 +6127,8 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   if (!have_player)
   {
     TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
+    s_cinematic_screen_active = false;
+    s_cinematic_screen_hold_until_frame = 0;
     if (s_last_patch_player != 0)
       s_patch_reapply_until_frame = s_frame_counter + 180u;
     s_last_patch_player = 0;
@@ -6071,6 +6293,7 @@ void ResetNativeRuntime()
   s_scan_reticle_bad_samples = 0;
   s_cannon_hand_pose_ready = false;
   s_smooth_matrix_valid = false;
+  s_cannon_smoothing_bypass_until_frame = 0;
   s_controller_base_x = 0.0f;
   s_controller_base_y = 0.0f;
   s_controller_base_z = 0.0f;
@@ -6084,8 +6307,13 @@ void ResetNativeRuntime()
   s_last_vr_menu_stick_left = false;
   s_last_vr_menu_stick_right = false;
   s_vr_menu_visible = false;
+  s_cinematic_screen_active = false;
+  s_cinematic_screen_hold_until_frame = 0;
+  s_snap_turn_ready = true;
+  s_snap_turn_cooldown_until_frame = 0;
   s_vr_menu_tab = 0;
   s_vr_menu_selected_index = 0;
+  s_vr_menu_calibration_page = 0;
   s_vr_menu_control_page = 0;
   ++s_vr_menu_generation;
   s_vr_menu_saved_notice_until_frame = 0;
@@ -6201,6 +6429,11 @@ void SetRuntimeSettings(const RuntimeSettings& settings)
                   defaults.directional_movement_air_accel, 0.0f, 500.0f);
   s_settings.look_yaw_sensitivity =
       ClampFinite(s_settings.look_yaw_sensitivity, defaults.look_yaw_sensitivity, 0.1f, 5.0f);
+  s_settings.snap_turn_degrees =
+      SnapTurnStepDegrees(std::clamp(s_settings.snap_turn_degrees,
+                                     SNAP_TURN_DEGREES_CHOICES.front(),
+                                     SNAP_TURN_DEGREES_CHOICES.back()),
+                          0);
 #ifdef ENABLE_VR
   Common::VR::OpenXRInputState::SetRumbleConfig(s_settings.rumble_enabled,
                                                 s_settings.rumble_intensity,

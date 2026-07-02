@@ -269,7 +269,16 @@ inline int ControlMenuActualIndex(uint32_t page, int local_index)
   if (local_index <= 0)
     return -1;
 
-  constexpr int first_page_items = 6;
+  constexpr int first_page_items = 8;
+  return page == 0 ? local_index - 1 : first_page_items + local_index - 1;
+}
+
+inline int CalibrationMenuActualIndex(uint32_t page, int local_index)
+{
+  if (local_index <= 0)
+    return -1;
+
+  constexpr int first_page_items = 7;
   return page == 0 ? local_index - 1 : first_page_items + local_index - 1;
 }
 
@@ -278,17 +287,23 @@ inline bool MenuRowIsNumeric(const Common::VR::PrimedGunVrOverlayState& s, int i
   switch (s.tab)
   {
   case 0:
-    return index == 1 || index == 2 || (index >= 5 && index <= 10);
+  {
+    if (index == 0)
+      return true;
+
+    const int actual_index = CalibrationMenuActualIndex(s.calibration_page, index);
+    return actual_index == 3 || actual_index == 4 || (actual_index >= 7 && actual_index <= 12);
+  }
   case 2:
-    return index >= 3 && index <= 7;
+    return (index >= 3 && index <= 7) || index == 9;
   case 1:
   {
     if (index == 0)
       return true;
 
     const int actual_index = ControlMenuActualIndex(s.control_page, index);
-    return actual_index == 3 || actual_index == 7 || actual_index == 10 ||
-           actual_index == 11 || actual_index == 12;
+    return actual_index == 3 || actual_index == 9 || actual_index == 12 ||
+           actual_index == 13 || actual_index == 14;
   }
   default:
     return false;
@@ -321,21 +336,35 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
   switch (s.tab)
   {
   case 0:
-    return {{"TARGETING", s.gun_targeting_enabled ? "ON" : "OFF"},
-            {"TARGET DISTANCE", FloatText(s.gun_targeting_distance, 1)},
-            {"TARGET RADIUS", FloatText(s.gun_targeting_radius, 1)},
-            {"VISOR HELMET", s.visor_helmet_enabled ? "ON" : "OFF"},
-            {"RESET TARGETING", ConfirmText(s, RESET_TARGETING_ACTION)},
-            {"POSITION LEFT/RIGHT", FloatText(s.model_offset_x, 3)},
-            {"POSITION FORWARD/BACK", FloatText(s.model_offset_y, 3)},
-            {"POSITION UP/DOWN", FloatText(s.model_offset_z, 3)},
-            {"ROTATION PITCH", FloatText(s.rot_offset_x, 1)},
-            {"ROTATION YAW", FloatText(s.rot_offset_y, 1)},
-            {"ROTATION ROLL", FloatText(s.rot_offset_z, 1)},
-            {"FLOOR POSITION MARKER", s.position_marker_visible ? "ON" : "OFF"},
-            {"RESET CALIBRATION", ConfirmText(s, RESET_CALIBRATION_ACTION)},
-            {"DEFAULT ARM PRESET", "APPLY"},
-            {"SAMUS ARM PRESET", "APPLY"}};
+  {
+    std::vector<MenuRow> rows;
+    rows.push_back({"PAGE", s.calibration_page == 0 ? "1/2" : "2/2"});
+
+    if (s.calibration_page == 0)
+    {
+      rows.push_back({"IN-HEADSET OVERLAYS", s.vr_overlays_enabled ? "ON" : "OFF"});
+      rows.push_back({"CUTSCENE CINEMA SCREEN", s.cinematic_screen_enabled ? "ON" : "OFF"});
+      rows.push_back({"TARGETING", s.gun_targeting_enabled ? "ON" : "OFF"});
+      rows.push_back({"TARGET DISTANCE", FloatText(s.gun_targeting_distance, 1)});
+      rows.push_back({"TARGET RADIUS", FloatText(s.gun_targeting_radius, 1)});
+      rows.push_back({"VISOR HELMET", s.visor_helmet_enabled ? "ON" : "OFF"});
+      rows.push_back({"RESET TARGETING", ConfirmText(s, RESET_TARGETING_ACTION)});
+    }
+    else
+    {
+      rows.push_back({"POSITION LEFT/RIGHT", FloatText(s.model_offset_x, 3)});
+      rows.push_back({"POSITION FORWARD/BACK", FloatText(s.model_offset_y, 3)});
+      rows.push_back({"POSITION UP/DOWN", FloatText(s.model_offset_z, 3)});
+      rows.push_back({"ROTATION PITCH", FloatText(s.rot_offset_x, 1)});
+      rows.push_back({"ROTATION YAW", FloatText(s.rot_offset_y, 1)});
+      rows.push_back({"ROTATION ROLL", FloatText(s.rot_offset_z, 1)});
+      rows.push_back({"FLOOR POSITION MARKER", s.position_marker_visible ? "ON" : "OFF"});
+      rows.push_back({"RESET CALIBRATION", ConfirmText(s, RESET_CALIBRATION_ACTION)});
+      rows.push_back({"DEFAULT ARM PRESET", "APPLY"});
+      rows.push_back({"SAMUS ARM PRESET", "APPLY"});
+    }
+    return rows;
+  }
   case 1:
   {
     std::vector<MenuRow> rows;
@@ -347,9 +376,10 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
       rows.push_back({"RUMBLE", s.rumble_enabled ? "ON" : "OFF"});
       rows.push_back({"RUMBLE TARGET", RumbleHandModeText(s.rumble_hand_mode)});
       rows.push_back({"RUMBLE INTENSITY", FloatText(s.rumble_intensity, 2)});
-      rows.push_back({"PRIMEDGUN GRIP INPUTS", s.primegun_grip_inputs_enabled ? "ON" : "OFF"});
+      rows.push_back({"GRIP INPUT", s.primegun_grip_inputs_enabled ? "ON" : "OFF"});
       rows.push_back({"A BUTTON JUMP", s.combat_jump_use_primary_button ? "ON" : "OFF"});
-      rows.push_back({"HOLD LEFT STICK 1S FOR MENU", s.vr_menu_hold_left_stick ? "ON" : "OFF"});
+      rows.push_back({"LONGER HELD PRESS FOR VR MENU", s.vr_menu_hold_left_stick ? "ON" : "OFF"});
+      rows.push_back({"MENU REQUIRES HAND NEAR HEAD", s.vr_menu_requires_head_zone ? "ON" : "OFF"});
     }
     else
     {
@@ -376,6 +406,8 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
             {"MOVEMENT ACCELERATION", FloatText(s.directional_movement_accel, 1)},
             {"AIR ACCELERATION", FloatText(s.directional_movement_air_accel, 1)},
             {"LOOK YAW SENSITIVITY", FloatText(s.look_yaw_sensitivity, 2)},
+            {"SNAP TURN", s.snap_turn_enabled ? "ON" : "OFF"},
+            {"SNAP TURN ANGLE", std::to_string(s.snap_turn_degrees)},
             {"RESET MOVEMENT", ConfirmText(s, RESET_MOVEMENT_ACTION)}};
   case 3:
   {

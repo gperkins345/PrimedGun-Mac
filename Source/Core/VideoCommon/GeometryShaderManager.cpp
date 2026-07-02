@@ -20,6 +20,7 @@
 #include "VideoCommon/XFMemory.h"
 
 #ifdef ENABLE_VR
+#include "Common/VR/OpenXRInputState.h"
 #include "VideoCommon/OpenXROpcodeReplay.h"
 #include "VideoCommon/VR/OpenXRManager.h"
 #endif
@@ -175,6 +176,8 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
         constants.pixel_center_correction = {};
         const float upm_override = vr_units_per_meter_override;
         vr_units_per_meter_override = -1.0f;  // consume
+        const bool primedgun_cinematic_screen =
+            Common::VR::OpenXRInputState::GetPrimedGunOverlay().cinematic_screen_active;
 
         if (VR::g_openxr && VR::g_openxr->IsSessionRunning())
         {
@@ -346,6 +349,11 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
           constants.stereoparams[3] = vr_stereo_override;
           vr_stereo_override = std::numeric_limits<float>::quiet_NaN();
         }
+
+        // PrimedGun cinema mode renders the game's own projection unchanged and duplicates it
+        // to both EFB layers; SubmitFrame then presents layer 0 as an OpenXR quad screen.
+        if (primedgun_cinematic_screen)
+          constants.stereoparams[3] = 0.25f;
 
         // For ortho/screen draws, pass depth params via depth_params
         // (depth_params is otherwise unused for non-perspective draws).

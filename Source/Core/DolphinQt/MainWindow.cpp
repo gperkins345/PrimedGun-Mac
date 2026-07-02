@@ -1847,6 +1847,14 @@ void MainWindow::ConnectStack()
         settings.value(QStringLiteral("primegun/vr_menu_hold_left_stick"),
                        runtime.vr_menu_hold_left_stick)
             .toBool();
+    runtime.vr_menu_requires_head_zone =
+        settings.value(QStringLiteral("primegun/vr_menu_requires_head_zone"),
+                       runtime.vr_menu_requires_head_zone)
+            .toBool();
+    runtime.cinematic_screen_enabled =
+        settings.value(QStringLiteral("primegun/cinematic_screen_enabled"),
+                       runtime.cinematic_screen_enabled)
+            .toBool();
     runtime.gun_targeting_enabled =
         settings.value(QStringLiteral("primegun/gun_targeting_enabled"),
                        runtime.gun_targeting_enabled)
@@ -1916,6 +1924,12 @@ void MainWindow::ConnectStack()
         settings.value(QStringLiteral("primegun/look_yaw_sensitivity"),
                        runtime.look_yaw_sensitivity)
             .toFloat();
+    runtime.snap_turn_enabled =
+        settings.value(QStringLiteral("primegun/snap_turn_enabled"), runtime.snap_turn_enabled)
+            .toBool();
+    runtime.snap_turn_degrees =
+        settings.value(QStringLiteral("primegun/snap_turn_degrees"), runtime.snap_turn_degrees)
+            .toInt();
     PrimedGun::SetRuntimeSettings(runtime);
   };
   const auto save_primegun_runtime_settings = [&settings](const PrimedGun::RuntimeSettings& runtime) {
@@ -1960,6 +1974,10 @@ void MainWindow::ConnectStack()
                       runtime.combat_jump_use_primary_button);
     settings.setValue(QStringLiteral("primegun/vr_menu_hold_left_stick"),
                       runtime.vr_menu_hold_left_stick);
+    settings.setValue(QStringLiteral("primegun/vr_menu_requires_head_zone"),
+                      runtime.vr_menu_requires_head_zone);
+    settings.setValue(QStringLiteral("primegun/cinematic_screen_enabled"),
+                      runtime.cinematic_screen_enabled);
     settings.setValue(QStringLiteral("primegun/gun_targeting_enabled"),
                       runtime.gun_targeting_enabled);
     settings.setValue(QStringLiteral("primegun/gun_targeting_distance"),
@@ -1991,6 +2009,8 @@ void MainWindow::ConnectStack()
                       runtime.directional_movement_air_accel);
     settings.setValue(QStringLiteral("primegun/look_yaw_sensitivity"),
                       runtime.look_yaw_sensitivity);
+    settings.setValue(QStringLiteral("primegun/snap_turn_enabled"), runtime.snap_turn_enabled);
+    settings.setValue(QStringLiteral("primegun/snap_turn_degrees"), runtime.snap_turn_degrees);
   };
   load_primegun_runtime_settings();
   auto* primegun_vr_save_timer = new QTimer(this);
@@ -2302,11 +2322,16 @@ void MainWindow::ConnectStack()
   controller_layout->addWidget(auto_bindings);
   auto* vr_overlays_enabled = new QCheckBox(tr("In-headset overlays"), game_tab);
   vr_overlays_enabled->setChecked(runtime->vr_overlays_enabled);
-  controller_layout->addWidget(vr_overlays_enabled);
   auto* vr_menu_hold_left_stick =
-      new QCheckBox(tr("Hold left stick 1s for menu"), game_tab);
+      new QCheckBox(tr("Longer held press for VR menu"), game_tab);
   vr_menu_hold_left_stick->setChecked(runtime->vr_menu_hold_left_stick);
   controller_layout->addWidget(vr_menu_hold_left_stick);
+  auto* vr_menu_requires_head_zone =
+      new QCheckBox(tr("VR menu requires controller near head to activate"), game_tab);
+  vr_menu_requires_head_zone->setChecked(runtime->vr_menu_requires_head_zone);
+  controller_layout->addWidget(vr_menu_requires_head_zone);
+  auto* cinematic_screen_enabled = new QCheckBox(tr("Show cutscenes on cinema screen"), game_tab);
+  cinematic_screen_enabled->setChecked(runtime->cinematic_screen_enabled);
   auto* combat_jump_use_primary_button = new QCheckBox(tr("Use A button for jump"), game_tab);
   combat_jump_use_primary_button->setChecked(runtime->combat_jump_use_primary_button);
   controller_layout->addWidget(combat_jump_use_primary_button);
@@ -2328,7 +2353,7 @@ void MainWindow::ConnectStack()
   auto* dpad_enabled = new QCheckBox(tr("Enable visor gesture input"), game_tab);
   dpad_enabled->setChecked(runtime->xr_dpad_enabled);
   auto* primegun_grip_inputs_enabled =
-      new QCheckBox(tr("Use PrimedGun grip inputs"), game_tab);
+      new QCheckBox(tr("Use grip input"), game_tab);
   primegun_grip_inputs_enabled->setChecked(runtime->primegun_grip_inputs_enabled);
   auto* primegun_grip_inputs_use_trackpad =
       new QCheckBox(tr("Use touchpad for PrimedGun grip inputs (Index users)"), game_tab);
@@ -2467,9 +2492,48 @@ void MainWindow::ConnectStack()
       add_float_row(controller_layout, tr("Look yaw sensitivity"), 0.20, 3.00, 0.05,
                     runtime->look_yaw_sensitivity,
                     [runtime](float v) { runtime->look_yaw_sensitivity = v; });
+  auto* snap_turn_enabled = new QCheckBox(tr("Snap turn"), game_tab);
+  snap_turn_enabled->setChecked(runtime->snap_turn_enabled);
+  controller_layout->addWidget(snap_turn_enabled);
+  auto* snap_turn_degrees = new QComboBox(game_tab);
+  snap_turn_degrees->addItem(tr("30 degrees"), 30);
+  snap_turn_degrees->addItem(tr("45 degrees"), 45);
+  snap_turn_degrees->addItem(tr("60 degrees"), 60);
+  snap_turn_degrees->addItem(tr("90 degrees"), 90);
+  const auto set_snap_turn_degrees_combo = [snap_turn_degrees](int degrees) {
+    const int index = snap_turn_degrees->findData(degrees);
+    snap_turn_degrees->setCurrentIndex(index >= 0 ? index : 1);
+  };
+  set_snap_turn_degrees_combo(runtime->snap_turn_degrees);
+  snap_turn_degrees->installEventFilter(this);
+  auto* snap_turn_degrees_row = new QHBoxLayout;
+  auto* snap_turn_degrees_label = new QLabel(tr("Snap turn angle"), game_tab);
+  snap_turn_degrees_label->setMinimumWidth(170);
+  snap_turn_degrees_label->setMaximumWidth(170);
+  snap_turn_degrees_row->addWidget(snap_turn_degrees_label);
+  snap_turn_degrees_row->addWidget(snap_turn_degrees, 0);
+  snap_turn_degrees_row->addStretch();
+  controller_layout->addLayout(snap_turn_degrees_row);
   controller_layout->addStretch();
 
   auto* calibration_layout = make_scroll_tab(tr("Calibration"));
+  calibration_layout->addWidget(section_label(tr("In-headset Display"), game_tab));
+  calibration_layout->addWidget(vr_overlays_enabled);
+  calibration_layout->addWidget(cinematic_screen_enabled);
+  auto* visor_helmet_enabled = new QCheckBox(tr("Enable visor helmet"), game_tab);
+  visor_helmet_enabled->setChecked(runtime->visor_helmet_enabled);
+  auto* visor_helmet_row = new QHBoxLayout;
+  visor_helmet_row->addWidget(visor_helmet_enabled);
+  auto* visor_helmet_note =
+      new QLabel(tr("Allows user to turn helmet back on in the pause menu"), game_tab);
+  visor_helmet_note->setObjectName(QStringLiteral("PrimedGunMuted"));
+  visor_helmet_row->addWidget(visor_helmet_note);
+  visor_helmet_row->addStretch();
+  calibration_layout->addLayout(visor_helmet_row);
+  auto* position_marker_enabled = new QCheckBox(tr("Show floor position marker"), game_tab);
+  position_marker_enabled->setChecked(runtime->position_marker_enabled);
+  calibration_layout->addWidget(position_marker_enabled);
+  separator(calibration_layout);
   calibration_layout->addWidget(section_label(tr("Targeting"), game_tab));
   auto* reset_aiming = new QPushButton(tr("Reset Targeting"), game_tab);
   calibration_layout->addWidget(reset_aiming);
@@ -2484,22 +2548,10 @@ void MainWindow::ConnectStack()
       add_float_row(calibration_layout, tr("Target radius"), 0.5, 8.0, 0.1,
                     runtime->gun_targeting_radius,
                     [runtime](float v) { runtime->gun_targeting_radius = v; });
-  auto* visor_helmet_enabled = new QCheckBox(tr("Enable visor helmet"), game_tab);
-  visor_helmet_enabled->setChecked(runtime->visor_helmet_enabled);
-  auto* visor_helmet_row = new QHBoxLayout;
-  visor_helmet_row->addWidget(visor_helmet_enabled);
-  auto* visor_helmet_note =
-      new QLabel(tr("Allows user to turn helmet back on in the pause menu"), game_tab);
-  visor_helmet_note->setObjectName(QStringLiteral("PrimedGunMuted"));
-  visor_helmet_row->addWidget(visor_helmet_note);
-  visor_helmet_row->addStretch();
-  calibration_layout->addLayout(visor_helmet_row);
-
   separator(calibration_layout);
   calibration_layout->addWidget(section_label(tr("Offset Tuning"), game_tab));
-  auto* position_marker_enabled = new QCheckBox(tr("Show floor position marker"), game_tab);
-  position_marker_enabled->setChecked(runtime->position_marker_enabled);
-  calibration_layout->addWidget(position_marker_enabled);
+  auto* reset_calibration = new QPushButton(tr("Reset Calibration"), game_tab);
+  calibration_layout->addWidget(reset_calibration);
   separator(calibration_layout);
   calibration_layout->addWidget(section_label(tr("Position"), game_tab));
   auto* model_x_spin =
@@ -2950,6 +3002,8 @@ void MainWindow::ConnectStack()
     const QSignalBlocker left_hand_blocker{left_hand};
     const QSignalBlocker vr_overlays_enabled_blocker{vr_overlays_enabled};
     const QSignalBlocker vr_menu_hold_left_stick_blocker{vr_menu_hold_left_stick};
+    const QSignalBlocker vr_menu_requires_head_zone_blocker{vr_menu_requires_head_zone};
+    const QSignalBlocker cinematic_screen_enabled_blocker{cinematic_screen_enabled};
     const QSignalBlocker rumble_enabled_blocker{rumble_enabled};
     const QSignalBlocker rumble_hand_mode_blocker{rumble_hand_mode};
     const QSignalBlocker dpad_enabled_blocker{dpad_enabled};
@@ -2963,6 +3017,8 @@ void MainWindow::ConnectStack()
     const QSignalBlocker right_stick_blocker{right_stick};
     const QSignalBlocker controller_direction_blocker{controller_direction};
     const QSignalBlocker hmd_direction_blocker{hmd_direction};
+    const QSignalBlocker snap_turn_enabled_blocker{snap_turn_enabled};
+    const QSignalBlocker snap_turn_degrees_blocker{snap_turn_degrees};
     const QSignalBlocker targeting_enabled_blocker{targeting_enabled};
     const QSignalBlocker visor_helmet_enabled_blocker{visor_helmet_enabled};
     const QSignalBlocker position_marker_enabled_blocker{position_marker_enabled};
@@ -2990,6 +3046,8 @@ void MainWindow::ConnectStack()
     left_hand->setChecked(!runtime->use_right_hand);
     vr_overlays_enabled->setChecked(runtime->vr_overlays_enabled);
     vr_menu_hold_left_stick->setChecked(runtime->vr_menu_hold_left_stick);
+    vr_menu_requires_head_zone->setChecked(runtime->vr_menu_requires_head_zone);
+    cinematic_screen_enabled->setChecked(runtime->cinematic_screen_enabled);
     rumble_enabled->setChecked(runtime->rumble_enabled);
     rumble_hand_mode->setCurrentIndex(std::clamp(runtime->rumble_hand_mode, 0, 2));
     dpad_enabled->setChecked(runtime->xr_dpad_enabled);
@@ -3001,6 +3059,8 @@ void MainWindow::ConnectStack()
     right_stick->setChecked(runtime->directional_movement_use_right_stick);
     controller_direction->setChecked(!runtime->directional_movement_use_hmd_direction);
     hmd_direction->setChecked(runtime->directional_movement_use_hmd_direction);
+    snap_turn_enabled->setChecked(runtime->snap_turn_enabled);
+    set_snap_turn_degrees_combo(runtime->snap_turn_degrees);
     targeting_enabled->setChecked(runtime->gun_targeting_enabled);
     visor_helmet_enabled->setChecked(runtime->visor_helmet_enabled);
     position_marker_enabled->setChecked(runtime->position_marker_enabled);
@@ -3039,6 +3099,8 @@ void MainWindow::ConnectStack()
     runtime->use_right_hand = true;
     runtime->vr_overlays_enabled = true;
     runtime->vr_menu_hold_left_stick = false;
+    runtime->vr_menu_requires_head_zone = false;
+    runtime->cinematic_screen_enabled = false;
     runtime->rumble_enabled = true;
     runtime->rumble_intensity = 0.35f;
     runtime->rumble_hand_mode = 2;
@@ -3058,6 +3120,8 @@ void MainWindow::ConnectStack()
     runtime->directional_movement_accel = 45.0f;
     runtime->directional_movement_air_accel = 8.0f;
     runtime->look_yaw_sensitivity = 1.0f;
+    runtime->snap_turn_enabled = false;
+    runtime->snap_turn_degrees = 45;
     refresh_visible_settings();
     apply_runtime();
   });
@@ -3092,6 +3156,16 @@ void MainWindow::ConnectStack()
   connect(vr_menu_hold_left_stick, &QCheckBox::toggled, this,
           [runtime, apply_runtime](bool checked) {
     runtime->vr_menu_hold_left_stick = checked;
+    apply_runtime();
+  });
+  connect(vr_menu_requires_head_zone, &QCheckBox::toggled, this,
+          [runtime, apply_runtime](bool checked) {
+    runtime->vr_menu_requires_head_zone = checked;
+    apply_runtime();
+  });
+  connect(cinematic_screen_enabled, &QCheckBox::toggled, this,
+          [runtime, apply_runtime](bool checked) {
+    runtime->cinematic_screen_enabled = checked;
     apply_runtime();
   });
   connect(rumble_enabled, &QCheckBox::toggled, this, [runtime, apply_runtime](bool checked) {
@@ -3155,6 +3229,17 @@ void MainWindow::ConnectStack()
       apply_runtime();
     }
   });
+  connect(snap_turn_enabled, &QCheckBox::toggled, this, [runtime, apply_runtime](bool checked) {
+    runtime->snap_turn_enabled = checked;
+    apply_runtime();
+  });
+  connect(snap_turn_degrees, qOverload<int>(&QComboBox::currentIndexChanged), this,
+          [runtime, snap_turn_degrees, apply_runtime](int index) {
+    if (index < 0)
+      return;
+    runtime->snap_turn_degrees = snap_turn_degrees->itemData(index).toInt();
+    apply_runtime();
+  });
   connect(targeting_enabled, &QCheckBox::toggled, this, [runtime, apply_runtime](bool checked) {
     runtime->gun_targeting_enabled = checked;
     apply_runtime();
@@ -3169,6 +3254,7 @@ void MainWindow::ConnectStack()
     runtime->position_marker_enabled = checked;
     apply_runtime();
   });
+  connect(reset_calibration, &QPushButton::clicked, this, reset_calibration_values);
   connect(default_preset, &QPushButton::clicked, this, reset_calibration_values);
   connect(samus_preset, &QPushButton::clicked, this,
           [runtime, refresh_visible_settings, apply_runtime] {
