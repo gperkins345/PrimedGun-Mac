@@ -197,8 +197,8 @@ constexpr u32 DRAW_SCAN_INDICATOR_MODEL_BASIS = 0x801122CCu;
 constexpr u32 DRAW_SCAN_INDICATOR_MODEL_BASIS_ORIGINAL = 0xC0410074u;
 
 constexpr u32 VR_MENU_TAB_COUNT = 5;
-constexpr u32 VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS = 7;
-constexpr u32 VR_MENU_CALIBRATION_TOTAL_ITEMS = 17;
+constexpr u32 VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS = 6;
+constexpr u32 VR_MENU_CALIBRATION_TOTAL_ITEMS = 16;
 constexpr u32 VR_MENU_CALIBRATION_PAGE_COUNT = 2;
 constexpr u32 VR_MENU_CONTROL_TAB = 1;
 constexpr u32 VR_MENU_MOVEMENT_TAB = 2;
@@ -1665,7 +1665,7 @@ bool RayIntersectsAabb(float ray_x, float ray_y, float ray_z, float dir_x, float
     return false;
   }
 
-  *hit_along = starts_inside ? t_max : std::max(t_min, 0.0f);
+  *hit_along = starts_inside ? 0.0f : std::max(t_min, 0.0f);
   return std::isfinite(*hit_along) && *hit_along <= max_along;
 }
 
@@ -1677,12 +1677,14 @@ bool RayMetricsForPoint(float ray_x, float ray_y, float ray_z, float dir_x, floa
   const float vy = y - ray_y;
   const float vz = z - ray_z;
   const float along = vx * dir_x + vy * dir_y + vz * dir_z;
-  if (along < 0.5f || along > max_along)
+  if (along < -0.5f || along > max_along)
     return false;
 
-  const float nearest_x = ray_x + dir_x * along;
-  const float nearest_y = ray_y + dir_y * along;
-  const float nearest_z = ray_z + dir_z * along;
+  const float clamped_along = std::max(along, 0.0f);
+
+  const float nearest_x = ray_x + dir_x * clamped_along;
+  const float nearest_y = ray_y + dir_y * clamped_along;
+  const float nearest_z = ray_z + dir_z * clamped_along;
   const float dx = x - nearest_x;
   const float dy = y - nearest_y;
   const float dz = z - nearest_z;
@@ -1693,7 +1695,7 @@ bool RayMetricsForPoint(float ray_x, float ray_y, float ray_z, float dir_x, floa
   metrics->x = x;
   metrics->y = y;
   metrics->z = z;
-  metrics->along = along;
+  metrics->along = clamped_along;
   metrics->perp = std::sqrt(perp_sq);
   metrics->radius = 0.0f;
   metrics->valid = true;
@@ -1732,17 +1734,34 @@ bool RayMetricsForAabb(float ray_x, float ray_y, float ray_z, float dir_x, float
     return true;
   }
 
-  RayCandidateMetrics center_metrics = {};
-  if (!RayMetricsForPoint(ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, center_x, center_y, center_z,
-                          max_along + projected_radius, &center_metrics))
+  const float vx = center_x - ray_x;
+  const float vy = center_y - ray_y;
+  const float vz = center_z - ray_z;
+  const float along = vx * dir_x + vy * dir_y + vz * dir_z;
+  if (!std::isfinite(along) || along < -projected_radius ||
+      along > max_along + projected_radius)
   {
     return false;
   }
 
-  center_metrics.along = std::clamp(center_metrics.along, 0.5f, max_along);
-  center_metrics.perp = std::max(0.0f, center_metrics.perp - projected_radius);
-  center_metrics.radius = projected_radius;
-  *metrics = center_metrics;
+  const float clamped_along = std::clamp(along, 0.0f, max_along);
+  const float nearest_x = ray_x + dir_x * clamped_along;
+  const float nearest_y = ray_y + dir_y * clamped_along;
+  const float nearest_z = ray_z + dir_z * clamped_along;
+  const float dx = center_x - nearest_x;
+  const float dy = center_y - nearest_y;
+  const float dz = center_z - nearest_z;
+  const float perp_sq = dx * dx + dy * dy + dz * dz;
+  if (!std::isfinite(perp_sq))
+    return false;
+
+  metrics->x = nearest_x;
+  metrics->y = nearest_y;
+  metrics->z = nearest_z;
+  metrics->along = clamped_along;
+  metrics->perp = std::max(0.0f, std::sqrt(perp_sq) - projected_radius);
+  metrics->radius = projected_radius;
+  metrics->valid = true;
   return true;
 }
 
@@ -2271,6 +2290,7 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
   const float max_along = settings.gun_targeting_distance;
   const float max_perp = settings.gun_targeting_radius;
   constexpr float combat_pick_radius_multiplier = 1.0f;
+  constexpr float vanilla_orbit_pick_radius_multiplier = 1.75f;
   constexpr float scan_pick_radius_multiplier = 3.0f;
   const float grapple_max_perp = max_perp * 1.30f;
   const bool scan_mode = ScanVisorActive(guard, player);
@@ -2326,6 +2346,9 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
     const bool grapple_candidate = grapple_point && has_orbit;
     const bool vanilla_orbit_candidate =
         !scan_mode && onscreen_orbit_candidate && orbit_candidate;
+    const bool cannon_orbit_candidate =
+        !scan_mode && orbit_candidate &&
+        (has_scan || has_character || vanilla_orbit_candidate || nearby_orbit_candidate);
 
     const bool has_any_target_hint =
         has_target || has_orbit || scan_candidate || grapple_candidate;
@@ -2337,7 +2360,7 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
     if (scan_mode && !scan_candidate)
       continue;
 
-    if (!scan_mode && !combat_candidate && !vanilla_orbit_candidate && !grapple_candidate)
+    if (!scan_mode && !combat_candidate && !cannon_orbit_candidate && !grapple_candidate)
       continue;
 
     if (scan_mode && !combat_candidate && !orbit_candidate && !scan_candidate && !grapple_candidate)
@@ -2346,8 +2369,8 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
     ActorAabb render_box = {};
     const bool has_render_bounds = ReadActorRenderAabb(guard, obj, &render_box);
     const bool allow_physics_aabb =
-        scan_mode || grapple_candidate || vanilla_orbit_candidate || has_render_bounds;
-    if (!scan_mode && !grapple_candidate && !vanilla_orbit_candidate && !has_render_bounds)
+        scan_mode || grapple_candidate || cannon_orbit_candidate || has_render_bounds;
+    if (!scan_mode && !grapple_candidate && !cannon_orbit_candidate && !has_render_bounds)
       continue;
 
     const bool target_only_helper_point =
@@ -2366,7 +2389,7 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
     const float candidate_max_perp =
         scan_mode && scan_candidate ? max_perp * scan_pick_radius_multiplier :
         combat_candidate             ? max_perp * combat_pick_radius_multiplier :
-        vanilla_orbit_candidate      ? max_perp * combat_pick_radius_multiplier :
+        cannon_orbit_candidate       ? max_perp * vanilla_orbit_pick_radius_multiplier :
         grapple_candidate             ? grapple_max_perp :
                                        max_perp;
     if (metrics.perp > candidate_max_perp)
@@ -2378,8 +2401,9 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
       const float strict_cone = 0.45f + metrics.along * 0.075f;
       const float bounds_slack = std::min(metrics.radius * 0.60f, candidate_max_perp * 0.50f);
       const float strict_candidate_cone =
-          grapple_candidate ? strict_cone * 1.30f + bounds_slack :
-                              strict_cone + bounds_slack;
+          grapple_candidate       ? strict_cone * 1.30f + bounds_slack :
+          cannon_orbit_candidate  ? strict_cone * vanilla_orbit_pick_radius_multiplier + bounds_slack :
+                                    strict_cone + bounds_slack;
       aim_cone_perp = std::min(candidate_max_perp, strict_candidate_cone);
       if (metrics.perp > aim_cone_perp)
         continue;
@@ -4046,9 +4070,9 @@ int VrMenuCalibrationActualIndex(u32 local_index)
 
 u32 VrMenuResetActionForSelection()
 {
-  if (s_vr_menu_tab == 0 && VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 6)
+  if (s_vr_menu_tab == 0 && VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 5)
     return VR_MENU_RESET_TARGETING_ACTION;
-  if (s_vr_menu_tab == 0 && VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 14)
+  if (s_vr_menu_tab == 0 && VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 13)
     return VR_MENU_RESET_CALIBRATION_ACTION;
   if (s_vr_menu_tab == VR_MENU_CONTROL_TAB &&
       VrMenuControlActualIndex(s_vr_menu_selected_index) == 15)
@@ -4070,7 +4094,7 @@ bool VrMenuRowIsNumeric(u32 tab, u32 index)
       return true;
 
     const int actual_index = VrMenuCalibrationActualIndex(index);
-    return actual_index == 3 || actual_index == 4 || (actual_index >= 7 && actual_index <= 12);
+    return actual_index == 1 || actual_index == 2 || (actual_index >= 6 && actual_index <= 11);
   }
   case VR_MENU_CONTROL_TAB:
   {
@@ -4299,30 +4323,30 @@ void AdjustVrMenuSetting(RuntimeSettings* settings, int direction)
 
     switch (VrMenuCalibrationActualIndex(s_vr_menu_selected_index))
     {
-    case 3:
+    case 1:
       settings->gun_targeting_distance =
           std::clamp(settings->gun_targeting_distance + sign * 1.0f, 1.0f, 200.0f);
       break;
-    case 4:
+    case 2:
       settings->gun_targeting_radius =
           std::clamp(settings->gun_targeting_radius + sign * 0.1f, 0.1f, 25.0f);
       break;
-    case 7:
+    case 6:
       settings->model_offset_x += sign * 0.01f;
       break;
-    case 8:
+    case 7:
       settings->model_offset_y += sign * 0.01f;
       break;
-    case 9:
+    case 8:
       settings->model_offset_z += sign * 0.01f;
       break;
-    case 10:
+    case 9:
       settings->rot_offset_x += sign * 1.0f;
       break;
-    case 11:
+    case 10:
       settings->rot_offset_y += sign * 1.0f;
       break;
-    case 12:
+    case 11:
       settings->rot_offset_z += sign * 1.0f;
       break;
     default:
@@ -4418,14 +4442,12 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
 
     const int actual_index = VrMenuCalibrationActualIndex(s_vr_menu_selected_index);
     if (actual_index == 0)
-      settings->vr_overlays_enabled = !settings->vr_overlays_enabled;
-    else if (actual_index == 1)
       settings->cinematic_screen_enabled = !settings->cinematic_screen_enabled;
-    else if (actual_index == 2)
-      settings->gun_targeting_enabled = !settings->gun_targeting_enabled;
-    else if (actual_index == 5)
+    else if (actual_index == 3)
       settings->visor_helmet_enabled = !settings->visor_helmet_enabled;
-    else if (actual_index == 6)
+    else if (actual_index == 4)
+      settings->height_prompt_enabled = !settings->height_prompt_enabled;
+    else if (actual_index == 5)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4435,9 +4457,9 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->gun_targeting_radius = 4.0f;
       settings->visor_helmet_enabled = false;
     }
-    else if (actual_index == 13)
+    else if (actual_index == 12)
       settings->position_marker_enabled = !settings->position_marker_enabled;
-    else if (actual_index == 14)
+    else if (actual_index == 13)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4449,7 +4471,7 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->rot_offset_y = DEFAULT_ROT_OFFSET_Y;
       settings->rot_offset_z = DEFAULT_ROT_OFFSET_Z;
     }
-    else if (actual_index == 15)
+    else if (actual_index == 14)
     {
       settings->offset_x = 0.0f;
       settings->offset_y = 0.0f;
@@ -4461,7 +4483,7 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->rot_offset_y = DEFAULT_ROT_OFFSET_Y;
       settings->rot_offset_z = DEFAULT_ROT_OFFSET_Z;
     }
-    else if (actual_index == 16)
+    else if (actual_index == 15)
     {
       settings->offset_x = 0.0f;
       settings->offset_y = 0.0f;
@@ -4625,6 +4647,7 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.gun_targeting_radius = settings.gun_targeting_radius;
   overlay.visor_helmet_enabled = settings.visor_helmet_enabled;
   overlay.vr_overlays_enabled = settings.vr_overlays_enabled;
+  overlay.height_prompt_enabled = settings.height_prompt_enabled;
   overlay.position_marker_visible = settings.vr_overlays_enabled && settings.position_marker_enabled;
   overlay.xr_dpad_enabled = settings.xr_dpad_enabled;
   overlay.cinematic_screen_enabled = settings.cinematic_screen_enabled;
@@ -4881,6 +4904,13 @@ bool UpdateHeightPromptGate(const Core::CPUThreadGuard& guard,
                             const Common::VR::OpenXRInputSnapshot& snapshot,
                             const RuntimeSettings& settings, u32 player)
 {
+  if (!settings.height_prompt_enabled)
+  {
+    s_prompt_gameplay_ready_since_frame = 0;
+    s_height_prompt_until_frame = 0;
+    return false;
+  }
+
   if (!snapshot.runtime_active || player < 0x80000000u)
   {
     s_prompt_gameplay_ready_since_frame = 0;

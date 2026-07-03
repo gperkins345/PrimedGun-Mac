@@ -110,6 +110,7 @@ struct PrimedGunVrOverlayState
   float gun_targeting_radius = 4.0f;
   bool visor_helmet_enabled = false;
   bool vr_overlays_enabled = true;
+  bool height_prompt_enabled = true;
   bool xr_dpad_enabled = true;
   bool vr_menu_hold_left_stick = false;
   bool vr_menu_requires_head_zone = false;
