@@ -3767,11 +3767,15 @@ void UpdateScanTargetingFromHmd(const Core::CPUThreadGuard& guard,
                                       &marker_pick);
 
   GunTargetPick pick = {};
-  bool found = PickScanTargetFromHmd(guard, state_manager, player, hmd, settings, &pick);
-  if (!found && marker_found)
+  bool found = false;
+  if (marker_found)
   {
     pick = marker_pick;
     found = true;
+  }
+  else
+  {
+    found = PickScanTargetFromHmd(guard, state_manager, player, hmd, settings, &pick);
   }
 
   if (found)
