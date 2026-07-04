@@ -179,6 +179,7 @@ constexpr u32 SCAN_RETICLE_TRACE_CAVE = PATCH_CODE_ARENA_BASE + 0x540u;
 constexpr u32 SCAN_RETICLE_TRACE_CURR_CAVE = PATCH_CODE_ARENA_BASE + 0x580u;
 constexpr u32 SCAN_INDICATOR_UPDATE_TRACE_CAVE = PATCH_CODE_ARENA_BASE + 0x5C0u;
 constexpr u32 SCAN_INDICATOR_VIEW_BASIS_CAVE = PATCH_CODE_ARENA_BASE + 0x600u;
+constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_CAVE = PATCH_CODE_ARENA_BASE + 0x6C0u;
 constexpr u32 LEGACY_MORPHBALL_CAMERA_RETURN_ADDRESS = 0x8000A9B4u;
 constexpr u32 LEGACY_MORPHBALL_CAMERA_RETURN_CAVE = PATCH_CODE_ARENA_BASE + 0x680u;
 constexpr u32 LEGACY_MORPHBALL_CAMERA_RETURN_ORIGINAL = 0x80010054u;
@@ -188,6 +189,11 @@ constexpr u32 BALL_CAMERA_LEVEL_CAVE = PATCH_CODE_ARENA_BASE + 0xB40u;
 constexpr u32 INTERPOLATION_CAMERA_LEVEL_PATCH_ADDRESS = 0x8026529Cu;
 constexpr u32 INTERPOLATION_CAMERA_LEVEL_PATCH_ORIGINAL = 0x887E00E4u;
 constexpr u32 INTERPOLATION_CAMERA_LEVEL_CAVE = PATCH_CODE_ARENA_BASE + 0xB80u;
+constexpr u32 UPDATE_ORBIT_ORIENTATION_ADDRESS = 0x8017EACCu;
+constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ADDRESS = 0x8000E71Cu;
+constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ORIGINAL = 0x801E0304u;
+constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_SKIP_ADDRESS = 0x8000E9C4u;
+constexpr u32 PPC_BLR = 0x4E800020u;
 constexpr u32 LOAD_ZERO_TO_F1 = 0xC02280B0u;
 constexpr u32 LOAD_ZERO_TO_F31 = 0xC3E280B0u;
 constexpr u32 DRAW_NEXT_LOCK_ON_GROUP = 0x800BD808u;
@@ -451,6 +457,11 @@ DynamicPpcPatch s_ball_camera_level_patch{
 DynamicPpcPatch s_interpolation_camera_level_patch{
     INTERPOLATION_CAMERA_LEVEL_PATCH_ADDRESS, INTERPOLATION_CAMERA_LEVEL_PATCH_ORIGINAL, 0,
     INTERPOLATION_CAMERA_LEVEL_CAVE, false};
+DynamicPpcPatch s_orbit_orientation_no_spin_patch{
+    UPDATE_ORBIT_ORIENTATION_ADDRESS, 0, PPC_BLR, 0, false};
+DynamicPpcPatch s_first_person_orbit_aim_vector_patch{
+    FIRST_PERSON_ORBIT_AIM_VECTOR_ADDRESS, FIRST_PERSON_ORBIT_AIM_VECTOR_ORIGINAL, 0,
+    FIRST_PERSON_ORBIT_AIM_VECTOR_CAVE, false};
 
 ProjectileTransformPatch s_projectile_transform_patches[] = {
     {0x800E0434u, 0, WAVE_PROJECTILE_TRANSFORM_CAVE, 6, false},
@@ -5855,6 +5866,72 @@ bool ApplyInterpolationCameraLevelPatch(const Core::CPUThreadGuard& guard)
   return patch_wrote;
 }
 
+bool ApplyOrbitOrientationNoSpinPatch(const Core::CPUThreadGuard& guard)
+{
+  auto& patch = s_orbit_orientation_no_spin_patch;
+  u32 current = 0;
+  if (!TryReadU32(guard, patch.address, &current))
+    return false;
+
+  if (current == patch.replacement)
+  {
+    patch.applied = true;
+    return false;
+  }
+
+  if (patch.original == 0)
+  {
+    // UpdateOrbitOrientation starts with a normal stwu r1, imm(r1) prologue on GM8E01 Rev 0.
+    // Refuse to patch if the address does not look like that function entry.
+    if ((current & 0xFFFF0000u) != 0x94210000u)
+    {
+      patch.applied = false;
+      return false;
+    }
+    patch.original = current;
+  }
+  else if (current != patch.original)
+  {
+    patch.applied = false;
+    return false;
+  }
+
+  patch.applied = TryWriteInstruction(guard, patch.address, patch.replacement);
+  return patch.applied;
+}
+
+bool ApplyFirstPersonOrbitAimVectorPatch(const Core::CPUThreadGuard& guard)
+{
+  auto& patch = s_first_person_orbit_aim_vector_patch;
+  u32 current = 0;
+  if (!TryReadU32(guard, patch.address, &current))
+    return false;
+
+  const u32 branch = PpcBranch(patch.address, patch.cave);
+  if (current != branch && current != patch.original)
+  {
+    patch.applied = false;
+    return false;
+  }
+
+  const u32 return_addr = patch.address + 4u;
+  const std::initializer_list<HookWrite> cave_writes{
+      // CFirstPersonCamera::UpdateTransform normally replaces rVec with the
+      // orbit/scan target vector here. Keep vanilla behavior when there is no
+      // orbit state, but skip that target-vector replacement during lock/scan
+      // so camera yaw is not pulled toward the selected target.
+      {0x00u, patch.original},                     // lwz r0, 0x304(r30)
+      {0x04u, 0x2C000000u},                        // cmpwi r0, 0
+      {0x08u, PpcBeq(patch.cave + 0x08u, patch.cave + 0x10u)},
+      {0x0Cu, PpcBranch(patch.cave + 0x0Cu, FIRST_PERSON_ORBIT_AIM_VECTOR_SKIP_ADDRESS)},
+      {0x10u, PpcBranch(patch.cave + 0x10u, return_addr)}};
+
+  const bool patch_wrote = InstallBranchAfterCaveWrite(guard, patch.address, patch.cave, cave_writes);
+  patch.applied = InstructionBlockMatches(guard, patch.cave, cave_writes) &&
+                  TryReadU32(guard, patch.address, &current) && current == branch;
+  return patch_wrote;
+}
+
 void UpdatePitchZeroHookEnabled(const Core::CPUThreadGuard& guard, bool scan_active)
 {
   // Keep the original pitch-zero behavior active in scan mode too; otherwise Prime's
@@ -5883,6 +5960,8 @@ bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
   wrote = ApplyFirstPersonPitchLoadPatch(guard) || wrote;
   wrote = ApplyBallCameraLevelPatch(guard) || wrote;
   wrote = ApplyInterpolationCameraLevelPatch(guard) || wrote;
+  wrote = ApplyOrbitOrientationNoSpinPatch(guard) || wrote;
+  wrote = ApplyFirstPersonOrbitAimVectorPatch(guard) || wrote;
 
   u32 player = 0;
   const bool scan_active =
@@ -6373,6 +6452,9 @@ void ResetNativeRuntime()
   s_scan_indicator_update_trace_patch.original = 0;
   s_scan_indicator_view_basis_patch.applied = false;
   s_scan_indicator_view_basis_patch.original = DRAW_SCAN_INDICATOR_MODEL_BASIS_ORIGINAL;
+  s_orbit_orientation_no_spin_patch.applied = false;
+  s_orbit_orientation_no_spin_patch.original = 0;
+  s_first_person_orbit_aim_vector_patch.applied = false;
   for (DynamicPpcPatch& patch : s_combat_pitch_patches)
     patch.applied = false;
   s_combat_elevation_pitch_patch.applied = false;

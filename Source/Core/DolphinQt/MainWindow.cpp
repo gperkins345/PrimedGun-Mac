@@ -884,11 +884,11 @@ void PrimedGunDumpMem1(QWidget* parent)
     context += "\nPatch sites\n";
     for (const u32 address :
          {0x8000A968u, 0x8000A9B4u, 0x8000E548u, 0x80041A8Cu, 0x8000E7B4u,
-          0x8000E808u, 0x8000E83Cu,
+          0x8000E808u, 0x8000E83Cu, 0x8000E71Cu,
           0x8000FA50u, 0x800BD808u, 0x800BE25Cu, 0x80112508u, 0x801122CCu,
           0x800E0434u, 0x801B9070u, 0x800830A0u, 0x8026529Cu, 0x80345200u,
-          0x8018C950u, 0x8018C988u, 0x800243CCu, 0x80024414u, 0x80024450u,
-          0x8002448Cu, 0x800244C8u, 0x80024504u})
+          0x8017EACCu, 0x8018C950u, 0x8018C988u, 0x800243CCu, 0x80024414u,
+          0x80024450u, 0x8002448Cu, 0x800244C8u, 0x80024504u})
     {
       const std::optional<u32> value = read_mem1_u32(address);
       context += fmt::format("{:08X}={}\n", address, format_u32(value));
@@ -898,7 +898,8 @@ void PrimedGunDumpMem1(QWidget* parent)
     for (const u32 address :
          {0x80001C00u, 0x80001C80u, 0x80001D00u, 0x80001D40u, 0x80001D80u,
           0x80001DC0u, 0x80001E00u, 0x80001E80u, 0x80001F00u, 0x80001FA0u,
-          0x80002000u, 0x80002180u, 0x80002200u, 0x80002280u, 0x80002300u,
+          0x80002000u, 0x80002180u, 0x80002200u, 0x80002280u, 0x800022C0u,
+          0x80002300u,
           0x800023A0u, 0x80002400u, 0x80002620u, 0x80002660u, 0x800026D0u,
           0x80002740u, 0x80002780u})
     {
@@ -912,10 +913,19 @@ void PrimedGunDumpMem1(QWidget* parent)
     append_branch_watch("CombatPitch0", 0x8000E7B4u, 0xEC21E828u, 0x80001D40u);
     append_branch_watch("CombatPitch1", 0x8000E808u, 0xEC21E828u, 0x80001D80u);
     append_branch_watch("CombatPitch2", 0x8000E83Cu, 0xEC21E828u, 0x80001DC0u);
+    append_branch_watch("FirstPersonOrbitAimVector", 0x8000E71Cu, 0x801E0304u, 0x800022C0u);
     append_branch_watch("CombatElevationPitch", 0x8000FA50u, 0xD01D01C0u, 0x80001E00u);
     append_branch_watch("ScanIndicatorViewBasis", 0x801122CCu, 0xC0410074u, 0x80002200u);
     append_branch_watch("BallCameraLevel", 0x800830A0u, 0x387F0034u, 0x80002740u);
     append_branch_watch("InterpolationCameraLevel", 0x8026529Cu, 0x887E00E4u, 0x80002780u);
+    {
+      const std::optional<u32> actual = read_mem1_u32(0x8017EACCu);
+      const std::string status =
+          actual && *actual == 0x4E800020u ? "return-installed" : "not-return-patched";
+      context += fmt::format("OrbitOrientationNoSpin site=8017EACC actual={} replacement=4E800020 "
+                             "status={}\n",
+                             format_u32(actual), status);
+    }
     append_words("FirstPersonPitchCave", 0x80001C00u, 8);
     append_words("CombatPitchCave0", 0x80001D40u, 8);
     append_words("CombatPitchCave1", 0x80001D80u, 8);
@@ -923,6 +933,7 @@ void PrimedGunDumpMem1(QWidget* parent)
     append_words("CombatElevationPitchCave", 0x80001E00u, 12);
     append_words("ScanIndicatorViewBasisCave", 0x80002200u, 8);
     append_words("DisableFrustumCullingCave", 0x80002280u, 10);
+    append_words("FirstPersonOrbitAimVectorCave", 0x800022C0u, 4);
     append_words("BallCameraLevelCave", 0x80002740u, 16);
     append_words("InterpolationCameraLevelCave", 0x80002780u, 20);
 
