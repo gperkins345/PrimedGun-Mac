@@ -51,7 +51,6 @@ For SteamOS-specific builds, see [PrimedSteam](https://github.com/josethevrtech/
 
 ## Setup Notes
 
-- Setting the HMD refresh rate to 120 Hz is recommended; otherwise, frame pacing issues can occur.
 - Meta's own OpenXR environment is not recommended; try SteamVR or Virtual Desktop instead.
 - Run the app and select your Metroid Prime NTSC Revision 0 (1.0) game file.
 - Check the Layout tab for controller bindings.
