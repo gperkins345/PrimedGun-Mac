@@ -1304,14 +1304,6 @@ void PrimedGunDumpMem1(QWidget* parent)
     append_branch_watch("ScanIndicatorViewBasis", 0x801122CCu, 0xC0410074u, 0x80002200u);
     append_branch_watch("BallCameraLevel", 0x800830A0u, 0x387F0034u, 0x80002740u);
     append_branch_watch("InterpolationCameraLevel", 0x8026529Cu, 0x887E00E4u, 0x80002780u);
-    {
-      const std::optional<u32> actual = read_mem1_u32(0x8017EACCu);
-      const std::string status =
-          actual && *actual == 0x4E800020u ? "return-installed" : "not-return-patched";
-      context += fmt::format("OrbitOrientationNoSpin site=8017EACC actual={} replacement=4E800020 "
-                             "status={}\n",
-                             format_u32(actual), status);
-    }
     append_words("FirstPersonPitchCave", 0x80001C00u, 8);
     append_words("CombatPitchCave0", 0x80001D40u, 8);
     append_words("CombatPitchCave1", 0x80001D80u, 8);

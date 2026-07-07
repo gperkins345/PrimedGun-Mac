@@ -196,7 +196,6 @@ constexpr u32 AUDIO_LISTENER_PATCH_ORIGINAL = 0xD1010008u;
 constexpr u32 AUDIO_LISTENER_LEGACY_BAD_CAVE = 0x80002300u;
 constexpr u32 AUDIO_LISTENER_CAVE = HIGH_PATCH_ARENA_BASE + 0x000u;
 constexpr u32 AUDIO_LISTENER_SCRATCH = HIGH_PATCH_ARENA_BASE + 0x100u;
-constexpr u32 UPDATE_ORBIT_ORIENTATION_ADDRESS = 0x8017EACCu;
 constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ADDRESS = 0x8000E71Cu;
 constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ORIGINAL = 0x801E0304u;
 constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_SKIP_ADDRESS = 0x8000E9C4u;
@@ -494,8 +493,6 @@ DynamicPpcPatch s_ball_camera_level_patch{
 DynamicPpcPatch s_interpolation_camera_level_patch{
     INTERPOLATION_CAMERA_LEVEL_PATCH_ADDRESS, INTERPOLATION_CAMERA_LEVEL_PATCH_ORIGINAL, 0,
     INTERPOLATION_CAMERA_LEVEL_CAVE, false};
-DynamicPpcPatch s_orbit_orientation_no_spin_patch{
-    UPDATE_ORBIT_ORIENTATION_ADDRESS, 0, PPC_BLR, 0, false};
 DynamicPpcPatch s_first_person_orbit_aim_vector_patch{
     FIRST_PERSON_ORBIT_AIM_VECTOR_ADDRESS, FIRST_PERSON_ORBIT_AIM_VECTOR_ORIGINAL, 0,
     FIRST_PERSON_ORBIT_AIM_VECTOR_CAVE, false};
@@ -2808,11 +2805,6 @@ bool OrbitLockButtonHeld(const Core::CPUThreadGuard& guard, u32 state_manager)
 void UpdateGunTargeting(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player, u32 gun,
                         u32 world_xf, const Matrix3x4& mat, const RuntimeSettings& settings)
 {
-  static GunTargetPick s_last_pick = {};
-  static bool s_last_pick_valid = false;
-  static u64 s_last_pick_frame = 0;
-  static u32 s_last_pick_player = 0;
-  static u32 s_last_pick_gun = 0;
   static u64 s_last_lock_log_frame = 0;
   static u16 s_last_lock_log_uid = 0xffffu;
   static int s_last_lock_log_source = -1;
@@ -2821,46 +2813,17 @@ void UpdateGunTargeting(const Core::CPUThreadGuard& guard, u32 state_manager, u3
   if (!settings.gun_targeting_enabled || !settings.patch_gun_ray_target ||
       !PlayerObjectLooksValid(guard, player))
   {
-    s_last_pick_valid = false;
     WriteGunTargetScratch(guard, 0, 0xffffu);
     return;
   }
 
-  const bool same_context = s_last_pick_valid && s_last_pick_player == player &&
-                            s_last_pick_gun == gun;
   const bool lock_held = OrbitLockButtonHeld(guard, state_manager);
 
   GunTargetPick pick = {};
-  const GunTargetPick previous = s_last_pick;
-  const bool previous_valid = s_last_pick_valid;
   const bool found_live =
       PickGunRayTarget(guard, state_manager, player, gun, world_xf, mat, settings, lock_held, &pick);
   bool found = found_live;
-  const bool previous_exists =
-      lock_held && same_context && previous_valid &&
-      TargetUidStillExists(guard, state_manager, previous.uid, previous.obj);
   int lock_source = found_live ? 1 : 0;
-  s_last_pick_frame = s_frame_counter;
-  s_last_pick_player = player;
-  s_last_pick_gun = gun;
-
-  if (found_live)
-  {
-    s_last_pick = pick;
-    s_last_pick_valid = true;
-  }
-  else if (previous_exists)
-  {
-    pick = previous;
-    found = true;
-    s_last_pick = pick;
-    s_last_pick_valid = true;
-    lock_source = 2;
-  }
-  else
-  {
-    s_last_pick_valid = false;
-  }
 
   const auto log_lock_state = [&](int source, u16 uid, u32 obj, bool vanilla_found,
                                   bool wrote_target) {
@@ -2876,17 +2839,14 @@ void UpdateGunTargeting(const Core::CPUThreadGuard& guard, u32 state_manager, u3
 
     const char* source_name =
         source == 1 ? "live" :
-        source == 2 ? "held_previous" :
         source == 3 ? "vanilla_fallback" :
         source == 4 ? "suppressed" :
                       "none";
     AppendLockDebugLine(fmt::format(
         "frame={} lock={} source={} wrote={} uid={:04X} obj={:08X} player={:08X} gun={:08X} "
-        "found_live={} prev_valid={} prev_exists={} same_context={} vanilla={} suppress={} "
-        "last_pick_frame={}",
+        "found_live={} vanilla={} suppress={}",
         s_frame_counter, lock_held, source_name, wrote_target, uid, obj, player, gun, found_live,
-        previous_valid, previous_exists, same_context, vanilla_found, pick.suppress_orbit_hook,
-        s_last_pick_frame));
+        vanilla_found, pick.suppress_orbit_hook));
 
     s_last_lock_log_frame = s_frame_counter;
     s_last_lock_log_uid = uid;
@@ -6317,40 +6277,6 @@ bool ApplyInterpolationCameraLevelPatch(const Core::CPUThreadGuard& guard)
   return patch_wrote;
 }
 
-bool ApplyOrbitOrientationNoSpinPatch(const Core::CPUThreadGuard& guard)
-{
-  auto& patch = s_orbit_orientation_no_spin_patch;
-  u32 current = 0;
-  if (!TryReadU32(guard, patch.address, &current))
-    return false;
-
-  if (current == patch.replacement)
-  {
-    patch.applied = true;
-    return false;
-  }
-
-  if (patch.original == 0)
-  {
-    // UpdateOrbitOrientation starts with a normal stwu r1, imm(r1) prologue on GM8E01 Rev 0.
-    // Refuse to patch if the address does not look like that function entry.
-    if ((current & 0xFFFF0000u) != 0x94210000u)
-    {
-      patch.applied = false;
-      return false;
-    }
-    patch.original = current;
-  }
-  else if (current != patch.original)
-  {
-    patch.applied = false;
-    return false;
-  }
-
-  patch.applied = TryWriteInstruction(guard, patch.address, patch.replacement);
-  return patch.applied;
-}
-
 bool ApplyFirstPersonOrbitAimVectorPatch(const Core::CPUThreadGuard& guard)
 {
   auto& patch = s_first_person_orbit_aim_vector_patch;
@@ -6476,7 +6402,6 @@ bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
   wrote = ApplyFirstPersonPitchLoadPatch(guard) || wrote;
   wrote = ApplyBallCameraLevelPatch(guard) || wrote;
   wrote = ApplyInterpolationCameraLevelPatch(guard) || wrote;
-  wrote = ApplyOrbitOrientationNoSpinPatch(guard) || wrote;
   wrote = ApplyFirstPersonOrbitAimVectorPatch(guard) || wrote;
   wrote = ApplyAudioListenerPatch(guard) || wrote;
 
@@ -6986,8 +6911,6 @@ void ResetNativeRuntime()
   s_scan_indicator_update_trace_patch.original = 0;
   s_scan_indicator_view_basis_patch.applied = false;
   s_scan_indicator_view_basis_patch.original = DRAW_SCAN_INDICATOR_MODEL_BASIS_ORIGINAL;
-  s_orbit_orientation_no_spin_patch.applied = false;
-  s_orbit_orientation_no_spin_patch.original = 0;
   s_first_person_orbit_aim_vector_patch.applied = false;
   s_audio_listener_patch.applied = false;
   for (DynamicPpcPatch& patch : s_combat_pitch_patches)
