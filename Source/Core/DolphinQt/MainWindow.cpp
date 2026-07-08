@@ -631,23 +631,11 @@ int PrimedGunTransferDolphinSettingsNearMemoryCard(const QString& memory_card_pa
   const QDir old_user_dir(old_user_dir_path);
   const QDir current_user_dir(current_user_dir_path);
 
+  // Keep release-managed per-game fixes intact. GameSettings and GameSettingsVR can contain
+  // shader/render overrides, so only regular Dolphin Config INIs are migrated.
   if (!PrimedGunCopySettingsTree(old_user_dir.filePath(QStringLiteral("Config")),
                                  current_user_dir.filePath(QStringLiteral("Config")), timestamp,
                                  &copied_count, error_message))
-  {
-    return -1;
-  }
-
-  if (!PrimedGunCopySettingsTree(old_user_dir.filePath(QStringLiteral("GameSettings")),
-                                 current_user_dir.filePath(QStringLiteral("GameSettings")),
-                                 timestamp, &copied_count, error_message))
-  {
-    return -1;
-  }
-
-  if (!PrimedGunCopySettingsTree(old_user_dir.filePath(QStringLiteral("GameSettingsVR")),
-                                 current_user_dir.filePath(QStringLiteral("GameSettingsVR")),
-                                 timestamp, &copied_count, error_message))
   {
     return -1;
   }
@@ -3804,7 +3792,8 @@ void MainWindow::ConnectStack()
     prompt.setText(tr("Transfer old save game."));
     prompt.setInformativeText(
         tr("PrimedGun will search nearby old PrimedGun folders and automatically transfer and "
-           "apply your save."));
+           "apply your save, PrimeGun settings, and Dolphin config settings. Per-game "
+           "GameSettings, GameSettingsVR, and shader overrides are not transferred."));
     auto* transfer_button = prompt.addButton(tr("Transfer"), QMessageBox::AcceptRole);
     prompt.addButton(QMessageBox::Cancel);
     prompt.exec();
@@ -3912,15 +3901,17 @@ void MainWindow::ConnectStack()
     }
     if (imported_dolphin_settings_count > 0)
     {
-      message += tr("\n\nDolphin settings transferred from:\n%1\n%2 file(s) copied.")
+      message += tr("\n\nDolphin config settings transferred from:\n%1\n%2 file(s) copied.")
                      .arg(old_dolphin_settings_source)
                      .arg(imported_dolphin_settings_count);
     }
     else
     {
-      message += tr("\n\nNo old user-created Dolphin settings were found in a folder with "
+      message += tr("\n\nNo old Dolphin config settings were found in a folder with "
                     "PrimedGun.exe.");
     }
+    message += tr("\n\nPer-game GameSettings, GameSettingsVR, and shader overrides were not "
+                  "transferred.");
     ModalMessageBox::information(this, tr("Transfer Old Memory Card"), message);
   });
 
