@@ -210,8 +210,8 @@ constexpr u32 DRAW_SCAN_INDICATOR_MODEL_BASIS = 0x801122CCu;
 constexpr u32 DRAW_SCAN_INDICATOR_MODEL_BASIS_ORIGINAL = 0xC0410074u;
 
 constexpr u32 VR_MENU_TAB_COUNT = 5;
-constexpr u32 VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS = 6;
-constexpr u32 VR_MENU_CALIBRATION_TOTAL_ITEMS = 16;
+constexpr u32 VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS = 8;
+constexpr u32 VR_MENU_CALIBRATION_TOTAL_ITEMS = 18;
 constexpr u32 VR_MENU_CALIBRATION_PAGE_COUNT = 2;
 constexpr u32 VR_MENU_CONTROL_TAB = 1;
 constexpr u32 VR_MENU_MOVEMENT_TAB = 2;
@@ -4498,9 +4498,9 @@ int VrMenuCalibrationActualIndex(u32 local_index)
 
 u32 VrMenuResetActionForSelection()
 {
-  if (s_vr_menu_tab == 0 && VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 5)
+  if (s_vr_menu_tab == 0 && VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 7)
     return VR_MENU_RESET_TARGETING_ACTION;
-  if (s_vr_menu_tab == 0 && VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 13)
+  if (s_vr_menu_tab == 0 && VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 15)
     return VR_MENU_RESET_CALIBRATION_ACTION;
   if (s_vr_menu_tab == VR_MENU_CONTROL_TAB &&
       VrMenuControlActualIndex(s_vr_menu_selected_index) == 15)
@@ -4522,7 +4522,8 @@ bool VrMenuRowIsNumeric(u32 tab, u32 index)
       return true;
 
     const int actual_index = VrMenuCalibrationActualIndex(index);
-    return actual_index == 1 || actual_index == 2 || (actual_index >= 6 && actual_index <= 11);
+    return (actual_index >= 1 && actual_index <= 4) ||
+           (actual_index >= 8 && actual_index <= 13);
   }
   case VR_MENU_CONTROL_TAB:
   {
@@ -4752,29 +4753,37 @@ void AdjustVrMenuSetting(RuntimeSettings* settings, int direction)
     switch (VrMenuCalibrationActualIndex(s_vr_menu_selected_index))
     {
     case 1:
+      settings->metroid_hud_distance =
+          std::clamp(settings->metroid_hud_distance + sign * 0.05f, 0.1f, 3.0f);
+      break;
+    case 2:
+      settings->metroid_hud_size =
+          std::clamp(settings->metroid_hud_size + sign * 0.05f, 0.1f, 3.0f);
+      break;
+    case 3:
       settings->gun_targeting_distance =
           std::clamp(settings->gun_targeting_distance + sign * 1.0f, 1.0f, 200.0f);
       break;
-    case 2:
+    case 4:
       settings->gun_targeting_radius =
           std::clamp(settings->gun_targeting_radius + sign * 0.1f, 0.1f, 25.0f);
       break;
-    case 6:
+    case 8:
       settings->model_offset_x += sign * 0.01f;
       break;
-    case 7:
+    case 9:
       settings->model_offset_y += sign * 0.01f;
       break;
-    case 8:
+    case 10:
       settings->model_offset_z += sign * 0.01f;
       break;
-    case 9:
+    case 11:
       settings->rot_offset_x += sign * 1.0f;
       break;
-    case 10:
+    case 12:
       settings->rot_offset_y += sign * 1.0f;
       break;
-    case 11:
+    case 13:
       settings->rot_offset_z += sign * 1.0f;
       break;
     default:
@@ -4871,11 +4880,11 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
     const int actual_index = VrMenuCalibrationActualIndex(s_vr_menu_selected_index);
     if (actual_index == 0)
       settings->cinematic_screen_enabled = !settings->cinematic_screen_enabled;
-    else if (actual_index == 3)
-      settings->visor_helmet_enabled = !settings->visor_helmet_enabled;
-    else if (actual_index == 4)
-      settings->height_prompt_enabled = !settings->height_prompt_enabled;
     else if (actual_index == 5)
+      settings->visor_helmet_enabled = !settings->visor_helmet_enabled;
+    else if (actual_index == 6)
+      settings->height_prompt_enabled = !settings->height_prompt_enabled;
+    else if (actual_index == 7)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4885,9 +4894,9 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->gun_targeting_radius = 4.0f;
       settings->visor_helmet_enabled = false;
     }
-    else if (actual_index == 12)
+    else if (actual_index == 14)
       settings->position_marker_enabled = !settings->position_marker_enabled;
-    else if (actual_index == 13)
+    else if (actual_index == 15)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4899,7 +4908,7 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->rot_offset_y = DEFAULT_ROT_OFFSET_Y;
       settings->rot_offset_z = DEFAULT_ROT_OFFSET_Z;
     }
-    else if (actual_index == 14)
+    else if (actual_index == 16)
     {
       settings->offset_x = 0.0f;
       settings->offset_y = 0.0f;
@@ -4911,7 +4920,7 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->rot_offset_y = DEFAULT_ROT_OFFSET_Y;
       settings->rot_offset_z = DEFAULT_ROT_OFFSET_Z;
     }
-    else if (actual_index == 15)
+    else if (actual_index == 17)
     {
       settings->offset_x = 0.0f;
       settings->offset_y = 0.0f;
@@ -5080,6 +5089,8 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.xr_dpad_enabled = settings.xr_dpad_enabled;
   overlay.cinematic_screen_enabled = settings.cinematic_screen_enabled;
   overlay.cinematic_screen_active = settings.cinematic_screen_enabled && s_cinematic_screen_active;
+  overlay.metroid_hud_distance = settings.metroid_hud_distance;
+  overlay.metroid_hud_size = settings.metroid_hud_size;
   overlay.xr_dpad_head_radius = settings.xr_dpad_head_radius;
   overlay.xr_dpad_head_y_below = settings.xr_dpad_head_y_below;
   overlay.xr_dpad_deadzone = settings.xr_dpad_deadzone;
@@ -7022,6 +7033,10 @@ void SetRuntimeSettings(const RuntimeSettings& settings)
       ClampFinite(s_settings.gun_targeting_distance, defaults.gun_targeting_distance, 1.0f, 500.0f);
   s_settings.gun_targeting_radius =
       ClampFinite(s_settings.gun_targeting_radius, defaults.gun_targeting_radius, 0.1f, 50.0f);
+  s_settings.metroid_hud_distance =
+      ClampFinite(s_settings.metroid_hud_distance, defaults.metroid_hud_distance, 0.1f, 3.0f);
+  s_settings.metroid_hud_size =
+      ClampFinite(s_settings.metroid_hud_size, defaults.metroid_hud_size, 0.1f, 3.0f);
   s_settings.xr_dpad_head_radius =
       ClampFinite(s_settings.xr_dpad_head_radius, defaults.xr_dpad_head_radius, 0.02f, 2.0f);
   s_settings.xr_dpad_head_y_below =

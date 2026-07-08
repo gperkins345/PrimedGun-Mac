@@ -52,6 +52,8 @@ struct RuntimeSettings
   bool vr_menu_hold_left_stick = false;
   bool vr_menu_requires_head_zone = false;
   bool cinematic_screen_enabled = false;
+  float metroid_hud_distance = 0.5f;
+  float metroid_hud_size = 0.5f;
   bool position_marker_enabled = false;
   bool xr_dpad_enabled = true;
   float xr_dpad_head_radius = 0.28f;

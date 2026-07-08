@@ -60,6 +60,8 @@ public:
   float vr_headlocked_projection_scale_y = 1.0f;
   float vr_headlocked_projection_offset_x = 0.0f;
   float vr_headlocked_projection_offset_y = 0.0f;
+  float vr_perspective_hud_distance_override = -1.0f;
+  float vr_perspective_hud_size_override = -1.0f;
 
   // Set by VertexManagerBase for the current -3 (perspective HUD) draw.
   bool vr_metroid_hud_self_center = false;

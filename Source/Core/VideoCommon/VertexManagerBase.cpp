@@ -3,6 +3,7 @@
 
 #include "VideoCommon/VertexManagerBase.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -92,6 +93,8 @@ constexpr u32 PRIMEGUN_ELEMENT_HANDLING_MAX_LOGS = 800;
 constexpr int METROID_HUD_CONTEXT_DEFAULT = 0;
 constexpr int METROID_HUD_CONTEXT_COMBAT = 1;
 constexpr int METROID_HUD_CONTEXT_MENU = 2;
+constexpr float METROID_PRIME1_PERSPECTIVE_HUD_DEFAULT_DISTANCE = 0.5f;
+constexpr float METROID_PRIME1_PERSPECTIVE_HUD_DEFAULT_SIZE = 0.5f;
 
 struct MetroidHydraHudSettings
 {
@@ -358,6 +361,26 @@ bool IsMetroidPrime1Profile(MetroidElementProfile profile)
 {
   return profile == MetroidElementProfile::Prime1GC ||
          profile == MetroidElementProfile::Prime1Wii;
+}
+
+float GetPrimedGunPerspectiveHudDistance()
+{
+#ifdef ENABLE_VR
+  return std::clamp(Common::VR::OpenXRInputState::GetPrimedGunOverlay().metroid_hud_distance,
+                    0.1f, 3.0f);
+#else
+  return METROID_PRIME1_PERSPECTIVE_HUD_DEFAULT_DISTANCE;
+#endif
+}
+
+float GetPrimedGunPerspectiveHudSize()
+{
+#ifdef ENABLE_VR
+  return std::clamp(Common::VR::OpenXRInputState::GetPrimedGunOverlay().metroid_hud_size, 0.1f,
+                    3.0f);
+#else
+  return METROID_PRIME1_PERSPECTIVE_HUD_DEFAULT_SIZE;
+#endif
 }
 
 MetroidHydraHudSettings GetMetroidHydraHudSettings(MetroidElementProfile profile,
@@ -1965,6 +1988,13 @@ void VertexManagerBase::Flush()
                 geometry_shader_manager.vr_headlocked_projection_offset_x =
                     metroid_hydra_hud.right;
                 geometry_shader_manager.vr_headlocked_projection_offset_y = metroid_hydra_hud.up;
+                if (metroid_hydra_hud.perspective_hud)
+                {
+                  geometry_shader_manager.vr_perspective_hud_distance_override =
+                      GetPrimedGunPerspectiveHudDistance();
+                  geometry_shader_manager.vr_perspective_hud_size_override =
+                      GetPrimedGunPerspectiveHudSize();
+                }
               }
               if (d3d_xray_hud_tex0_layer_fallback)
               {

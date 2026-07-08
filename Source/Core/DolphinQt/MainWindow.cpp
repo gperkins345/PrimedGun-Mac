@@ -2247,6 +2247,13 @@ void MainWindow::ConnectStack()
         settings.value(QStringLiteral("primegun/cinematic_screen_enabled"),
                        runtime.cinematic_screen_enabled)
             .toBool();
+    runtime.metroid_hud_distance =
+        settings.value(QStringLiteral("primegun/metroid_hud_distance"),
+                       runtime.metroid_hud_distance)
+            .toFloat();
+    runtime.metroid_hud_size =
+        settings.value(QStringLiteral("primegun/metroid_hud_size"), runtime.metroid_hud_size)
+            .toFloat();
     runtime.gun_targeting_enabled =
         settings.value(QStringLiteral("primegun/gun_targeting_enabled"),
                        runtime.gun_targeting_enabled)
@@ -2374,6 +2381,9 @@ void MainWindow::ConnectStack()
                       runtime.vr_menu_requires_head_zone);
     settings.setValue(QStringLiteral("primegun/cinematic_screen_enabled"),
                       runtime.cinematic_screen_enabled);
+    settings.setValue(QStringLiteral("primegun/metroid_hud_distance"),
+                      runtime.metroid_hud_distance);
+    settings.setValue(QStringLiteral("primegun/metroid_hud_size"), runtime.metroid_hud_size);
     settings.setValue(QStringLiteral("primegun/gun_targeting_enabled"),
                       runtime.gun_targeting_enabled);
     settings.setValue(QStringLiteral("primegun/gun_targeting_distance"),
@@ -2949,6 +2959,18 @@ void MainWindow::ConnectStack()
   position_marker_enabled->setChecked(runtime->position_marker_enabled);
   calibration_layout->addWidget(position_marker_enabled);
   separator(calibration_layout);
+  calibration_layout->addWidget(section_label(tr("HUD"), game_tab));
+  auto* reset_hud = new QPushButton(tr("Reset HUD"), game_tab);
+  calibration_layout->addWidget(reset_hud);
+  auto* metroid_hud_distance_spin =
+      add_float_row(calibration_layout, tr("HUD distance"), 0.10, 3.00, 0.05,
+                    runtime->metroid_hud_distance,
+                    [runtime](float v) { runtime->metroid_hud_distance = v; });
+  auto* metroid_hud_size_spin =
+      add_float_row(calibration_layout, tr("HUD size"), 0.10, 3.00, 0.05,
+                    runtime->metroid_hud_size,
+                    [runtime](float v) { runtime->metroid_hud_size = v; });
+  separator(calibration_layout);
   calibration_layout->addWidget(section_label(tr("Targeting"), game_tab));
   auto* reset_aiming = new QPushButton(tr("Reset Targeting"), game_tab);
   calibration_layout->addWidget(reset_aiming);
@@ -3486,6 +3508,8 @@ void MainWindow::ConnectStack()
     set_float(movement_accel_spin, runtime->directional_movement_accel);
     set_float(movement_air_accel_spin, runtime->directional_movement_air_accel);
     set_float(look_yaw_sensitivity_spin, runtime->look_yaw_sensitivity);
+    set_float(metroid_hud_distance_spin, runtime->metroid_hud_distance);
+    set_float(metroid_hud_size_spin, runtime->metroid_hud_size);
     set_float(target_distance_spin, runtime->gun_targeting_distance);
     set_float(target_radius_spin, runtime->gun_targeting_radius);
     set_float(model_x_spin, runtime->model_offset_x);
@@ -3665,6 +3689,14 @@ void MainWindow::ConnectStack()
   connect(position_marker_enabled, &QCheckBox::toggled, this,
           [runtime, apply_runtime](bool checked) {
     runtime->position_marker_enabled = checked;
+    apply_runtime();
+  });
+  connect(reset_hud, &QPushButton::clicked, this,
+          [runtime, refresh_visible_settings, apply_runtime] {
+    const PrimedGun::RuntimeSettings defaults{};
+    runtime->metroid_hud_distance = defaults.metroid_hud_distance;
+    runtime->metroid_hud_size = defaults.metroid_hud_size;
+    refresh_visible_settings();
     apply_runtime();
   });
   connect(reset_calibration, &QPushButton::clicked, this, reset_calibration_values);

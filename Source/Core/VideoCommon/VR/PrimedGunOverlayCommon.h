@@ -278,7 +278,7 @@ inline int CalibrationMenuActualIndex(uint32_t page, int local_index)
   if (local_index <= 0)
     return -1;
 
-  constexpr int first_page_items = 6;
+  constexpr int first_page_items = 8;
   return page == 0 ? local_index - 1 : first_page_items + local_index - 1;
 }
 
@@ -292,7 +292,8 @@ inline bool MenuRowIsNumeric(const Common::VR::PrimedGunVrOverlayState& s, int i
       return true;
 
     const int actual_index = CalibrationMenuActualIndex(s.calibration_page, index);
-    return actual_index == 1 || actual_index == 2 || (actual_index >= 6 && actual_index <= 11);
+    return (actual_index >= 1 && actual_index <= 4) ||
+           (actual_index >= 8 && actual_index <= 13);
   }
   case 2:
     return (index >= 3 && index <= 7) || index == 9;
@@ -343,6 +344,8 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
     if (s.calibration_page == 0)
     {
       rows.push_back({"CUTSCENE CINEMA SCREEN", s.cinematic_screen_enabled ? "ON" : "OFF"});
+      rows.push_back({"HUD DISTANCE", FloatText(s.metroid_hud_distance, 2)});
+      rows.push_back({"HUD SIZE", FloatText(s.metroid_hud_size, 2)});
       rows.push_back({"TARGET DISTANCE", FloatText(s.gun_targeting_distance, 1)});
       rows.push_back({"TARGET RADIUS", FloatText(s.gun_targeting_radius, 1)});
       rows.push_back({"VISOR HELMET", s.visor_helmet_enabled ? "ON" : "OFF"});

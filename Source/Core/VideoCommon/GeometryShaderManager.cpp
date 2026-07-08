@@ -140,7 +140,9 @@ bool IsMetroidHudStableReferenceAllowed(int context, float reference_view_z)
 
 PerspectiveHudTransform CalculatePerspectiveHudTransform(const Projection::Raw& projection,
                                                          float units_per_meter,
-                                                         float reference_view_z)
+                                                         float reference_view_z,
+                                                         float screen_distance,
+                                                         float screen_size)
 {
   PerspectiveHudTransform result;
 
@@ -160,8 +162,8 @@ PerspectiveHudTransform CalculatePerspectiveHudTransform(const Projection::Raw& 
   if (width == 0.0f || height == 0.0f || !IsFinite(width) || !IsFinite(height))
     return result;
 
-  result.distance = units_per_meter * g_ActiveConfig.vr_screen_distance;
-  const float size_reference = units_per_meter * g_ActiveConfig.vr_screen_size;
+  result.distance = units_per_meter * screen_distance;
+  const float size_reference = units_per_meter * screen_size;
   const float hud_width = std::abs((2.0f / projection[0]) * size_reference);
   const float hud_height = std::abs((2.0f / projection[2]) * size_reference);
 
@@ -262,6 +264,10 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
         vr_metroid_hud_anchor_candidate = false;  // consume
         const int metroid_hud_reference_context = vr_metroid_hud_reference_context;
         vr_metroid_hud_reference_context = 0;  // consume
+        const float perspective_hud_distance_override = vr_perspective_hud_distance_override;
+        const float perspective_hud_size_override = vr_perspective_hud_size_override;
+        vr_perspective_hud_distance_override = -1.0f;  // consume
+        vr_perspective_hud_size_override = -1.0f;       // consume
         vr_headlocked_projection_scale_x = 1.0f;
         vr_headlocked_projection_scale_y = 1.0f;
         vr_headlocked_projection_offset_x = 0.0f;
@@ -471,6 +477,12 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
         const bool perspective_hud =
             perspective && VR::g_openxr && VR::g_openxr->IsSessionRunning() &&
             constants.stereoparams[3] < -2.5f;
+        const float perspective_hud_distance =
+            perspective_hud_distance_override > 0.0f ? perspective_hud_distance_override :
+                                                       g_ActiveConfig.vr_screen_distance;
+        const float perspective_hud_size = perspective_hud_size_override > 0.0f ?
+                                               perspective_hud_size_override :
+                                               g_ActiveConfig.vr_screen_size;
         if (perspective_hud)
         {
           const float reference_view_z = vertex_shader_manager.constants.posnormalmatrix[2][3];
@@ -528,11 +540,13 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
           const float ref_for_transform =
               (self_center_layer || depth_outlier) ? reference_view_z : shared_reference_z;
           PerspectiveHudTransform transform = CalculatePerspectiveHudTransform(
-              xfmem.projection.rawProjection, upm, ref_for_transform);
+              xfmem.projection.rawProjection, upm, ref_for_transform, perspective_hud_distance,
+              perspective_hud_size);
           if (!transform.valid && ref_for_transform != METROID_PERSPECTIVE_HUD_FALLBACK_REFERENCE_Z)
           {
             transform = CalculatePerspectiveHudTransform(
-                xfmem.projection.rawProjection, upm, METROID_PERSPECTIVE_HUD_FALLBACK_REFERENCE_Z);
+                xfmem.projection.rawProjection, upm, METROID_PERSPECTIVE_HUD_FALLBACK_REFERENCE_Z,
+                perspective_hud_distance, perspective_hud_size);
           }
           if (transform.valid)
           {
@@ -566,7 +580,7 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
           if (perspective_hud)
             constants.depth_params[3] = constants.depth_params[3] > 0.0f ?
                                             constants.depth_params[3] :
-                                            upm * g_ActiveConfig.vr_screen_distance;
+                                            upm * perspective_hud_distance;
         }
 
         // ─── Metroid HUD per-layer hacks (Hydra port) ──────────────────────────────────
