@@ -371,6 +371,7 @@ struct VideoConfig final
   bool vr_auto_layer_spread = true;
   bool vr_remove_bars = true;       // Expand scissor/viewport to remove cinematic letterbox bars
   bool vr_ortho_scissor_fix = true;  // Expand scissor for orthographic VR draws
+  bool vr_detect_skybox = false;     // Treat camera-origin objects as skyboxes
   // Metroid Prime visor fix bundle: layered palette conversion + thermal source
   // classifier + D3D fullscreen-mono per-eye routing. Disable to revert to stock
   // Dolphin paletted-EFB behaviour if non-Metroid titles regress (e.g. MKWii).
@@ -382,6 +383,7 @@ struct VideoConfig final
   float vr_gamma = 1.0f;  // Gamma for VR eye output (1.0=off, 2.2=sRGB, adjustable per headset)
   float vr_layer_offset = 0.002f;
   float vr_element_depth = 0.001f;
+  float vr_hud_thickness = 0.0f;
   bool vr_hud_3d_enable = false;  // Opt-in: route Screen/HeadLocked perspective draws through depth-preserving GS path
   float vr_hud_3d_closer = 0.5f;  // 0=near plane, 1=far plane; depth at which 3D HUDs land on virtual screen
   int vr_clear_efb_min_width = 0;  // 0=disabled, >0=clear EFB copies wider than this

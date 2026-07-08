@@ -116,6 +116,9 @@ struct PrimedGunVrOverlayState
   bool vr_menu_requires_head_zone = false;
   bool cinematic_screen_enabled = false;
   bool cinematic_screen_active = false;
+  uint32_t cinematic_screen_generation = 0;
+  float metroid_hud_distance = 0.5f;
+  float metroid_hud_size = 0.5f;
   bool position_marker_visible = false;
   float xr_dpad_head_radius = 0.18f;
   float xr_dpad_head_y_below = 0.14f;

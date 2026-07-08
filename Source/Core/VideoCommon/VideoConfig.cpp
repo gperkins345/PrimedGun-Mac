@@ -224,6 +224,7 @@ void VideoConfig::Refresh()
   vr_auto_layer_spread = Config::Get(Config::GFX_VR_AUTO_LAYER_SPREAD);
   vr_remove_bars = Config::Get(Config::GFX_VR_REMOVE_BARS);
   vr_ortho_scissor_fix = Config::Get(Config::GFX_VR_ORTHO_SCISSOR_FIX);
+  vr_detect_skybox = Config::Get(Config::GFX_VR_DETECT_SKYBOX);
   vr_metroid_visor_fix = Config::Get(Config::GFX_VR_METROID_VISOR_FIX);
   vr_lock_head_pose = Config::Get(Config::GFX_VR_LOCK_HEAD_POSE);
   vr_ar_mode = Config::Get(Config::GFX_VR_AR_MODE);
@@ -237,6 +238,9 @@ void VideoConfig::Refresh()
   vr_element_depth = std::clamp(Config::Get(Config::GFX_VR_ELEMENT_DEPTH),
                                 Config::GFX_VR_ELEMENT_DEPTH_MIN,
                                 Config::GFX_VR_ELEMENT_DEPTH_MAX);
+  vr_hud_thickness = std::clamp(Config::Get(Config::GFX_VR_HUD_THICKNESS),
+                                Config::GFX_VR_HUD_THICKNESS_MIN,
+                                Config::GFX_VR_HUD_THICKNESS_MAX);
   vr_hud_3d_enable = Config::Get(Config::GFX_VR_HUD_3D_ENABLE);
   vr_hud_3d_closer = std::clamp(Config::Get(Config::GFX_VR_HUD_3D_CLOSER),
                                 Config::GFX_VR_HUD_3D_CLOSER_MIN,
