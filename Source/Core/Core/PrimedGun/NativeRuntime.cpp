@@ -160,6 +160,7 @@ constexpr u32 DPAD_DISABLE_FLAGS_ADDR_SCRATCH = SCRATCH_BASE + 0x688u;
 constexpr u32 DPAD_DISABLE_ORIGINAL_FLAGS_SCRATCH = SCRATCH_BASE + 0x68Cu;
 constexpr u32 GAMEFLOW_MENU_SCRATCH = SCRATCH_BASE + 0x690u;
 constexpr u32 MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH = SCRATCH_BASE + 0x694u;
+constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH = SCRATCH_BASE + 0x698u;
 constexpr u32 DPAD_DISABLE_OWNER_MAGIC = 0x50474450u;  // PGDP
 
 constexpr u32 FIRST_PERSON_PITCH_LOAD_CAVE = PATCH_CODE_ARENA_BASE + 0x000u;
@@ -3340,9 +3341,12 @@ void ApplyLookYawSensitivityBoost(const Core::CPUThreadGuard& guard,
   const bool orbit_lock_active = OrbitLockButtonHeld(guard, ADDRESS.state_manager) &&
                                  PlayerHasOrbitControlTarget(guard, ADDRESS.state_manager, player);
   if (orbit_lock_active)
+  {
     ClearFreeLookYawCarry(guard, player);
+    return;
+  }
 
-  if (!orbit_lock_active && settings.look_yaw_sensitivity <= 1.0f)
+  if (settings.look_yaw_sensitivity <= 1.0f)
     return;
 
   const int look_hand = settings.directional_movement_use_right_stick ? 0 : 1;
@@ -3356,9 +3360,7 @@ void ApplyLookYawSensitivityBoost(const Core::CPUThreadGuard& guard,
 
   constexpr float max_extra_yaw_deg_per_second = 125.0f;
   constexpr float frame_dt = 1.0f / 60.0f;
-  const float yaw_scale =
-      orbit_lock_active ? std::clamp(settings.look_yaw_sensitivity, 0.1f, 3.0f) :
-                          std::clamp(settings.look_yaw_sensitivity - 1.0f, 0.0f, 2.0f);
+  const float yaw_scale = std::clamp(settings.look_yaw_sensitivity - 1.0f, 0.0f, 2.0f);
   const float yaw_delta_rad = stick_x * yaw_scale * max_extra_yaw_deg_per_second * frame_dt *
                               (static_cast<float>(MathUtil::PI) / 180.0f);
   RotateTransformYaw2D(guard, player + ADDRESS.transform_offset, yaw_delta_rad);
@@ -4166,6 +4168,13 @@ void UpdateDirectionalMovement(const Core::CPUThreadGuard& guard,
   u32 player = 0;
   if (!TryReadU32(guard, ADDRESS.state_manager + ADDRESS.player_offset, &player) ||
       !PlayerIsFirstPersonUnmorphed(guard, player))
+  {
+    s_directional_move_speed = 0.0f;
+    return;
+  }
+
+  if (OrbitLockButtonHeld(guard, ADDRESS.state_manager) &&
+      PlayerHasOrbitControlTarget(guard, ADDRESS.state_manager, player))
   {
     s_directional_move_speed = 0.0f;
     return;
@@ -6292,21 +6301,50 @@ bool ApplyFirstPersonOrbitAimVectorPatch(const Core::CPUThreadGuard& guard)
   }
 
   const u32 return_addr = patch.address + 4u;
+  constexpr u32 flag_hi = (FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH >> 16) & 0xffffu;
+  constexpr u32 flag_lo = FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH & 0xffffu;
   const std::initializer_list<HookWrite> cave_writes{
       // CFirstPersonCamera::UpdateTransform normally replaces rVec with the
-      // orbit/scan target vector here. Keep vanilla behavior when there is no
-      // orbit state, but skip that target-vector replacement during lock/scan
-      // so camera yaw is not pulled toward the selected target.
-      {0x00u, patch.original},                     // lwz r0, 0x304(r30)
-      {0x04u, 0x2C000000u},                        // cmpwi r0, 0
-      {0x08u, PpcBeq(patch.cave + 0x08u, patch.cave + 0x10u)},
-      {0x0Cu, PpcBranch(patch.cave + 0x0Cu, FIRST_PERSON_ORBIT_AIM_VECTOR_SKIP_ADDRESS)},
-      {0x10u, PpcBranch(patch.cave + 0x10u, return_addr)}};
+      // orbit/scan target vector here. Keep the hook installed permanently and
+      // gate the scan-only yaw lock through a scratch flag so changing visors
+      // does not rewrite code or invalidate JIT.
+      {0x00u, 0x3D800000u | flag_hi},  // lis r12, flag@ha
+      {0x04u, 0x818C0000u | flag_lo},  // lwz r12, flag@l(r12)
+      {0x08u, 0x2C0C0000u},            // cmpwi r12, 0
+      {0x0Cu, PpcBeq(patch.cave + 0x0Cu, patch.cave + 0x20u)},
+
+      {0x10u, patch.original},  // lwz r0, 0x304(r30)
+      {0x14u, 0x2C000000u},     // cmpwi r0, 0
+      {0x18u, PpcBeq(patch.cave + 0x18u, patch.cave + 0x24u)},
+      {0x1Cu, PpcBranch(patch.cave + 0x1Cu, FIRST_PERSON_ORBIT_AIM_VECTOR_SKIP_ADDRESS)},
+
+      {0x20u, patch.original},
+      {0x24u, PpcBranch(patch.cave + 0x24u, return_addr)}};
 
   const bool patch_wrote = InstallBranchAfterCaveWrite(guard, patch.address, patch.cave, cave_writes);
   patch.applied = InstructionBlockMatches(guard, patch.cave, cave_writes) &&
                   TryReadU32(guard, patch.address, &current) && current == branch;
   return patch_wrote;
+}
+
+bool RestoreFirstPersonOrbitAimVectorPatch(const Core::CPUThreadGuard& guard)
+{
+  auto& patch = s_first_person_orbit_aim_vector_patch;
+  u32 current = 0;
+  if (!TryReadU32(guard, patch.address, &current))
+    return false;
+
+  const u32 branch = PpcBranch(patch.address, patch.cave);
+  if (current != branch)
+  {
+    patch.applied = false;
+    return false;
+  }
+
+  const bool restored = TryWriteInstruction(guard, patch.address, patch.original);
+  if (restored)
+    patch.applied = false;
+  return restored;
 }
 
 bool ApplyAudioListenerPatch(const Core::CPUThreadGuard& guard)
@@ -6393,6 +6431,11 @@ void UpdateMorphballCameraLevelHookEnabled(const Core::CPUThreadGuard& guard, bo
 bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
 {
   bool wrote = false;
+  u32 player = 0;
+  const bool scan_active =
+      TryReadU32(guard, ADDRESS.state_manager + ADDRESS.player_offset, &player) &&
+      player >= 0x80000000u && ScanVisorActive(guard, player);
+
   wrote = ApplyGameFlowFlagPatches(guard) || wrote;
   wrote = ApplyRenderModelOffsetPatch(guard) || wrote;
   wrote = RuntimeLoggingEnabled() ? (ApplyScanReticleTracePatch(guard) || wrote) :
@@ -6403,12 +6446,9 @@ bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
   wrote = ApplyBallCameraLevelPatch(guard) || wrote;
   wrote = ApplyInterpolationCameraLevelPatch(guard) || wrote;
   wrote = ApplyFirstPersonOrbitAimVectorPatch(guard) || wrote;
+  TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, scan_active ? 1u : 0u);
   wrote = ApplyAudioListenerPatch(guard) || wrote;
 
-  u32 player = 0;
-  const bool scan_active =
-      TryReadU32(guard, ADDRESS.state_manager + ADDRESS.player_offset, &player) &&
-      player >= 0x80000000u && ScanVisorActive(guard, player);
   UpdatePitchZeroHookEnabled(guard, scan_active);
 
   for (DynamicPpcPatch& patch : s_combat_pitch_patches)
@@ -6645,6 +6685,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   if (!settings.enabled)
   {
     TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
+    TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, 0);
     ClearAudioListenerScratch(guard);
     s_cinematic_screen_active = false;
     s_cinematic_screen_hold_until_frame = 0;
@@ -6658,6 +6699,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   if (!game_active)
   {
     TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
+    TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, 0);
     ClearAudioListenerScratch(guard);
     s_cinematic_screen_active = false;
     s_cinematic_screen_hold_until_frame = 0;
@@ -6682,6 +6724,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   if (!have_player)
   {
     TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
+    TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, 0);
     ClearAudioListenerScratch(guard);
     s_cinematic_screen_active = false;
     s_cinematic_screen_hold_until_frame = 0;

@@ -678,6 +678,63 @@ static bool ApplyPrimedGunModernControls(GCPadStatus* pad)
   const auto& move_stick = swap_sticks ? game_right : game_left;
   const auto& look_stick = swap_sticks ? game_left : game_right;
 
+  if (orbit_lock_active)
+  {
+    // Vanilla lock-on/orbit: main stick drives orbit strafe/forward-back,
+    // C-stick stays neutral, and PrimedGun does not inject smooth-turn yaw.
+    pad->stickX =
+        move_stick.connected && !suppress_left_stick ?
+            PrimedGunAxisToPadByte(move_stick.thumbstick_x, GCPadStatus::MAIN_STICK_CENTER_X) :
+            GCPadStatus::MAIN_STICK_CENTER_X;
+    pad->stickY =
+        move_stick.connected && !suppress_left_stick ?
+            PrimedGunAxisToPadByte(move_stick.thumbstick_y, GCPadStatus::MAIN_STICK_CENTER_Y) :
+            GCPadStatus::MAIN_STICK_CENTER_Y;
+    pad->substickX = GCPadStatus::C_STICK_CENTER_X;
+    pad->substickY = GCPadStatus::C_STICK_CENTER_Y;
+
+    if (game_left.connected)
+    {
+      if (game_left.primary_button &&
+          !(overlay.combat_jump_use_primary_button && !overlay.use_right_hand))
+        pad->button |= PAD_BUTTON_X;
+      if (game_left.secondary_button && !vr_menu_button && !weapon_modifier)
+        pad->button |= PAD_BUTTON_START;
+      if (game_left.trigger_button)
+      {
+        pad->button |= PAD_TRIGGER_L;
+        pad->triggerLeft = 0xFF;
+      }
+    }
+
+    if (game_right.connected)
+    {
+      if (fire_pressed)
+        pad->button |= PAD_BUTTON_A;
+      if (!overlay.use_right_hand && game_right.secondary_button)
+        pad->button |= PAD_BUTTON_START;
+    }
+
+    const auto& jump_button_hand = overlay.use_right_hand ? game_right : game_left;
+    const bool primary_jump = overlay.combat_jump_use_primary_button &&
+                              jump_button_hand.connected && jump_button_hand.primary_button;
+    const bool stick_jump = !overlay.combat_jump_use_primary_button &&
+                            look_stick.connected && look_stick.thumbstick_y > stick_button_threshold;
+    if (!weapon_modifier && (primary_jump || stick_jump))
+      pad->button |= PAD_BUTTON_B;
+
+    if (!suppress_grip_inputs)
+      ApplyPrimedGunGripInputs(game_left, game_right, overlay, game_left_index, game_right_index,
+                               pad);
+
+    if (pad->button & PAD_BUTTON_A)
+      pad->analogA = 0xFF;
+    if (pad->button & PAD_BUTTON_B)
+      pad->analogB = 0xFF;
+
+    return true;
+  }
+
   // PrimedGun owns the first-person locomotion layout:
   // movement stick Y = forward/back, movement stick X = runtime strafe,
   // look stick X = turn, look stick up or primary button = jump.
