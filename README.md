@@ -58,7 +58,7 @@ For SteamOS-specific builds, see [PrimedSteam](https://github.com/josethevrtech/
 - Do not transfer save states across versions. Make sure to save normally before you transfer.
 - Once in game, click the right stick to set your height.
 - Click the left thumbstick to open or close the in-headset settings menu.
-- Try to stay in the centre of your play space, this mod is not roomscaled.
+- Try to stay in the centre of your play space and face forward, this mod is not roomscaled.
 - Use Save Settings after changing PrimedGun options to apply them.
 
 ## Change Controller Bindings
