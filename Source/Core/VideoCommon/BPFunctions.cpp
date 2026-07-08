@@ -31,6 +31,11 @@ namespace BPFunctions
 // Reference: Yet Another GameCube Documentation
 // ----------------------------------------------
 
+// VR: real active frame height, captured from the full-width EFB clear.
+// The 3D scene's own viewport can be shorter than the cleared frame; Metroid Prime Trilogy
+// clears 640x480 but renders the scene into 640x448, leaving a permanent bottom bar.
+static int s_vr_frame_active_height = 0;
+
 void FlushPipeline()
 {
   g_vertex_manager->Flush();
@@ -205,7 +210,14 @@ void SetScissorAndViewport(FramebufferManager* frame_buffer_manager, ScissorPos 
     // This avoids using EFB_HEIGHT (528) when the game only uses 448 active lines.
     const float center_y = viewport.yOrig - static_cast<float>(y_off);
     const int active_width = static_cast<int>(center_x * 2.0f);
-    const int active_height = static_cast<int>(center_y * 2.0f);
+    int active_height = static_cast<int>(center_y * 2.0f);
+
+    // Only touch the main full-width scene draw. Smaller perspective EFB-effect passes
+    // such as shadows, reflections, and menu model windows must keep their own viewport.
+    const bool is_main_scene = active_width >= static_cast<int>(EFB_WIDTH) * 9 / 10;
+
+    if (is_main_scene && s_vr_frame_active_height > active_height)
+      active_height = s_vr_frame_active_height;
 
     // Heuristic: only treat perspective scissor trimming as cinematic letterbox when the viewport
     // is still close to full-screen size. This avoids distorting perspective sub-viewports (e.g.
@@ -214,7 +226,8 @@ void SetScissorAndViewport(FramebufferManager* frame_buffer_manager, ScissorPos 
     const float vp_h = std::abs(viewport.ht);
     const bool likely_fullscreen_width = active_width > 0 && vp_w >= center_x * 0.90f;
     const bool likely_fullscreen_height = active_height > 0 && vp_h >= center_y * 0.75f;
-    const bool likely_letterbox_pass = likely_fullscreen_width && likely_fullscreen_height;
+    const bool likely_letterbox_pass =
+        is_main_scene && likely_fullscreen_width && likely_fullscreen_height;
     const bool scissor_trimmed =
         active_height > 0 && (efb_top > 0 || efb_bot < active_height - 1);
     const bool debug_logging = ShaderHunter::GetInstance().IsDebugLogging();
@@ -239,10 +252,12 @@ void SetScissorAndViewport(FramebufferManager* frame_buffer_manager, ScissorPos 
       scissor_top_left.y = static_cast<u32>(y_off);
       scissor_bottom_right.y = static_cast<u32>(y_off + active_height - 1);
 
-      // Expand viewport ht so NDC [-1,+1] maps to the full active area.
-      // Keep yOrig (center) the same, just scale ht to half the active height.
+      // Expand the viewport downward only. Keeping the old center would move the horizon and
+      // stretch the scene when the frame clear is taller than the scene viewport.
+      const float new_half = static_cast<float>(active_height) * 0.5f;
       const float sign = (viewport.ht < 0) ? -1.0f : 1.0f;
-      viewport.ht = sign * center_y;
+      viewport.yOrig = static_cast<float>(y_off) + new_half;
+      viewport.ht = sign * new_half;
 
       if (debug_logging) [[unlikely]]
       {
@@ -416,6 +431,15 @@ bool ClearScreen(FramebufferManager* frame_buffer_manager, const MathUtil::Recta
                  bool color_enable, bool alpha_enable, bool z_enable, PixelFormat pixel_format,
                  u32 clear_color_ar, u32 clear_color_gb, u32 clear_z_value)
 {
+  // VR: capture the real frame height for the cinematic-bar fix. Full-width clears identify the
+  // frame's active area more reliably than the later scene viewport.
+  if (g_ActiveConfig.stereo_mode == StereoMode::OpenXR && g_ActiveConfig.vr_remove_bars &&
+      rc.left == 0 && rc.top == 0 && rc.GetWidth() >= static_cast<int>(EFB_WIDTH) * 9 / 10 &&
+      rc.GetHeight() > 0 && rc.GetHeight() <= static_cast<int>(EFB_HEIGHT))
+  {
+    s_vr_frame_active_height = rc.GetHeight();
+  }
+
   // (1): Disable unused color channels
   if (pixel_format == PixelFormat::RGB8_Z24 || pixel_format == PixelFormat::RGB565_Z16 ||
       pixel_format == PixelFormat::Z24)

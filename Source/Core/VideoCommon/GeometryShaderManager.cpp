@@ -29,6 +29,20 @@ static constexpr int LINE_PT_TEX_OFFSETS[8] = {0, 16, 8, 4, 2, 1, 1, 1};
 
 namespace
 {
+static constexpr float METROID_PERSPECTIVE_HUD_FORWARD_OFFSET = 1.0f;
+static constexpr int METROID_HUD_REFERENCE_CONTEXT_COMBAT = 1;
+static constexpr float METROID_COMBAT_HUD_REFERENCE_FAR_Z = -28.5f;
+static constexpr float METROID_COMBAT_HUD_REFERENCE_NEAR_Z = -18.0f;
+static constexpr float METROID_PERSPECTIVE_HUD_FALLBACK_REFERENCE_Z = -20.0f;
+
+struct PerspectiveHudTransform
+{
+  std::array<float, 3> scale{};
+  std::array<float, 3> position{};
+  float distance = 0.0f;
+  bool valid = false;
+};
+
 // Hydra-ported per-layer HUD treatment for Metroid Prime.  Each entry mirrors
 // MetroidVR.cpp:2055 (GetMetroidPrimeValues) — fScaleHack is a divisor on UnitsPerMetre
 // (makes the layer appear larger/closer when bigger), fWidthHack/fHeightHack are direct
@@ -109,11 +123,73 @@ void ApplyRowTransform(std::array<std::array<float, 4>, 2>* rows, const Common::
              src[3] * matrix.data[15];
   }
 }
+
+bool IsFinite(float value)
+{
+  return std::isfinite(value);
+}
+
+bool IsMetroidHudStableReferenceAllowed(int context, float reference_view_z)
+{
+  if (context != METROID_HUD_REFERENCE_CONTEXT_COMBAT)
+    return true;
+
+  return reference_view_z >= METROID_COMBAT_HUD_REFERENCE_FAR_Z &&
+         reference_view_z <= METROID_COMBAT_HUD_REFERENCE_NEAR_Z;
+}
+
+PerspectiveHudTransform CalculatePerspectiveHudTransform(const Projection::Raw& projection,
+                                                         float units_per_meter,
+                                                         float reference_view_z)
+{
+  PerspectiveHudTransform result;
+
+  if (projection[0] == 0.0f || projection[2] == 0.0f || reference_view_z >= 0.0f)
+    return result;
+
+  const float zobj = -reference_view_z;
+  if (!IsFinite(zobj) || zobj < 1.0e-4f)
+    return result;
+
+  const float left = (-(projection[1] + 1.0f) / projection[0]) * zobj;
+  const float right = left + (2.0f / projection[0]) * zobj;
+  const float bottom = (-(projection[3] + 1.0f) / projection[2]) * zobj;
+  const float top = bottom + (2.0f / projection[2]) * zobj;
+  const float width = right - left;
+  const float height = top - bottom;
+  if (width == 0.0f || height == 0.0f || !IsFinite(width) || !IsFinite(height))
+    return result;
+
+  result.distance = units_per_meter * g_ActiveConfig.vr_screen_distance;
+  const float size_reference = units_per_meter * g_ActiveConfig.vr_screen_size;
+  const float hud_width = std::abs((2.0f / projection[0]) * size_reference);
+  const float hud_height = std::abs((2.0f / projection[2]) * size_reference);
+
+  result.scale[0] = hud_width / width;
+  result.scale[1] = hud_height / height;
+  result.scale[2] = result.scale[0];
+  result.position[0] = result.scale[0] * (-(right + left) * 0.5f);
+  result.position[1] = result.scale[1] * (-(top + bottom) * 0.5f);
+  result.position[2] = result.scale[2] * (zobj + METROID_PERSPECTIVE_HUD_FORWARD_OFFSET) -
+                       result.distance;
+
+  result.valid = IsFinite(result.scale[0]) && IsFinite(result.scale[1]) &&
+                 IsFinite(result.scale[2]) && IsFinite(result.position[0]) &&
+                 IsFinite(result.position[1]) && IsFinite(result.position[2]) &&
+                 IsFinite(result.distance);
+  return result;
+}
 }  // namespace
 
 void GeometryShaderManager::Init()
 {
   constants = {};
+  m_vr_hud_shared_reference_valid = false;
+  m_vr_hud_shared_reference_context = 0;
+  m_vr_hud_stable_reference_valid = false;
+  m_vr_hud_stable_reference_context = 0;
+  m_vr_hud_frame_anchor_candidate_valid = false;
+  m_vr_hud_frame_anchor_candidate_context = 0;
 
   // Init any initial constants which aren't zero when bpmem is zero.
   SetViewportChanged();
@@ -176,15 +252,27 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
         constants.pixel_center_correction = {};
         const float upm_override = vr_units_per_meter_override;
         vr_units_per_meter_override = -1.0f;  // consume
+        const float headlocked_projection_scale_x = vr_headlocked_projection_scale_x;
+        const float headlocked_projection_scale_y = vr_headlocked_projection_scale_y;
+        const float headlocked_projection_offset_x = vr_headlocked_projection_offset_x;
+        const float headlocked_projection_offset_y = vr_headlocked_projection_offset_y;
+        const bool metroid_hud_self_center = vr_metroid_hud_self_center;
+        vr_metroid_hud_self_center = false;  // consume
+        const bool metroid_hud_anchor_candidate = vr_metroid_hud_anchor_candidate;
+        vr_metroid_hud_anchor_candidate = false;  // consume
+        const int metroid_hud_reference_context = vr_metroid_hud_reference_context;
+        vr_metroid_hud_reference_context = 0;  // consume
+        vr_headlocked_projection_scale_x = 1.0f;
+        vr_headlocked_projection_scale_y = 1.0f;
+        vr_headlocked_projection_offset_x = 0.0f;
+        vr_headlocked_projection_offset_y = 0.0f;
+        const float upm = std::max(
+            upm_override > 0.0f ? upm_override : g_ActiveConfig.vr_units_per_meter, 0.0001f);
         const bool primedgun_cinematic_screen =
             Common::VR::OpenXRInputState::GetPrimedGunOverlay().cinematic_screen_active;
 
         if (VR::g_openxr && VR::g_openxr->IsSessionRunning())
         {
-          const float upm = std::max(upm_override > 0.0f ? upm_override :
-                                                          g_ActiveConfig.vr_units_per_meter,
-                                     0.0001f);
-
           // When vr_lock_head_pose is ON, only re-fetch the head pose from OpenXR when
           // we've been explicitly invalidated (at the XFB-copy frame boundary).  This
           // prevents mid-frame LocateViews() updates from desynchronising different draw
@@ -196,8 +284,10 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
           // render the replay with a different pose than the real frame it pairs
           // with, producing alternating-frame flicker on head rotation.
           const bool is_replay = VideoCommon::OpenXROpcodeReplay::IsReplaying();
-          const bool need_refresh =
-              !is_replay && (!g_ActiveConfig.vr_lock_head_pose || m_vr_pose_needs_refresh);
+          const bool upm_changed = std::abs(upm - m_cached_units_per_meter) > 0.0001f;
+          const bool need_refresh = !is_replay && (upm_changed ||
+                                                   !g_ActiveConfig.vr_lock_head_pose ||
+                                                   m_vr_pose_needs_refresh);
           if (need_refresh)
           {
             std::array<std::array<float, 4>, 4> eye_projection_rows{};
@@ -214,6 +304,7 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
 
             m_cached_eye_projection = eye_projection_rows;
             m_cached_eye_z_row = eye_z_rows;
+            m_cached_units_per_meter = upm;
 
             // Unrotated per-eye projection rows for head-locked content.
             std::array<std::array<float, 4>, 4> head_proj_rows{};
@@ -281,6 +372,17 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
           constants.head_projection[1] = m_cached_head_projection[1];
           constants.head_projection[2] = m_cached_head_projection[2];
           constants.head_projection[3] = m_cached_head_projection[3];
+          for (u32 eye = 0; eye < 2; ++eye)
+          {
+            auto& row0 = constants.head_projection[eye * 2 + 0];
+            auto& row1 = constants.head_projection[eye * 2 + 1];
+            row0[0] *= headlocked_projection_scale_x;
+            row0[3] *= headlocked_projection_scale_x;
+            row0[2] -= headlocked_projection_offset_x;
+            row1[1] *= headlocked_projection_scale_y;
+            row1[3] *= headlocked_projection_scale_y;
+            row1[2] -= headlocked_projection_offset_y;
+          }
           constants.head_locked_params = {g_ActiveConfig.vr_head_locked_curvature, 0.0f, 0.0f,
                                           0.0f};
           constants.pixel_center_correction = vertex_shader_manager.constants.pixelcentercorrection;
@@ -333,6 +435,15 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
 
             // Perspective flag consumed in the OpenXR GS path.
             constants.stereoparams[3] = 1.0f;
+
+            bool is_skybox = false;
+            if (g_ActiveConfig.vr_detect_skybox)
+            {
+              const auto& pnm = vertex_shader_manager.constants.posnormalmatrix;
+              is_skybox = pnm[0][3] == 0.0f && pnm[1][3] == 0.0f &&
+                          pnm[2][3] == 0.0f && pnm[0][0] != 1.0f;
+            }
+            constants.stereoparams[2] = is_skybox ? 0.0f : 1.0f;
           }
           else if (g_ActiveConfig.vr_virtual_screen)
           {
@@ -350,14 +461,99 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
           vr_stereo_override = std::numeric_limits<float>::quiet_NaN();
         }
 
-        // PrimedGun cinema mode renders the game's own projection unchanged and duplicates it
+        // PrimedGun cinema mode renders unmatched game draws unchanged and duplicates them
         // to both EFB layers; SubmitFrame then presents layer 0 as an OpenXR quad screen.
-        if (primedgun_cinematic_screen)
+        // Keep explicit element overrides, otherwise loading/menu text that is deliberately
+        // matched as "screen" gets flattened when a transition camera trips cinema mode.
+        if (primedgun_cinematic_screen && !had_override)
           constants.stereoparams[3] = 0.25f;
+
+        const bool perspective_hud =
+            perspective && VR::g_openxr && VR::g_openxr->IsSessionRunning() &&
+            constants.stereoparams[3] < -2.5f;
+        if (perspective_hud)
+        {
+          const float reference_view_z = vertex_shader_manager.constants.posnormalmatrix[2][3];
+          const bool self_center_layer = metroid_hud_self_center;
+          const bool valid_reference =
+              std::isfinite(reference_view_z) && reference_view_z < 0.0f;
+          if (metroid_hud_anchor_candidate && !self_center_layer && valid_reference)
+          {
+            const bool stable_reference_allowed = IsMetroidHudStableReferenceAllowed(
+                metroid_hud_reference_context, reference_view_z);
+            const bool replace_candidate =
+                stable_reference_allowed &&
+                (!m_vr_hud_frame_anchor_candidate_valid ||
+                 metroid_hud_reference_context != m_vr_hud_frame_anchor_candidate_context ||
+                 reference_view_z < m_vr_hud_frame_anchor_candidate_z);
+            if (replace_candidate)
+            {
+              m_vr_hud_frame_anchor_candidate_z = reference_view_z;
+              m_vr_hud_frame_anchor_candidate_valid = true;
+              m_vr_hud_frame_anchor_candidate_context = metroid_hud_reference_context;
+            }
+          }
+
+          const bool stable_reference_matches =
+              m_vr_hud_stable_reference_valid &&
+              m_vr_hud_stable_reference_context == metroid_hud_reference_context;
+          if ((!m_vr_hud_shared_reference_valid ||
+               m_vr_hud_shared_reference_context != metroid_hud_reference_context) &&
+              !self_center_layer)
+          {
+            if (stable_reference_matches)
+            {
+              m_vr_hud_shared_reference_z = m_vr_hud_stable_reference_z;
+              m_vr_hud_shared_reference_valid = true;
+              m_vr_hud_shared_reference_context = metroid_hud_reference_context;
+            }
+            else if (valid_reference)
+            {
+              m_vr_hud_shared_reference_z = reference_view_z;
+              m_vr_hud_shared_reference_valid = true;
+              m_vr_hud_shared_reference_context = metroid_hud_reference_context;
+            }
+          }
+
+          const float shared_reference_z =
+              m_vr_hud_shared_reference_valid ? m_vr_hud_shared_reference_z : reference_view_z;
+          bool depth_outlier = false;
+          if (std::isfinite(reference_view_z) && reference_view_z < 0.0f &&
+              shared_reference_z < 0.0f)
+          {
+            const float depth_ratio = reference_view_z / shared_reference_z;
+            depth_outlier = depth_ratio < 0.5f || depth_ratio > 2.0f;
+          }
+
+          const float ref_for_transform =
+              (self_center_layer || depth_outlier) ? reference_view_z : shared_reference_z;
+          PerspectiveHudTransform transform = CalculatePerspectiveHudTransform(
+              xfmem.projection.rawProjection, upm, ref_for_transform);
+          if (!transform.valid && ref_for_transform != METROID_PERSPECTIVE_HUD_FALLBACK_REFERENCE_Z)
+          {
+            transform = CalculatePerspectiveHudTransform(
+                xfmem.projection.rawProjection, upm, METROID_PERSPECTIVE_HUD_FALLBACK_REFERENCE_Z);
+          }
+          if (transform.valid)
+          {
+            constants.vr_screen[0] = transform.position[0];
+            constants.vr_screen[1] = transform.position[1];
+            constants.vr_screen[2] = transform.position[2];
+            constants.head_locked_params[1] = transform.scale[0];
+            constants.head_locked_params[2] = transform.scale[1];
+            constants.head_locked_params[3] = transform.scale[2];
+            constants.depth_params[3] = transform.distance;
+          }
+          else
+          {
+            constants.stereoparams[3] = -2.0f;
+          }
+        }
 
         // For ortho/screen draws, pass depth params via depth_params
         // (depth_params is otherwise unused for non-perspective draws).
-        // .x = layer offset (between draw calls), .y = element depth (within draw call)
+        // .x = layer offset (between draw calls), .y = element depth (within draw call),
+        // .z = HUD thickness in game units.
         if (constants.stereoparams[3] < -0.5f)
         {
           constants.depth_params[0] = g_ActiveConfig.vr_layer_offset;
@@ -366,6 +562,11 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
                                           ? vr_element_depth_override
                                           : g_ActiveConfig.vr_element_depth;
           vr_element_depth_override = -1.0f;  // consume
+          constants.depth_params[2] = upm * g_ActiveConfig.vr_hud_thickness;
+          if (perspective_hud)
+            constants.depth_params[3] = constants.depth_params[3] > 0.0f ?
+                                            constants.depth_params[3] :
+                                            upm * g_ActiveConfig.vr_screen_distance;
         }
 
         // ─── Metroid HUD per-layer hacks (Hydra port) ──────────────────────────────────
@@ -377,7 +578,8 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
         const MetroidElementLayer layer_for_hack = vr_metroid_layer;
         vr_metroid_layer = MetroidElementLayer::Unknown;  // consume
         const bool stereo_override_is_screen_family =
-            constants.stereoparams[3] < -0.5f;  // Screen (-1), HeadLocked (-2/-2.25)
+            constants.stereoparams[3] < -0.5f &&
+            constants.stereoparams[3] >= -2.5f;  // Screen (-1), HeadLocked (-2/-2.25)
         if (g_ActiveConfig.vr_hud_3d_enable && stereo_override_is_screen_family &&
             layer_for_hack != MetroidElementLayer::Unknown &&
             VR::g_openxr && VR::g_openxr->IsSessionRunning())
@@ -500,6 +702,24 @@ void GeometryShaderManager::SetProjectionChanged()
 void GeometryShaderManager::InvalidateVRHeadPose()
 {
   m_vr_pose_needs_refresh = true;
+  if (m_vr_hud_frame_anchor_candidate_valid)
+  {
+    const bool stable_reference_allowed = IsMetroidHudStableReferenceAllowed(
+        m_vr_hud_frame_anchor_candidate_context, m_vr_hud_frame_anchor_candidate_z);
+    const bool accept_candidate =
+        stable_reference_allowed &&
+        (!m_vr_hud_stable_reference_valid ||
+         m_vr_hud_frame_anchor_candidate_context != m_vr_hud_stable_reference_context ||
+         m_vr_hud_frame_anchor_candidate_z < m_vr_hud_stable_reference_z);
+    if (accept_candidate)
+    {
+      m_vr_hud_stable_reference_z = m_vr_hud_frame_anchor_candidate_z;
+      m_vr_hud_stable_reference_valid = true;
+      m_vr_hud_stable_reference_context = m_vr_hud_frame_anchor_candidate_context;
+    }
+    m_vr_hud_frame_anchor_candidate_valid = false;
+  }
+  m_vr_hud_shared_reference_valid = false;
 }
 
 void GeometryShaderManager::SetLinePtWidthChanged()
