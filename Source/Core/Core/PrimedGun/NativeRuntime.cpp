@@ -214,8 +214,6 @@ constexpr u32 VR_MENU_LAYOUT_TAB = 0;
 constexpr u32 VR_MENU_CALIBRATION_TAB = 1;
 constexpr float VR_MENU_TEXTURE_WIDTH = 1024.0f;
 constexpr float VR_MENU_TEXTURE_HEIGHT = 512.0f;
-constexpr float VR_MENU_LAYOUT_TEXTURE_WIDTH = 1280.0f;
-constexpr float VR_MENU_LAYOUT_TEXTURE_HEIGHT = 760.0f;
 constexpr u32 VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS = 8;
 constexpr u32 VR_MENU_CALIBRATION_TOTAL_ITEMS = 18;
 constexpr u32 VR_MENU_CALIBRATION_PAGE_COUNT = 2;
@@ -5282,12 +5280,6 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
   {
     const Pose panel_pose = GripControllerPose(panel_hand);
     const Pose pointer_pose = PoseFromOpenXR(pointer_hand.aim_pose);
-    const float menu_texture_width = s_vr_menu_tab == VR_MENU_LAYOUT_TAB ?
-                                         VR_MENU_LAYOUT_TEXTURE_WIDTH :
-                                         VR_MENU_TEXTURE_WIDTH;
-    const float menu_texture_height = s_vr_menu_tab == VR_MENU_LAYOUT_TAB ?
-                                          VR_MENU_LAYOUT_TEXTURE_HEIGHT :
-                                          VR_MENU_TEXTURE_HEIGHT;
     pointer_active = VrMenuPointerHit(panel_pose, pointer_pose, &pointer_x, &pointer_y);
     if (pointer_active)
     {
@@ -5296,7 +5288,7 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
       {
         const int hovered =
             VrMenuRowFromTextureY(s_vr_menu_tab,
-                                  std::clamp(pointer_y, 0.0f, 1.0f) * menu_texture_height,
+                                  std::clamp(pointer_y, 0.0f, 1.0f) * VR_MENU_TEXTURE_HEIGHT,
                                   item_count);
         if (hovered >= 0 && s_vr_menu_selected_index != static_cast<u32>(hovered))
         {
@@ -5316,8 +5308,8 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
     const bool secondary = pointer_hand.connected && pointer_hand.secondary_button;
     if (primary && !s_last_vr_menu_primary)
     {
-      const float texture_x = std::clamp(pointer_x, 0.0f, 1.0f) * menu_texture_width;
-      const float texture_y = std::clamp(pointer_y, 0.0f, 1.0f) * menu_texture_height;
+      const float texture_x = std::clamp(pointer_x, 0.0f, 1.0f) * VR_MENU_TEXTURE_WIDTH;
+      const float texture_y = std::clamp(pointer_y, 0.0f, 1.0f) * VR_MENU_TEXTURE_HEIGHT;
       if (pointer_active && texture_y >= 64.0f && texture_y <= 102.0f)
       {
         constexpr float tab_start_x = 22.0f;

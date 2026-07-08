@@ -158,7 +158,6 @@ inline const PrimedGunPng& LoadPrimedGunPng(const char* filename)
   static PrimedGunPng ice;
   static PrimedGunPng plasma;
   static PrimedGunPng position;
-  static PrimedGunPng controller_layout;
 
   PrimedGunPng* image = &power;
   if (std::strcmp(filename, "wave.png") == 0)
@@ -169,8 +168,6 @@ inline const PrimedGunPng& LoadPrimedGunPng(const char* filename)
     image = &plasma;
   else if (std::strcmp(filename, "position.png") == 0)
     image = &position;
-  else if (std::strcmp(filename, "controller layout.png") == 0)
-    image = &controller_layout;
 
   if (!image->tried)
   {
@@ -455,6 +452,52 @@ inline std::vector<uint32_t> BuildPromptPixels(uint32_t width, uint32_t height)
   return pixels;
 }
 
+inline void DrawLayoutTextPage(std::vector<uint32_t>& pixels, uint32_t width, uint32_t height)
+{
+  constexpr uint32_t title_color = 0xFFFFE6B8u;
+  constexpr uint32_t body_color = 0xFFD8C0A0u;
+  constexpr uint32_t accent_color = 0xFF40F0E0u;
+  constexpr uint32_t row_color = 0x50201810u;
+  constexpr uint32_t rule_color = 0x80FFB030u;
+
+  constexpr const char* title = "CONTROLLER LAYOUT";
+  DrawText(pixels, width, height, title, (static_cast<int>(width) - TextWidth(title, 3)) / 2, 124,
+           3, title_color);
+
+  constexpr const char* visor_help =
+      "PLACE OFFHAND NEAR YOUR HEAD AND USE THE CONTROL STICK TO CHANGE VISORS";
+  DrawText(pixels, width, height, visor_help,
+           (static_cast<int>(width) - TextWidth(visor_help, 2)) / 2, 174, 2, accent_color);
+
+  constexpr int left_x = 72;
+  constexpr int right_x = 570;
+  constexpr int heading_y = 220;
+  DrawText(pixels, width, height, "LEFT HAND", left_x, heading_y, 2, title_color);
+  DrawText(pixels, width, height, "RIGHT HAND", right_x, heading_y, 2, title_color);
+  FillRect(pixels, width, height, left_x, heading_y + 24, 360, 3, rule_color);
+  FillRect(pixels, width, height, right_x, heading_y + 24, 360, 3, rule_color);
+
+  constexpr std::array<const char*, 6> left_rows = {
+      "LEFT STICK - MOVE",       "Y BUTTON - START/PAUSE", "X BUTTON - MORPH BALL",
+      "LEFT STICK CLICK - VR SETTINGS", "LEFT GRIP - MAP",       "L TRIGGER - LOCK ON"};
+  constexpr std::array<const char*, 6> right_rows = {
+      "RIGHT STICK - LOOK/JUMP", "B BUTTON - BEAM SELECT", "A BUTTON - SELECT",
+      "RIGHT STICK CLICK - SET HEIGHT", "RIGHT GRIP - MISSILES", "RIGHT TRIGGER - SHOOT"};
+
+  for (int i = 0; i < 6; ++i)
+  {
+    const int y = 262 + i * 34;
+    FillRect(pixels, width, height, left_x - 14, y - 8, 398, 26, row_color);
+    FillRect(pixels, width, height, right_x - 14, y - 8, 398, 26, row_color);
+    FillRect(pixels, width, height, left_x - 14, y - 8, 5, 26, rule_color);
+    FillRect(pixels, width, height, right_x - 14, y - 8, 5, 26, rule_color);
+    DrawText(pixels, width, height, left_rows[static_cast<size_t>(i)], left_x, y, 2,
+             body_color);
+    DrawText(pixels, width, height, right_rows[static_cast<size_t>(i)], right_x, y, 2,
+             body_color);
+  }
+}
+
 inline std::vector<uint32_t> BuildMenuPixels(uint32_t width, uint32_t height,
                                              const Common::VR::PrimedGunVrOverlayState& s)
 {
@@ -491,8 +534,7 @@ inline std::vector<uint32_t> BuildMenuPixels(uint32_t width, uint32_t height,
 
   if (s.tab == VR_MENU_LAYOUT_TAB)
   {
-    DrawPngFit(pixels, width, height, LoadPrimedGunPng("controller layout.png"), 20, 112,
-               static_cast<int>(width) - 40, static_cast<int>(height) - 126, false);
+    DrawLayoutTextPage(pixels, width, height);
     return pixels;
   }
 
