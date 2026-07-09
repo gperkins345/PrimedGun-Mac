@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <set>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -836,26 +835,6 @@ void LogMetroidPrime1XRayDraw(u32 draw_counter,
                               u64 gs_hash, int forced_texture_layer,
                               bool signature_fallback, bool d3d_tex0_layer_fallback)
 {
-  // QuestPrimeVR diagnostic (QPVR_PG_LOG): log each distinct (layer, handling) combo ONCE so the
-  // scan reticle draw's real fate is visible — is it Skip (hidden) or HeadLocked (rendered)?
-  // Deduplicated by layer+handling, so it never floods regardless of draw volume.
-  static const bool s_qpvr_layer_log = getenv("QPVR_PG_LOG") != nullptr;
-  if (s_qpvr_layer_log && draw && draw->profile_id == MetroidElementProfile::Prime1GC) [[unlikely]]
-  {
-    static std::set<u32> s_seen_layer_handling;
-    const u32 key = (static_cast<u32>(draw->profile_layer) << 8) | static_cast<u32>(handling);
-    if (s_seen_layer_handling.insert(key).second)
-    {
-      const auto& sig = draw->signature;
-      NOTICE_LOG_FMT(VIDEO,
-                     "QPVR_LAYER layer='{}' handling={} proj={} zt={} zupd={} PS={:08x} "
-                     "(first draw #{})",
-                     draw->profile_layer_name, HandlingToDebugName(handling),
-                     sig.perspective ? "persp" : "ortho", sig.ztest, sig.zupdate, ps_hash,
-                     draw_counter);
-    }
-  }
-
   if (!ENABLE_PRIMEDGUN_VIDEO_DEBUG_LOGGING)
     return;
 
@@ -2006,17 +1985,7 @@ void VertexManagerBase::Flush()
           {
             const MetroidLayerBehavior layer_behavior =
                 GetMetroidLayerBehavior(element_draw->profile_layer);
-            // QuestPrimeVR: the Sys GameSettingsVR config is the source of truth for what renders.
-            // v1.1.0 moved scan-visor layers into RENDER groups (SCAN_RETICLE=headlocked,
-            // SCAN_DARKEN/SCAN_HIGHLIGHTER=fullscreen_mono), but this legacy hardcoded skip-list
-            // still marks them {.skip=true} and culls them BEFORE the config handling is consulted
-            // below (line ~2038) — so the reticle/darken/highlight never render. Honor an explicit
-            // config render-handling over the stale hardcoded skip. Layers the config wants hidden
-            // (stock ScanBox, in a skip group) still return Skip here and stay culled.
-            const bool config_wants_render =
-                elements_has_overrides &&
-                elements.GetOverrideHandling(*element_draw) != ShaderHunter::HandlingType::Skip;
-            if (layer_behavior.skip && !config_wants_render)
+            if (layer_behavior.skip)
             {
               LogPrimedGunElementHandling(m_draw_counter, element_draw,
                                           ShaderHunter::HandlingType::Skip, vs_hash, ps_hash,

@@ -3943,25 +3943,6 @@ void UpdateScanTargetingFromHmd(const Core::CPUThreadGuard& guard,
     found = PickScanTargetFromHmd(guard, state_manager, player, hmd, settings, &pick);
   }
 
-  // QuestPrimeVR diagnostic (QPVR_PG_LOG): report the two game-side gates that decide whether the
-  // head-scan produces the mod's behavior vs. stock. have_visor/marker_found gate bracket
-  // injection (EnsureUidInScanVisorTargets); orbit_state (player+0x304) gates the camera-snap
-  // suppression in the orbit-aim hook. Throttled so it doesn't flood.
-  if (RuntimeLoggingEnabled() && (s_frame_counter % 30u) == 5u)
-  {
-    u32 orbit_state = 0, orbit_target = 0, aim_target = 0, reticle_bb = 0, orbit_enable = 0;
-    TryReadU32(guard, player + PLAYER_ORBIT_STATE_OFFSET, &orbit_state);
-    TryReadU32(guard, player + PLAYER_ORBIT_TARGET_ID_OFFSET, &orbit_target);
-    TryReadU32(guard, player + PLAYER_AIM_TARGET_ID_OFFSET, &aim_target);
-    TryReadU32(guard, RETICLE_BILLBOARD_SCRATCH, &reticle_bb);
-    TryReadU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, &orbit_enable);
-    NOTICE_LOG_FMT(CORE,
-                   "PrimedGun scan_gate have_visor={} marker={} found={} orbit_state={:08X} "
-                   "orbit_target={:04X} aim_target={:04X} reticle_billboard={} orbit_aim_enable={}",
-                   have_visor, marker_found, found, orbit_state, orbit_target & 0xffffu,
-                   aim_target & 0xffffu, reticle_bb, orbit_enable);
-  }
-
   if (found)
   {
     if (RuntimeLoggingEnabled() &&
