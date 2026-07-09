@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <set>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -835,6 +836,29 @@ void LogMetroidPrime1XRayDraw(u32 draw_counter,
                               u64 gs_hash, int forced_texture_layer,
                               bool signature_fallback, bool d3d_tex0_layer_fallback)
 {
+  // QuestPrimeVR diagnostic (QPVR_PG_LOG): log EVERY distinct draw (by PS hash), not just
+  // Prime1GC-classified ones — the scan crosshair may be classified as something else (or
+  // unclassified), which my earlier Prime1GC-only filter would have hidden. Dedup by PS hash so
+  // it stays readable, and include projection + viewport (the crosshair is full-screen-width
+  // lines = a distinctive ortho/large-viewport draw). This is the wide net to find it.
+  static const bool s_qpvr_layer_log = getenv("QPVR_PG_LOG") != nullptr;
+  if (s_qpvr_layer_log && draw) [[unlikely]]
+  {
+    static std::set<u64> s_seen_ps;
+    if (s_seen_ps.insert(ps_hash).second)
+    {
+      const auto& sig = draw->signature;
+      NOTICE_LOG_FMT(VIDEO,
+                     "QPVR_DRAW PS={:08x} layer='{}' handling={} proj={} zt={} zupd={} "
+                     "VP({}x{}) ortho(l={} r={} t={} b={}) blend(c={},a={}) (draw #{})",
+                     ps_hash, draw->profile_layer_name, HandlingToDebugName(handling),
+                     sig.perspective ? "persp" : "ortho", sig.ztest, sig.zupdate,
+                     sig.viewport_width, sig.viewport_height, sig.ortho_left_x100,
+                     sig.ortho_right_x100, sig.ortho_top_x100, sig.ortho_bottom_x100,
+                     sig.blend_color_update, sig.blend_alpha_update, draw_counter);
+    }
+  }
+
   if (!ENABLE_PRIMEDGUN_VIDEO_DEBUG_LOGGING)
     return;
 
@@ -2000,6 +2024,27 @@ void VertexManagerBase::Flush()
 
           if (!hunter_skip && !elements_skip && texmgr_has_overrides)
             texmgr_skip = texmgr.ShouldSkipByTexture(tex_hashes);
+
+          // QuestPrimeVR diagnostic (QPVR_REVEAL_SKIPPED): render every draw that WOULD be culled
+          // as solid magenta instead of hiding it, and log its hash. In the scan visor this reveals
+          // the intentionally-hidden elements (scan box/darken/highlight, EFB copies) — if the
+          // missing crosshair is one of them (drawn-but-culled), it shows up pink and I get its
+          // hash; if nothing pink appears where the crosshair belongs, it's genuinely not drawn.
+          static const bool s_qpvr_reveal_skipped = getenv("QPVR_REVEAL_SKIPPED") != nullptr;
+          if (s_qpvr_reveal_skipped && (hunter_skip || elements_skip || texmgr_skip)) [[unlikely]]
+          {
+            if (getenv("QPVR_PG_LOG"))
+              NOTICE_LOG_FMT(VIDEO,
+                             "QPVR_REVEAL PS={:08x} layer='{}' proj={} VP({}x{}) (draw #{})",
+                             ps_hash, element_draw ? element_draw->profile_layer_name : "?",
+                             draw_signature.perspective ? "persp" : "ortho",
+                             draw_signature.viewport_width, draw_signature.viewport_height,
+                             m_draw_counter);
+            hunter_skip = false;
+            elements_skip = false;
+            texmgr_skip = false;
+            shader_hunter_force_pink = true;
+          }
 
           // Check for screen/fullscreen handling overrides (VR stereo mode override)
           if (!hunter_skip && !elements_skip && !texmgr_skip)
