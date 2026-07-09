@@ -79,6 +79,9 @@ struct Matrix3x4
   const float& At(int row, int col) const { return m[row * 4 + col]; }
 };
 
+Pose PoseFromOpenXR(const Common::VR::OpenXRPoseState& xr_pose);
+bool LeftControllerNearHead(const Pose& left, const Pose& hmd, const RuntimeSettings& settings);
+
 bool PoseNumbersLookValid(const Pose& pose)
 {
   if (!pose.valid || !std::isfinite(pose.px) || !std::isfinite(pose.py) ||
@@ -145,6 +148,7 @@ constexpr u32 CANNON_BASIS_SCRATCH = SCRATCH_BASE + 0x000u;
 constexpr u32 CANNON_EXPECTED_GUN_SCRATCH = SCRATCH_BASE + 0x038u;
 constexpr u32 MODEL_OFFSET_WORLD_SCRATCH = SCRATCH_BASE + 0x040u;
 constexpr u32 ADJUSTED_GUN_POS_SCRATCH = SCRATCH_BASE + 0x050u;
+constexpr u32 AUDIO_LISTENER_CAVE = SCRATCH_BASE + 0x080u;
 constexpr u32 GUN_TARGET_SCRATCH = SCRATCH_BASE + 0x400u;
 constexpr u32 RETICLE_BILLBOARD_SCRATCH = SCRATCH_BASE + 0x500u;
 constexpr u32 SCAN_RETICLE_TRACE_SCRATCH = SCRATCH_BASE + 0x540u;
@@ -154,6 +158,9 @@ constexpr u32 DPAD_DISABLE_OWNER_SCRATCH = SCRATCH_BASE + 0x684u;
 constexpr u32 DPAD_DISABLE_FLAGS_ADDR_SCRATCH = SCRATCH_BASE + 0x688u;
 constexpr u32 DPAD_DISABLE_ORIGINAL_FLAGS_SCRATCH = SCRATCH_BASE + 0x68Cu;
 constexpr u32 GAMEFLOW_MENU_SCRATCH = SCRATCH_BASE + 0x690u;
+constexpr u32 MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH = SCRATCH_BASE + 0x694u;
+constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH = SCRATCH_BASE + 0x698u;
+constexpr u32 AUDIO_LISTENER_SCRATCH = SCRATCH_BASE + 0x700u;
 constexpr u32 DPAD_DISABLE_OWNER_MAGIC = 0x50474450u;  // PGDP
 
 constexpr u32 FIRST_PERSON_PITCH_LOAD_CAVE = PATCH_CODE_ARENA_BASE + 0x000u;
@@ -175,6 +182,24 @@ constexpr u32 SCAN_RETICLE_TRACE_CAVE = PATCH_CODE_ARENA_BASE + 0x540u;
 constexpr u32 SCAN_RETICLE_TRACE_CURR_CAVE = PATCH_CODE_ARENA_BASE + 0x580u;
 constexpr u32 SCAN_INDICATOR_UPDATE_TRACE_CAVE = PATCH_CODE_ARENA_BASE + 0x5C0u;
 constexpr u32 SCAN_INDICATOR_VIEW_BASIS_CAVE = PATCH_CODE_ARENA_BASE + 0x600u;
+constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_CAVE = PATCH_CODE_ARENA_BASE + 0x6C0u;
+constexpr u32 LEGACY_MORPHBALL_CAMERA_RETURN_ADDRESS = 0x8000A9B4u;
+constexpr u32 LEGACY_MORPHBALL_CAMERA_RETURN_CAVE = PATCH_CODE_ARENA_BASE + 0x680u;
+constexpr u32 LEGACY_MORPHBALL_CAMERA_RETURN_ORIGINAL = 0x80010054u;
+constexpr u32 BALL_CAMERA_LEVEL_PATCH_ADDRESS = 0x800830A0u;
+constexpr u32 BALL_CAMERA_LEVEL_PATCH_ORIGINAL = 0x387F0034u;
+constexpr u32 BALL_CAMERA_LEVEL_CAVE = PATCH_CODE_ARENA_BASE + 0xB40u;
+constexpr u32 INTERPOLATION_CAMERA_LEVEL_PATCH_ADDRESS = 0x8026529Cu;
+constexpr u32 INTERPOLATION_CAMERA_LEVEL_PATCH_ORIGINAL = 0x887E00E4u;
+constexpr u32 INTERPOLATION_CAMERA_LEVEL_CAVE = PATCH_CODE_ARENA_BASE + 0xB80u;
+constexpr u32 AUDIO_LISTENER_PATCH_ADDRESS = 0x8000BA88u;
+constexpr u32 AUDIO_LISTENER_PATCH_ORIGINAL = 0xD1010008u;
+constexpr u32 AUDIO_LISTENER_LEGACY_BAD_CAVE = 0x80002300u;
+constexpr u32 AUDIO_LISTENER_LEGACY_HIGH_CAVE = 0x817F8000u;
+constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ADDRESS = 0x8000E71Cu;
+constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ORIGINAL = 0x801E0304u;
+constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_SKIP_ADDRESS = 0x8000E9C4u;
+constexpr u32 PPC_BLR = 0x4E800020u;
 constexpr u32 LOAD_ZERO_TO_F1 = 0xC02280B0u;
 constexpr u32 LOAD_ZERO_TO_F31 = 0xC3E280B0u;
 constexpr u32 DRAW_NEXT_LOCK_ON_GROUP = 0x800BD808u;
@@ -183,19 +208,29 @@ constexpr u32 UPDATE_SCAN_OBJECT_INDICATORS = 0x80112508u;
 constexpr u32 DRAW_SCAN_INDICATOR_MODEL_BASIS = 0x801122CCu;
 constexpr u32 DRAW_SCAN_INDICATOR_MODEL_BASIS_ORIGINAL = 0xC0410074u;
 
-constexpr u32 VR_MENU_TAB_COUNT = 5;
-constexpr u32 VR_MENU_CONTROL_TAB = 1;
-constexpr u32 VR_MENU_MOVEMENT_TAB = 2;
-constexpr u32 VR_MENU_CANNON_TAB = 3;
-constexpr u32 VR_MENU_STATE_TAB = 4;
-constexpr u32 VR_MENU_CONTROL_FIRST_PAGE_ITEMS = 6;
+constexpr u32 VR_MENU_TAB_COUNT = 6;
+constexpr u32 VR_MENU_LAYOUT_TAB = 0;
+constexpr u32 VR_MENU_CALIBRATION_TAB = 1;
+constexpr float VR_MENU_TEXTURE_WIDTH = 1024.0f;
+constexpr float VR_MENU_TEXTURE_HEIGHT = 512.0f;
+constexpr u32 VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS = 8;
+constexpr u32 VR_MENU_CALIBRATION_TOTAL_ITEMS = 18;
+constexpr u32 VR_MENU_CALIBRATION_PAGE_COUNT = 2;
+constexpr u32 VR_MENU_CONTROL_TAB = 2;
+constexpr u32 VR_MENU_MOVEMENT_TAB = 3;
+constexpr u32 VR_MENU_CANNON_TAB = 4;
+constexpr u32 VR_MENU_STATE_TAB = 5;
+constexpr u32 VR_MENU_CONTROL_FIRST_PAGE_ITEMS = 8;
+constexpr u32 VR_MENU_CONTROL_TOTAL_ITEMS = 16;
 constexpr u32 VR_MENU_CONTROL_PAGE_COUNT = 2;
+constexpr std::array<int, 4> SNAP_TURN_DEGREES_CHOICES = {30, 45, 60, 90};
 constexpr float VR_MENU_ROW_TEXT_Y = 146.0f;
 constexpr float VR_MENU_ROW_STEP_Y = 22.0f;
 constexpr float VR_MENU_ROW_HIT_HALF_HEIGHT = 13.0f;
 constexpr float VR_MENU_STATE_ROW_GAP_Y = 18.0f;
 constexpr u64 VR_MENU_STATE_CONFIRM_FRAMES = 360;
 constexpr u64 VR_MENU_RESET_CONFIRM_FRAMES = 360;
+constexpr u64 VR_MENU_LONG_PRESS_FRAMES = 60;
 constexpr u32 VR_MENU_RESET_ALL_ACTION = 1;
 constexpr u32 VR_MENU_RESET_TARGETING_ACTION = 2;
 constexpr u32 VR_MENU_RESET_CALIBRATION_ACTION = 3;
@@ -210,6 +245,7 @@ constexpr std::array<const char*, 3> PRIMEGUN_CANNON_TEXTURE_NAMES = {
     "tex1_64x64_m_c7625e7ecd9cd5c2_14",
 };
 constexpr bool ENABLE_PRIMEDGUN_RUNTIME_LOGGING = false;
+constexpr bool ENABLE_PRIMEDGUN_LOCK_LOGGING = false;
 
 constexpr u32 FINAL_INPUT_OFFSET = 0xB54u;
 constexpr u32 FINAL_INPUT_RIGHT_STICK_X = FINAL_INPUT_OFFSET + 0x10u;
@@ -219,6 +255,11 @@ constexpr u32 FINAL_INPUT_RIGHT_STICK_Y_PRESS = FINAL_INPUT_OFFSET + 0x23u;
 constexpr u32 FINAL_INPUT_DPAD_HELD_0 = FINAL_INPUT_OFFSET + 0x2Cu;
 constexpr u32 FINAL_INPUT_DPAD_HELD_1 = FINAL_INPUT_OFFSET + 0x2Du;
 constexpr u32 STATE_MANAGER_PLAYER_STATE_OFFSET = 0x8B8u;
+constexpr u32 STATE_MANAGER_WORLD_TRANS_MANAGER_REF_OFFSET = 0x8C4u;
+constexpr u32 RSTL_REF_DATA_OBJECT_OFFSET = 0x00u;
+constexpr u32 WORLD_TRANS_MANAGER_TYPE_OFFSET = 0x30u;
+constexpr u32 WORLD_TRANS_MANAGER_TYPE_ELEVATOR = 1u;
+constexpr u64 CINEMATIC_SCREEN_SIGNAL_LOSS_GRACE_FRAMES = 10u;
 constexpr u32 PLAYER_STATE_CURRENT_VISOR_OFFSET = 0x14u;
 constexpr u32 PLAYER_STATE_TRANSITION_VISOR_OFFSET = 0x18u;
 constexpr u32 PLAYER_STATE_MAX_VISOR = 3u;
@@ -240,12 +281,25 @@ constexpr u32 PLAYER_FREE_LOOK_YAW_ANGLE_OFFSET = 0x3E4u;
 constexpr u32 PLAYER_FREE_LOOK_YAW_VEL_OFFSET = 0x3E8u;
 constexpr u32 PLAYER_FREE_LOOK_PITCH_ANGLE_OFFSET = 0x3ECu;
 constexpr u32 PLAYER_VISOR_STATE_OFFSET = 0x330u;
+constexpr u32 PLAYER_VISOR_SCAN_TARGETS_OFFSET = 0x13Cu;
+constexpr u32 PLAYER_VISOR_SCAN_TARGET_DATA_OFFSET = PLAYER_VISOR_SCAN_TARGETS_OFFSET + 4u;
+constexpr u32 PLAYER_VISOR_SCAN_TARGET_SLOT_SIZE = 0x10u;
+constexpr u32 PLAYER_VISOR_SCAN_TARGET_CAPACITY = 64u;
+constexpr u32 PLAYER_VISOR_SCAN_FRAME_COLOR_INTERP_OFFSET = 0x54Cu;
+constexpr u32 PLAYER_VISOR_SCAN_FRAME_COLOR_IMPULSE_OFFSET = 0x550u;
+constexpr float PLAYER_VISOR_SCAN_TARGET_VALID_TIMER = 1.0f;
 constexpr u32 GP_GAME_STATE = 0x805A8C40u;
 constexpr u32 GAME_OPTIONS_HELMET_ALPHA_OFFSET = 0x17Cu + 0x64u;
+constexpr u64 GAMEPLAY_INPUT_LOSS_HOLD_FRAMES = 18u;
 
 bool RuntimeLoggingEnabled()
 {
   return ENABLE_PRIMEDGUN_RUNTIME_LOGGING;
+}
+
+bool LockLoggingEnabled()
+{
+  return ENABLE_PRIMEDGUN_LOCK_LOGGING;
 }
 
 void AppendScanDebugLine(std::string_view line)
@@ -255,6 +309,21 @@ void AppendScanDebugLine(std::string_view line)
 
   File::CreateFullPath(File::GetUserPath(D_LOGS_IDX));
   File::IOFile file(File::GetUserPath(D_LOGS_IDX) + "PrimedGunScan.log", "ab");
+  if (!file)
+    return;
+
+  file.WriteBytes(line.data(), line.size());
+  static constexpr char newline = '\n';
+  file.WriteBytes(&newline, 1);
+}
+
+void AppendLockDebugLine(std::string_view line)
+{
+  if (!LockLoggingEnabled())
+    return;
+
+  File::CreateFullPath(File::GetUserPath(D_LOGS_IDX));
+  File::IOFile file(File::GetUserPath(D_LOGS_IDX) + "PrimedGunLock.log", "ab");
   if (!file)
     return;
 
@@ -301,12 +370,20 @@ bool s_last_vr_menu_stick_down = false;
 bool s_last_vr_menu_stick_left = false;
 bool s_last_vr_menu_stick_right = false;
 bool s_vr_menu_visible = false;
+bool s_cinematic_screen_active = false;
+u64 s_cinematic_screen_hold_until_frame = 0;
+u32 s_cinematic_screen_generation = 0;
+bool s_snap_turn_ready = true;
+u64 s_snap_turn_cooldown_until_frame = 0;
 u32 s_vr_menu_tab = 0;
 u32 s_vr_menu_selected_index = 0;
+u32 s_vr_menu_calibration_page = 0;
 u32 s_vr_menu_control_page = 0;
 u32 s_vr_menu_generation = 1;
 u64 s_vr_menu_saved_notice_until_frame = 0;
 u64 s_vr_menu_input_suppress_until_frame = 0;
+u64 s_vr_menu_long_press_start_frame = 0;
+bool s_vr_menu_long_press_consumed = false;
 u32 s_vr_cannon_texture_slot = 0;
 u64 s_vr_cannon_texture_notice_until_frame = 0;
 bool s_vr_settings_save_requested = false;
@@ -330,9 +407,11 @@ u64 s_dpad_last_disable_refresh_frame = 0;
 float s_directional_move_speed = 0.0f;
 std::atomic_bool s_gameplay_input_active{false};
 std::atomic_bool s_orbit_lock_active{false};
+u64 s_gameplay_input_hold_until_frame = 0;
 bool s_last_logged_gameplay_input_active = false;
 bool s_have_logged_gameplay_input_active = false;
 u64 s_last_mode_probe_frame = 0;
+u64 s_last_camera_watchdog_frame = 0;
 u32 s_last_mode_probe_camera_state = 0xffffffffu;
 u32 s_last_mode_probe_morph_state = 0xffffffffu;
 u32 s_last_mode_probe_movement_state = 0xffffffffu;
@@ -350,8 +429,11 @@ u32 s_last_patch_player = 0;
 u64 s_patch_reapply_until_frame = 0;
 u64 s_last_cannon_feed_watchdog_frame = 0;
 u32 s_cannon_feed_stall_frames = 0;
+u64 s_last_scan_reticle_watchdog_frame = 0;
+u32 s_scan_reticle_bad_samples = 0;
 bool s_cannon_hand_pose_ready = false;
 bool s_smooth_matrix_valid = false;
+u64 s_cannon_smoothing_bypass_until_frame = 0;
 float s_smooth_matrix[12] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
                              0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
 
@@ -414,6 +496,18 @@ DynamicPpcPatch s_scan_indicator_update_trace_patch{
 DynamicPpcPatch s_scan_indicator_view_basis_patch{
     DRAW_SCAN_INDICATOR_MODEL_BASIS, DRAW_SCAN_INDICATOR_MODEL_BASIS_ORIGINAL, 0,
     SCAN_INDICATOR_VIEW_BASIS_CAVE, false};
+
+DynamicPpcPatch s_ball_camera_level_patch{
+    BALL_CAMERA_LEVEL_PATCH_ADDRESS, BALL_CAMERA_LEVEL_PATCH_ORIGINAL, 0,
+    BALL_CAMERA_LEVEL_CAVE, false};
+DynamicPpcPatch s_interpolation_camera_level_patch{
+    INTERPOLATION_CAMERA_LEVEL_PATCH_ADDRESS, INTERPOLATION_CAMERA_LEVEL_PATCH_ORIGINAL, 0,
+    INTERPOLATION_CAMERA_LEVEL_CAVE, false};
+DynamicPpcPatch s_first_person_orbit_aim_vector_patch{
+    FIRST_PERSON_ORBIT_AIM_VECTOR_ADDRESS, FIRST_PERSON_ORBIT_AIM_VECTOR_ORIGINAL, 0,
+    FIRST_PERSON_ORBIT_AIM_VECTOR_CAVE, false};
+DynamicPpcPatch s_audio_listener_patch{
+    AUDIO_LISTENER_PATCH_ADDRESS, AUDIO_LISTENER_PATCH_ORIGINAL, 0, AUDIO_LISTENER_CAVE, false};
 
 ProjectileTransformPatch s_projectile_transform_patches[] = {
     {0x800E0434u, 0, WAVE_PROJECTILE_TRANSFORM_CAVE, 6, false},
@@ -542,10 +636,9 @@ void ParseBuiltinPatches()
       continue;
     }
 
-    // PrimedGun's built-in patch block uses AR-style dword writes. Accept both 04 and 05
-    // command pages so hook caves can live in high MEM1 instead of low game code space.
+    // PrimedGun's built-in patch block uses AR-style dword writes.
     const u8 command_page = static_cast<u8>(command >> 24);
-    if (command_page != 0x04 && command_page != 0x05)
+    if (command_page != 0x04)
       continue;
 
     s_builtin_patches.push_back({0x80000000u | (command & 0x01ff'ffffu), value, current_group});
@@ -1257,7 +1350,7 @@ void LogScanReticleTrace(const Core::CPUThreadGuard& guard, u32 player)
 
   u32 camera_manager = 0;
   u32 camera = 0;
-  TryReadU32(guard, ADDRESS.state_manager + 0x84Cu, &camera_manager);
+  TryReadU32(guard, ADDRESS.state_manager + ADDRESS.camera_manager_offset, &camera_manager);
   if (camera_manager >= 0x80000000u)
     TryReadU32(guard, camera_manager + 0x10u, &camera);
 
@@ -1643,7 +1736,7 @@ bool RayIntersectsAabb(float ray_x, float ray_y, float ray_z, float dir_x, float
     return false;
   }
 
-  *hit_along = starts_inside ? t_max : std::max(t_min, 0.0f);
+  *hit_along = starts_inside ? 0.0f : std::max(t_min, 0.0f);
   return std::isfinite(*hit_along) && *hit_along <= max_along;
 }
 
@@ -1655,12 +1748,14 @@ bool RayMetricsForPoint(float ray_x, float ray_y, float ray_z, float dir_x, floa
   const float vy = y - ray_y;
   const float vz = z - ray_z;
   const float along = vx * dir_x + vy * dir_y + vz * dir_z;
-  if (along < 0.5f || along > max_along)
+  if (along < -0.5f || along > max_along)
     return false;
 
-  const float nearest_x = ray_x + dir_x * along;
-  const float nearest_y = ray_y + dir_y * along;
-  const float nearest_z = ray_z + dir_z * along;
+  const float clamped_along = std::max(along, 0.0f);
+
+  const float nearest_x = ray_x + dir_x * clamped_along;
+  const float nearest_y = ray_y + dir_y * clamped_along;
+  const float nearest_z = ray_z + dir_z * clamped_along;
   const float dx = x - nearest_x;
   const float dy = y - nearest_y;
   const float dz = z - nearest_z;
@@ -1671,7 +1766,7 @@ bool RayMetricsForPoint(float ray_x, float ray_y, float ray_z, float dir_x, floa
   metrics->x = x;
   metrics->y = y;
   metrics->z = z;
-  metrics->along = along;
+  metrics->along = clamped_along;
   metrics->perp = std::sqrt(perp_sq);
   metrics->radius = 0.0f;
   metrics->valid = true;
@@ -1710,17 +1805,34 @@ bool RayMetricsForAabb(float ray_x, float ray_y, float ray_z, float dir_x, float
     return true;
   }
 
-  RayCandidateMetrics center_metrics = {};
-  if (!RayMetricsForPoint(ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, center_x, center_y, center_z,
-                          max_along + projected_radius, &center_metrics))
+  const float vx = center_x - ray_x;
+  const float vy = center_y - ray_y;
+  const float vz = center_z - ray_z;
+  const float along = vx * dir_x + vy * dir_y + vz * dir_z;
+  if (!std::isfinite(along) || along < -projected_radius ||
+      along > max_along + projected_radius)
   {
     return false;
   }
 
-  center_metrics.along = std::clamp(center_metrics.along, 0.5f, max_along);
-  center_metrics.perp = std::max(0.0f, center_metrics.perp - projected_radius);
-  center_metrics.radius = projected_radius;
-  *metrics = center_metrics;
+  const float clamped_along = std::clamp(along, 0.0f, max_along);
+  const float nearest_x = ray_x + dir_x * clamped_along;
+  const float nearest_y = ray_y + dir_y * clamped_along;
+  const float nearest_z = ray_z + dir_z * clamped_along;
+  const float dx = center_x - nearest_x;
+  const float dy = center_y - nearest_y;
+  const float dz = center_z - nearest_z;
+  const float perp_sq = dx * dx + dy * dy + dz * dz;
+  if (!std::isfinite(perp_sq))
+    return false;
+
+  metrics->x = nearest_x;
+  metrics->y = nearest_y;
+  metrics->z = nearest_z;
+  metrics->along = clamped_along;
+  metrics->perp = std::max(0.0f, std::sqrt(perp_sq) - projected_radius);
+  metrics->radius = projected_radius;
+  metrics->valid = true;
   return true;
 }
 
@@ -1902,6 +2014,14 @@ void WriteGunTargetScratch(const Core::CPUThreadGuard& guard, u32 player, u16 ui
   TryWriteU16(guard, GUN_TARGET_SCRATCH + 4u, uid);
 }
 
+void ClearScanReticleScratch(const Core::CPUThreadGuard& guard, u32 player)
+{
+  WriteGunTargetScratch(guard, player, 0xffffu);
+  TryWriteU32(guard, RETICLE_BILLBOARD_SCRATCH, 0);
+  for (u32 offset = 4u; offset <= 0x24u; offset += 4u)
+    TryWriteU32(guard, RETICLE_BILLBOARD_SCRATCH + offset, 0);
+}
+
 bool ObjectByUid(const Core::CPUThreadGuard& guard, u32 state_manager, u16 uid, u32* obj)
 {
   if (uid == 0xffffu || state_manager < 0x80000000u || obj == nullptr)
@@ -1935,6 +2055,20 @@ bool ObjectLooksLikeVanillaTarget(const Core::CPUThreadGuard& guard, u32 obj)
           ActorHasMaterial(guard, obj, 39) || ActorIsGrapplePoint(guard, obj));
 }
 
+bool EntityLooksActive(const Core::CPUThreadGuard& guard, u32 obj)
+{
+  u8 flags = 0;
+  return PrimeGameObjectPointerLooksValid(obj, 0x31u) && TryReadU8(guard, obj + 0x30u, &flags) &&
+         (flags & 0x80u) != 0;
+}
+
+bool ActorHasScanInfo(const Core::CPUThreadGuard& guard, u32 obj)
+{
+  u32 scan_info = 0;
+  return PrimeGameObjectPointerLooksValid(obj, 0x9cu) &&
+         TryReadU32(guard, obj + 0x98u, &scan_info) && scan_info >= 0x80000000u;
+}
+
 bool ReadVanillaTargetUid(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player,
                           u32 gun, u16* uid)
 {
@@ -1963,6 +2097,44 @@ bool ReadVanillaTargetUid(const Core::CPUThreadGuard& guard, u32 state_manager, 
   }
 
   return false;
+}
+
+bool PlayerHasVanillaTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player)
+{
+  constexpr std::array<u32, 3> target_offsets = {
+      PLAYER_ORBIT_TARGET_ID_OFFSET,
+      PLAYER_ORBIT_LOCK_ID_OFFSET,
+      PLAYER_AIM_TARGET_ID_OFFSET,
+  };
+
+  for (const u32 offset : target_offsets)
+  {
+    u16 candidate_uid = 0xffffu;
+    u32 obj = 0;
+    if (ReadPlayerTargetUid(guard, player, offset, &candidate_uid) &&
+        ObjectByUid(guard, state_manager, candidate_uid, &obj) && obj != player &&
+        ObjectLooksLikeVanillaTarget(guard, obj))
+    {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool PlayerHasPrimedGunTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player)
+{
+  u32 scratch_player = 0;
+  u16 uid = 0xffffu;
+  return TryReadU32(guard, GUN_TARGET_SCRATCH, &scratch_player) && scratch_player == player &&
+         TryReadU16(guard, GUN_TARGET_SCRATCH + 4u, &uid) &&
+         TargetUidStillExists(guard, state_manager, uid, 0);
+}
+
+bool PlayerHasOrbitControlTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player)
+{
+  return PlayerHasVanillaTarget(guard, state_manager, player) ||
+         PlayerHasPrimedGunTarget(guard, state_manager, player);
 }
 
 bool ResolveActiveCameraTransform(const Core::CPUThreadGuard& guard, u32* transform);
@@ -2016,6 +2188,237 @@ bool CandidateListContainsUid(const std::vector<ScanTargetCandidate>& candidates
       return true;
   }
   return false;
+}
+
+void SetScanVisorValidDirectionPhases(const Core::CPUThreadGuard& guard, u32 visor)
+{
+  if (visor < 0x80000000u ||
+      !PrimeDataPointerLooksValid(visor + PLAYER_VISOR_SCAN_FRAME_COLOR_INTERP_OFFSET, 8u))
+  {
+    return;
+  }
+
+  TryWriteFloat(guard, visor + PLAYER_VISOR_SCAN_FRAME_COLOR_INTERP_OFFSET, 1.0f);
+  TryWriteFloat(guard, visor + PLAYER_VISOR_SCAN_FRAME_COLOR_IMPULSE_OFFSET, 1.0f);
+}
+
+void EnsureUidInScanVisorTargets(const Core::CPUThreadGuard& guard, u32 visor, u16 uid)
+{
+  if (visor < 0x80000000u || uid == 0xffffu ||
+      !PrimeDataPointerLooksValid(visor + PLAYER_VISOR_SCAN_TARGETS_OFFSET,
+                                  4u + PLAYER_VISOR_SCAN_TARGET_CAPACITY *
+                                           PLAYER_VISOR_SCAN_TARGET_SLOT_SIZE))
+  {
+    return;
+  }
+
+  u32 count = 0;
+  if (!TryReadU32(guard, visor + PLAYER_VISOR_SCAN_TARGETS_OFFSET, &count) ||
+      count > PLAYER_VISOR_SCAN_TARGET_CAPACITY)
+  {
+    return;
+  }
+
+  const u32 data = visor + PLAYER_VISOR_SCAN_TARGET_DATA_OFFSET;
+  u32 inactive_entry = 0;
+  for (u32 i = 0; i < count; ++i)
+  {
+    const u32 entry = data + i * PLAYER_VISOR_SCAN_TARGET_SLOT_SIZE;
+    u16 existing_uid = 0xffffu;
+    float timer = 0.0f;
+    const bool have_uid = TryReadU16(guard, entry, &existing_uid);
+    const bool have_timer = TryReadFloat(guard, entry + 0x04u, &timer) && std::isfinite(timer);
+    if (inactive_entry == 0 && (!have_uid || existing_uid == 0xffffu || !have_timer || timer <= 0.0f))
+      inactive_entry = entry;
+
+    if (!have_uid || existing_uid != uid)
+      continue;
+
+    if (!have_timer || timer < PLAYER_VISOR_SCAN_TARGET_VALID_TIMER)
+    {
+      TryWriteFloat(guard, entry + 0x04u, PLAYER_VISOR_SCAN_TARGET_VALID_TIMER);
+    }
+    TryWriteFloat(guard, entry + 0x08u, 0.0f);
+    TryWriteU8(guard, entry + 0x0Cu, 1);
+    SetScanVisorValidDirectionPhases(guard, visor);
+    return;
+  }
+
+  if (inactive_entry != 0)
+  {
+    TryWriteU16(guard, inactive_entry, uid);
+    TryWriteFloat(guard, inactive_entry + 0x04u, PLAYER_VISOR_SCAN_TARGET_VALID_TIMER);
+    TryWriteFloat(guard, inactive_entry + 0x08u, 0.0f);
+    TryWriteU8(guard, inactive_entry + 0x0Cu, 1);
+    SetScanVisorValidDirectionPhases(guard, visor);
+    return;
+  }
+
+  if (count >= PLAYER_VISOR_SCAN_TARGET_CAPACITY)
+    return;
+
+  const u32 entry = data + count * PLAYER_VISOR_SCAN_TARGET_SLOT_SIZE;
+  TryWriteU16(guard, entry, uid);
+  TryWriteFloat(guard, entry + 0x04u, PLAYER_VISOR_SCAN_TARGET_VALID_TIMER);
+  TryWriteFloat(guard, entry + 0x08u, 0.0f);
+  TryWriteU8(guard, entry + 0x0Cu, 1);
+  TryWriteU32(guard, visor + PLAYER_VISOR_SCAN_TARGETS_OFFSET, count + 1u);
+  SetScanVisorValidDirectionPhases(guard, visor);
+}
+
+bool SeedScanIndicatorTargetsFromHmd(const Core::CPUThreadGuard& guard, u32 state_manager,
+                                     u32 player, u32 visor, const Matrix3x4& hmd,
+                                     const RuntimeSettings& settings, GunTargetPick* pick)
+{
+  if (state_manager < 0x80000000u || !PlayerObjectLooksValid(guard, player) ||
+      visor < 0x80000000u)
+  {
+    return false;
+  }
+
+  u32 object_list = 0;
+  u32 player_uid_word = 0;
+  u32 player_area = 0xffffffffu;
+  if (!TryReadU32(guard, state_manager + 0x810u, &object_list) ||
+      object_list < 0x80000000u || !TryReadU32(guard, player + 0x8u, &player_uid_word) ||
+      !TryReadU32(guard, player + 0x4u, &player_area))
+  {
+    return false;
+  }
+
+  float ray_x = 0.0f;
+  float ray_y = 0.0f;
+  float ray_z = 0.0f;
+  u32 camera_transform = 0;
+  if (!ResolveActiveCameraTransform(guard, &camera_transform) ||
+      !ReadTransformTranslation(guard, camera_transform, &ray_x, &ray_y, &ray_z))
+  {
+    if (!ReadTransformTranslation(guard, player + ADDRESS.transform_offset, &ray_x, &ray_y, &ray_z))
+      return false;
+  }
+
+  float dir_x = 0.0f;
+  float dir_y = 0.0f;
+  float dir_z = 0.0f;
+  if (!GunAimDirectionFromMatrix(hmd, &dir_x, &dir_y, &dir_z))
+    return false;
+
+  struct Candidate
+  {
+    u16 uid = 0xffffu;
+    u32 obj = 0;
+    RayCandidateMetrics metrics = {};
+    float score = std::numeric_limits<float>::infinity();
+  };
+  std::array<Candidate, 8> best{};
+  const auto insert_candidate = [&](u16 uid, u32 obj, const RayCandidateMetrics& metrics,
+                                    float score) {
+    size_t slot = best.size();
+    float worst = -1.0f;
+    for (size_t i = 0; i < best.size(); ++i)
+    {
+      if (best[i].uid == uid)
+        return;
+      if (best[i].uid == 0xffffu)
+      {
+        slot = i;
+        break;
+      }
+      if (best[i].score > worst)
+      {
+        worst = best[i].score;
+        slot = i;
+      }
+    }
+
+    if (slot >= best.size() || (best[slot].uid != 0xffffu && score >= best[slot].score))
+      return;
+
+    best[slot].uid = uid;
+    best[slot].obj = obj;
+    best[slot].metrics = metrics;
+    best[slot].score = score;
+  };
+
+  const u16 player_uid = static_cast<u16>(player_uid_word >> 16);
+  const float max_along = std::clamp(settings.gun_targeting_distance, 15.0f, 100.0f);
+  const float base_perp = std::max(settings.gun_targeting_radius * 3.0f, 3.0f);
+
+  for (u32 i = 0; i < 1024u; ++i)
+  {
+    u32 obj = 0;
+    if (!TryReadU32(guard, object_list + (i << 3) + 4u, &obj) ||
+        !PrimeGameObjectPointerLooksValid(obj, ADDRESS.transform_offset + 0x30u) ||
+        obj == player || !LooksLikeTransformMatrix(guard, obj + ADDRESS.transform_offset))
+    {
+      continue;
+    }
+
+    u32 uid_word = 0;
+    u32 owner_uid_word = 0;
+    u32 obj_area = 0xffffffffu;
+    if (!TryReadU32(guard, obj + 0x8u, &uid_word) ||
+        !TryReadU32(guard, obj + 0xecu, &owner_uid_word) ||
+        !TryReadU32(guard, obj + 0x4u, &obj_area))
+    {
+      continue;
+    }
+
+    const u16 uid = static_cast<u16>(uid_word >> 16);
+    const u16 owner_uid = static_cast<u16>(owner_uid_word >> 16);
+    if (uid == 0xffffu || uid == player_uid || owner_uid == player_uid || obj_area != player_area ||
+        !EntityLooksActive(guard, obj) || !ActorIsTargetable(guard, obj) ||
+        !ActorHasMaterial(guard, obj, 39) || !ActorHasScanInfo(guard, obj))
+    {
+      continue;
+    }
+
+    const RayCandidateMetrics metrics =
+        ResolveActorRayMetrics(guard, obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, max_along,
+                               true);
+    if (!metrics.valid)
+      continue;
+
+    const float hmd_view_perp = base_perp + metrics.along * 0.55f + metrics.radius * 0.35f;
+    if (metrics.perp > hmd_view_perp)
+      continue;
+
+    const float cone_fraction = metrics.perp / std::max(hmd_view_perp, 0.001f);
+    const float score = cone_fraction * 1.5f + metrics.along * 0.002f - metrics.radius * 0.01f;
+    insert_candidate(uid, obj, metrics, score);
+  }
+
+  const Candidate* selected = nullptr;
+  for (const Candidate& candidate : best)
+  {
+    if (candidate.uid != 0xffffu)
+    {
+      EnsureUidInScanVisorTargets(guard, visor, candidate.uid);
+      if (selected == nullptr || candidate.score < selected->score)
+        selected = &candidate;
+    }
+  }
+
+  if (selected == nullptr || pick == nullptr)
+    return selected != nullptr;
+
+  pick->uid = selected->uid;
+  pick->obj = selected->obj;
+  pick->ray_x = ray_x;
+  pick->ray_y = ray_y;
+  pick->ray_z = ray_z;
+  pick->dir_x = dir_x;
+  pick->dir_y = dir_y;
+  pick->dir_z = dir_z;
+  pick->x = selected->metrics.x;
+  pick->y = selected->metrics.y;
+  pick->z = selected->metrics.z;
+  pick->along = selected->metrics.along;
+  pick->perp = selected->metrics.perp;
+  pick->score = selected->score;
+  pick->has_scan = true;
+  pick->targetable = true;
+  return true;
 }
 
 bool PickScanTargetFromHmd(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player,
@@ -2241,6 +2644,7 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
   const float max_along = settings.gun_targeting_distance;
   const float max_perp = settings.gun_targeting_radius;
   constexpr float combat_pick_radius_multiplier = 1.0f;
+  constexpr float vanilla_orbit_pick_radius_multiplier = 1.75f;
   constexpr float scan_pick_radius_multiplier = 3.0f;
   const float grapple_max_perp = max_perp * 1.30f;
   const bool scan_mode = ScanVisorActive(guard, player);
@@ -2296,6 +2700,9 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
     const bool grapple_candidate = grapple_point && has_orbit;
     const bool vanilla_orbit_candidate =
         !scan_mode && onscreen_orbit_candidate && orbit_candidate;
+    const bool cannon_orbit_candidate =
+        !scan_mode && orbit_candidate &&
+        (has_scan || has_character || vanilla_orbit_candidate || nearby_orbit_candidate);
 
     const bool has_any_target_hint =
         has_target || has_orbit || scan_candidate || grapple_candidate;
@@ -2307,7 +2714,7 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
     if (scan_mode && !scan_candidate)
       continue;
 
-    if (!scan_mode && !combat_candidate && !vanilla_orbit_candidate && !grapple_candidate)
+    if (!scan_mode && !combat_candidate && !cannon_orbit_candidate && !grapple_candidate)
       continue;
 
     if (scan_mode && !combat_candidate && !orbit_candidate && !scan_candidate && !grapple_candidate)
@@ -2316,8 +2723,8 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
     ActorAabb render_box = {};
     const bool has_render_bounds = ReadActorRenderAabb(guard, obj, &render_box);
     const bool allow_physics_aabb =
-        scan_mode || grapple_candidate || vanilla_orbit_candidate || has_render_bounds;
-    if (!scan_mode && !grapple_candidate && !vanilla_orbit_candidate && !has_render_bounds)
+        scan_mode || grapple_candidate || cannon_orbit_candidate || has_render_bounds;
+    if (!scan_mode && !grapple_candidate && !cannon_orbit_candidate && !has_render_bounds)
       continue;
 
     const bool target_only_helper_point =
@@ -2336,7 +2743,7 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
     const float candidate_max_perp =
         scan_mode && scan_candidate ? max_perp * scan_pick_radius_multiplier :
         combat_candidate             ? max_perp * combat_pick_radius_multiplier :
-        vanilla_orbit_candidate      ? max_perp * combat_pick_radius_multiplier :
+        cannon_orbit_candidate       ? max_perp * vanilla_orbit_pick_radius_multiplier :
         grapple_candidate             ? grapple_max_perp :
                                        max_perp;
     if (metrics.perp > candidate_max_perp)
@@ -2348,8 +2755,9 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
       const float strict_cone = 0.45f + metrics.along * 0.075f;
       const float bounds_slack = std::min(metrics.radius * 0.60f, candidate_max_perp * 0.50f);
       const float strict_candidate_cone =
-          grapple_candidate ? strict_cone * 1.30f + bounds_slack :
-                              strict_cone + bounds_slack;
+          grapple_candidate       ? strict_cone * 1.30f + bounds_slack :
+          cannon_orbit_candidate  ? strict_cone * vanilla_orbit_pick_radius_multiplier + bounds_slack :
+                                    strict_cone + bounds_slack;
       aim_cone_perp = std::min(candidate_max_perp, strict_candidate_cone);
       if (metrics.perp > aim_cone_perp)
         continue;
@@ -2418,66 +2826,75 @@ bool OrbitLockButtonHeld(const Core::CPUThreadGuard& guard, u32 state_manager)
 void UpdateGunTargeting(const Core::CPUThreadGuard& guard, u32 state_manager, u32 player, u32 gun,
                         u32 world_xf, const Matrix3x4& mat, const RuntimeSettings& settings)
 {
-  static GunTargetPick s_last_pick = {};
-  static bool s_last_pick_valid = false;
-  static u64 s_last_pick_frame = 0;
-  static u64 s_last_success_frame = 0;
-  static u32 s_last_pick_player = 0;
-  static u32 s_last_pick_gun = 0;
+  static u64 s_last_lock_log_frame = 0;
+  static u16 s_last_lock_log_uid = 0xffffu;
+  static int s_last_lock_log_source = -1;
+  static bool s_last_lock_log_held = false;
 
   if (!settings.gun_targeting_enabled || !settings.patch_gun_ray_target ||
       !PlayerObjectLooksValid(guard, player))
   {
-    s_last_pick_valid = false;
     WriteGunTargetScratch(guard, 0, 0xffffu);
     return;
   }
 
-  const bool same_context = s_last_pick_valid && s_last_pick_player == player &&
-                            s_last_pick_gun == gun;
   const bool lock_held = OrbitLockButtonHeld(guard, state_manager);
 
   GunTargetPick pick = {};
-  const GunTargetPick previous = s_last_pick;
-  const bool previous_valid = s_last_pick_valid;
   const bool found_live =
       PickGunRayTarget(guard, state_manager, player, gun, world_xf, mat, settings, lock_held, &pick);
   bool found = found_live;
-  s_last_pick_frame = s_frame_counter;
-  s_last_pick_player = player;
-  s_last_pick_gun = gun;
+  int lock_source = found_live ? 1 : 0;
 
-  if (found_live)
-  {
-    s_last_pick = pick;
-    s_last_pick_valid = true;
-    s_last_success_frame = s_frame_counter;
-  }
-  else if (lock_held && same_context && previous_valid &&
-           s_frame_counter - s_last_success_frame <= 12u &&
-           TargetUidStillExists(guard, state_manager, previous.uid, previous.obj))
-  {
-    pick = previous;
-    found = true;
-    s_last_pick = pick;
-    s_last_pick_valid = true;
-  }
-  else
-  {
-    s_last_pick_valid = false;
-  }
+  const auto log_lock_state = [&](int source, u16 uid, u32 obj, bool vanilla_found,
+                                  bool wrote_target) {
+    if (!LockLoggingEnabled())
+      return;
+
+    const bool transition = lock_held != s_last_lock_log_held ||
+                            source != s_last_lock_log_source ||
+                            uid != s_last_lock_log_uid;
+    const bool periodic = lock_held && s_frame_counter >= s_last_lock_log_frame + 30u;
+    if (!transition && !periodic)
+      return;
+
+    const char* source_name =
+        source == 1 ? "live" :
+        source == 3 ? "vanilla_fallback" :
+        source == 4 ? "suppressed" :
+                      "none";
+    AppendLockDebugLine(fmt::format(
+        "frame={} lock={} source={} wrote={} uid={:04X} obj={:08X} player={:08X} gun={:08X} "
+        "found_live={} vanilla={} suppress={}",
+        s_frame_counter, lock_held, source_name, wrote_target, uid, obj, player, gun, found_live,
+        vanilla_found, pick.suppress_orbit_hook));
+
+    s_last_lock_log_frame = s_frame_counter;
+    s_last_lock_log_uid = uid;
+    s_last_lock_log_source = source;
+    s_last_lock_log_held = lock_held;
+  };
 
   if (!found || pick.suppress_orbit_hook)
   {
     u16 vanilla_uid = 0xffffu;
-    if (lock_held && ReadVanillaTargetUid(guard, state_manager, player, gun, &vanilla_uid))
+    const bool vanilla_found = lock_held && ReadVanillaTargetUid(guard, state_manager, player, gun,
+                                                                 &vanilla_uid);
+    if (vanilla_found)
+    {
       WriteGunTargetScratch(guard, player, vanilla_uid);
+      log_lock_state(3, vanilla_uid, 0, true, true);
+    }
     else
+    {
       WriteGunTargetScratch(guard, player, 0xffffu);
+      log_lock_state(pick.suppress_orbit_hook ? 4 : 0, 0xffffu, 0, false, false);
+    }
     return;
   }
 
   WriteGunTargetScratch(guard, player, pick.uid);
+  log_lock_state(lock_source, pick.uid, pick.obj, false, true);
 }
 
 bool GunPitchFromMatrix(const Matrix3x4& mat, float* pitch_out)
@@ -2551,12 +2968,10 @@ bool ResolveActiveCameraTransform(const Core::CPUThreadGuard& guard, u32* transf
   constexpr u32 object_list_offset = 0x810u;
 
   u32 player = 0;
-  u32 gun = 0;
   u32 camera_manager = 0;
   u32 object_list = 0;
   if (!TryReadU32(guard, ADDRESS.state_manager + ADDRESS.player_offset, &player) ||
       !PlayerObjectLooksValid(guard, player) ||
-      !TryReadU32(guard, player + ADDRESS.cannon_offset, &gun) || gun < 0x80000000u ||
       !TryReadU32(guard, ADDRESS.state_manager + ADDRESS.camera_manager_offset, &camera_manager) ||
       camera_manager < 0x80000000u ||
       !TryReadU32(guard, ADDRESS.state_manager + object_list_offset, &object_list) ||
@@ -2582,6 +2997,122 @@ bool ResolveActiveCameraTransform(const Core::CPUThreadGuard& guard, u32* transf
 
   *transform = camera + ADDRESS.transform_offset;
   return true;
+}
+
+void LogCameraWatchdog(const Core::CPUThreadGuard& guard, u32 player, bool force)
+{
+  if (!RuntimeLoggingEnabled())
+    return;
+
+  if (!force && s_frame_counter < s_last_camera_watchdog_frame + 60)
+    return;
+  s_last_camera_watchdog_frame = s_frame_counter;
+
+  u32 camera_state = 0xffffffffu;
+  u32 morph_state = 0xffffffffu;
+  u32 movement_state = 0xffffffffu;
+  u32 camera_manager = 0;
+  u32 object_list = 0;
+  u32 camera_uid_word = 0;
+  u32 active_camera = 0;
+  u32 active_transform = 0;
+  float active_yaw = 0.0f;
+  bool active_transform_ok = false;
+
+  if (player >= 0x80000000u)
+  {
+    TryReadU32(guard, player + 0x2F4u, &camera_state);
+    TryReadU32(guard, player + 0x2F8u, &morph_state);
+    TryReadU32(guard, player + PLAYER_MOVEMENT_STATE_OFFSET, &movement_state);
+  }
+
+  TryReadU32(guard, ADDRESS.state_manager + ADDRESS.camera_manager_offset, &camera_manager);
+  TryReadU32(guard, ADDRESS.state_manager + 0x810u, &object_list);
+  if (camera_manager >= 0x80000000u)
+    TryReadU32(guard, camera_manager, &camera_uid_word);
+  if (camera_uid_word != 0 && object_list >= 0x80000000u)
+  {
+    const u32 camera_uid = (camera_uid_word >> 16) & 0xffffu;
+    if (camera_uid != 0xffffu)
+      TryReadU32(guard, object_list + ((camera_uid & 0x03ffu) << 3) + 4u, &active_camera);
+  }
+  if (ResolveActiveCameraTransform(guard, &active_transform))
+    active_transform_ok = ReadYawFromTransform2D(guard, active_transform, &active_yaw);
+
+  std::array<u32, 12> manager_words{};
+  std::array<u32, 6> camera_slots{};
+  if (camera_manager >= 0x80000000u)
+  {
+    for (u32 i = 0; i < manager_words.size(); ++i)
+      TryReadU32(guard, camera_manager + i * 4u, &manager_words[i]);
+
+    constexpr std::array<u32, 6> slot_offsets{0x10u, 0x80u, 0x84u, 0x88u, 0x8Cu, 0x90u};
+    for (u32 i = 0; i < slot_offsets.size(); ++i)
+      TryReadU32(guard, camera_manager + slot_offsets[i], &camera_slots[i]);
+  }
+
+  u32 active_vtable = 0;
+  std::array<u32, 8> active_vtable_entries{};
+  if (active_camera >= 0x80000000u && TryReadU32(guard, active_camera, &active_vtable) &&
+      active_vtable >= 0x80000000u)
+  {
+    for (u32 i = 0; i < active_vtable_entries.size(); ++i)
+      TryReadU32(guard, active_vtable + i * 4u, &active_vtable_entries[i]);
+  }
+
+  std::array<float, 12> active_xf{};
+  if (active_transform >= 0x80000000u)
+  {
+    for (u32 i = 0; i < active_xf.size(); ++i)
+      TryReadFloat(guard, active_transform + i * 4u, &active_xf[i]);
+  }
+
+  u32 legacy_camera_return = 0;
+  u32 first_person_pitch_site = 0;
+  u32 combat_pitch0_site = 0;
+  u32 combat_pitch1_site = 0;
+  u32 combat_pitch2_site = 0;
+  TryReadU32(guard, LEGACY_MORPHBALL_CAMERA_RETURN_ADDRESS, &legacy_camera_return);
+  TryReadU32(guard, 0x8000E548u, &first_person_pitch_site);
+  TryReadU32(guard, 0x8000E7B4u, &combat_pitch0_site);
+  TryReadU32(guard, 0x8000E808u, &combat_pitch1_site);
+  TryReadU32(guard, 0x8000E83Cu, &combat_pitch2_site);
+
+  NOTICE_LOG_FMT(CORE,
+                 "PrimedGun camera_watch player={:08X} camera_state={} morph_state={} "
+                 "move_state={} camera_mgr={:08X} uid_word={:08X} object_list={:08X} "
+                 "active_camera={:08X} active_xf={:08X} xf_ok={} yaw={:.3f}",
+                 player, camera_state, morph_state, movement_state, camera_manager,
+                 camera_uid_word, object_list, active_camera, active_transform, active_transform_ok,
+                 active_yaw);
+  NOTICE_LOG_FMT(CORE,
+                 "PrimedGun camera_watch manager+000 {:08X} {:08X} {:08X} {:08X} {:08X} "
+                 "{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 manager_words[0], manager_words[1], manager_words[2], manager_words[3],
+                 manager_words[4], manager_words[5], manager_words[6], manager_words[7],
+                 manager_words[8], manager_words[9], manager_words[10], manager_words[11]);
+  NOTICE_LOG_FMT(CORE,
+                 "PrimedGun camera_watch slots +10={:08X} +80={:08X} +84={:08X} "
+                 "+88={:08X} +8C={:08X} +90={:08X} active_vtable={:08X}",
+                 camera_slots[0], camera_slots[1], camera_slots[2], camera_slots[3],
+                 camera_slots[4], camera_slots[5], active_vtable);
+  NOTICE_LOG_FMT(CORE,
+                 "PrimedGun camera_watch active_vtable {:08X} {:08X} {:08X} {:08X} "
+                 "{:08X} {:08X} {:08X} {:08X}",
+                 active_vtable_entries[0], active_vtable_entries[1], active_vtable_entries[2],
+                 active_vtable_entries[3], active_vtable_entries[4], active_vtable_entries[5],
+                 active_vtable_entries[6], active_vtable_entries[7]);
+  NOTICE_LOG_FMT(CORE,
+                 "PrimedGun camera_watch active_xf rows ({:.4f},{:.4f},{:.4f},{:.4f}) "
+                 "({:.4f},{:.4f},{:.4f},{:.4f}) ({:.4f},{:.4f},{:.4f},{:.4f})",
+                 active_xf[0], active_xf[1], active_xf[2], active_xf[3], active_xf[4],
+                 active_xf[5], active_xf[6], active_xf[7], active_xf[8], active_xf[9],
+                 active_xf[10], active_xf[11]);
+  NOTICE_LOG_FMT(CORE,
+                 "PrimedGun camera_watch asm camera_return={:08X} first_pitch={:08X} "
+                 "combat_pitch={:08X}/{:08X}/{:08X}",
+                 legacy_camera_return, first_person_pitch_site, combat_pitch0_site,
+                 combat_pitch1_site, combat_pitch2_site);
 }
 
 float GetPlayerYawDeltaDegrees(const Core::CPUThreadGuard& guard)
@@ -2709,15 +3240,134 @@ bool RotateTransformYaw2D(const Core::CPUThreadGuard& guard, u32 transform, floa
          TryWriteFloat(guard, transform + 0x14u, new_m11);
 }
 
+bool FlattenCameraTransformPitch(const Core::CPUThreadGuard& guard, u32 transform)
+{
+  if (!PrimeDataPointerLooksValid(transform, 0x30u))
+  {
+    return false;
+  }
+
+  float right_x = 0.0f;
+  float right_y = 0.0f;
+  float right_z = 0.0f;
+  float forward_z = 0.0f;
+  float up_x = 0.0f;
+  float up_y = 0.0f;
+  float up_z = 0.0f;
+  if (!TryReadFloat(guard, transform + 0x00u, &right_x) ||
+      !TryReadFloat(guard, transform + 0x04u, &right_y) ||
+      !TryReadFloat(guard, transform + 0x08u, &right_z) ||
+      !TryReadFloat(guard, transform + 0x18u, &forward_z) ||
+      !TryReadFloat(guard, transform + 0x20u, &up_x) ||
+      !TryReadFloat(guard, transform + 0x24u, &up_y) ||
+      !TryReadFloat(guard, transform + 0x28u, &up_z))
+  {
+    return false;
+  }
+
+  if (!std::isfinite(right_x) || !std::isfinite(right_y) || !std::isfinite(right_z) ||
+      !std::isfinite(forward_z) || !std::isfinite(up_x) || !std::isfinite(up_y) ||
+      !std::isfinite(up_z))
+  {
+    return false;
+  }
+
+  const float right_len = std::sqrt(right_x * right_x + right_y * right_y);
+  if (!std::isfinite(right_len) || right_len < 0.25f || right_len > 1.25f)
+    return false;
+
+  if (std::fabs(right_z) < 0.0005f && std::fabs(forward_z) < 0.0005f &&
+      std::fabs(up_x) < 0.0005f && std::fabs(up_y) < 0.0005f &&
+      std::fabs(up_z - 1.0f) < 0.0005f)
+  {
+    return false;
+  }
+
+  right_x /= right_len;
+  right_y /= right_len;
+  const float forward_x = -right_y;
+  const float forward_y = right_x;
+
+  return TryWriteFloat(guard, transform + 0x00u, right_x) &&
+         TryWriteFloat(guard, transform + 0x04u, right_y) &&
+         TryWriteFloat(guard, transform + 0x08u, 0.0f) &&
+         TryWriteFloat(guard, transform + 0x10u, forward_x) &&
+         TryWriteFloat(guard, transform + 0x14u, forward_y) &&
+         TryWriteFloat(guard, transform + 0x18u, 0.0f) &&
+         TryWriteFloat(guard, transform + 0x20u, 0.0f) &&
+         TryWriteFloat(guard, transform + 0x24u, 0.0f) &&
+         TryWriteFloat(guard, transform + 0x28u, 1.0f);
+}
+
+bool FlattenCameraObjectPitch(const Core::CPUThreadGuard& guard, u32 camera)
+{
+  if (!PrimeGameObjectPointerLooksValid(camera, ADDRESS.transform_offset + 0x30u))
+    return false;
+
+  return FlattenCameraTransformPitch(guard, camera + ADDRESS.transform_offset);
+}
+
+bool FlattenActiveMorphballCameraTransform(const Core::CPUThreadGuard& guard, u32 player)
+{
+  u32 morph_state = 0xffffffffu;
+  if (player < 0x80000000u || !TryReadU32(guard, player + 0x2F8u, &morph_state) ||
+      morph_state == 0)
+  {
+    return false;
+  }
+
+  bool wrote = false;
+  u32 active_transform = 0;
+  if (ResolveActiveCameraTransform(guard, &active_transform))
+    wrote = FlattenCameraTransformPitch(guard, active_transform) || wrote;
+
+  u32 camera_manager = 0;
+  if (!TryReadU32(guard, ADDRESS.state_manager + ADDRESS.camera_manager_offset, &camera_manager) ||
+      camera_manager < 0x80000000u)
+  {
+    return wrote;
+  }
+
+  for (const u32 slot_offset : {0x80u, 0x88u})
+  {
+    u32 camera = 0;
+    if (TryReadU32(guard, camera_manager + slot_offset, &camera))
+      wrote = FlattenCameraObjectPitch(guard, camera) || wrote;
+  }
+
+  return wrote;
+}
+
+void ClearFreeLookYawCarry(const Core::CPUThreadGuard& guard, u32 player)
+{
+  if (player < 0x80000000u)
+    return;
+
+  TryWriteFloat(guard, player + PLAYER_FREE_LOOK_CENTER_TIME_OFFSET, 0.0f);
+  TryWriteFloat(guard, player + PLAYER_FREE_LOOK_YAW_ANGLE_OFFSET, 0.0f);
+  TryWriteFloat(guard, player + PLAYER_FREE_LOOK_YAW_VEL_OFFSET, 0.0f);
+}
+
 void ApplyLookYawSensitivityBoost(const Core::CPUThreadGuard& guard,
                                   const Common::VR::OpenXRInputSnapshot& snapshot,
                                   const RuntimeSettings& settings, u32 player)
 {
-  if (settings.look_yaw_sensitivity <= 1.0f || player < 0x80000000u ||
+  if (player < 0x80000000u || settings.snap_turn_enabled ||
       !PlayerIsFirstPersonUnmorphed(guard, player))
   {
     return;
   }
+
+  const bool orbit_lock_active = OrbitLockButtonHeld(guard, ADDRESS.state_manager) &&
+                                 PlayerHasOrbitControlTarget(guard, ADDRESS.state_manager, player);
+  if (orbit_lock_active)
+  {
+    ClearFreeLookYawCarry(guard, player);
+    return;
+  }
+
+  if (settings.look_yaw_sensitivity <= 1.0f)
+    return;
 
   const int look_hand = settings.directional_movement_use_right_stick ? 0 : 1;
   const Common::VR::OpenXRControllerState& look = snapshot.controllers[look_hand];
@@ -2730,10 +3380,105 @@ void ApplyLookYawSensitivityBoost(const Core::CPUThreadGuard& guard,
 
   constexpr float max_extra_yaw_deg_per_second = 125.0f;
   constexpr float frame_dt = 1.0f / 60.0f;
-  const float extra_scale = std::clamp(settings.look_yaw_sensitivity - 1.0f, 0.0f, 2.0f);
-  const float yaw_delta_rad = stick_x * extra_scale * max_extra_yaw_deg_per_second * frame_dt *
+  const float yaw_scale = std::clamp(settings.look_yaw_sensitivity - 1.0f, 0.0f, 2.0f);
+  const float yaw_delta_rad = stick_x * yaw_scale * max_extra_yaw_deg_per_second * frame_dt *
                               (static_cast<float>(MathUtil::PI) / 180.0f);
   RotateTransformYaw2D(guard, player + ADDRESS.transform_offset, yaw_delta_rad);
+}
+
+int SnapTurnStepDegrees(int current, int direction)
+{
+  int closest_index = 1;
+  int closest_delta = std::numeric_limits<int>::max();
+  for (int i = 0; i < static_cast<int>(SNAP_TURN_DEGREES_CHOICES.size()); ++i)
+  {
+    const int delta = std::abs(current - SNAP_TURN_DEGREES_CHOICES[i]);
+    if (delta < closest_delta)
+    {
+      closest_delta = delta;
+      closest_index = i;
+    }
+  }
+
+  const int next_index = std::clamp(closest_index + direction, 0,
+                                    static_cast<int>(SNAP_TURN_DEGREES_CHOICES.size()) - 1);
+  return SNAP_TURN_DEGREES_CHOICES[next_index];
+}
+
+bool UpdateSnapTurn(const Core::CPUThreadGuard& guard,
+                    const Common::VR::OpenXRInputSnapshot& snapshot,
+                    const RuntimeSettings& settings, float* applied_yaw_deg)
+{
+  if (applied_yaw_deg != nullptr)
+    *applied_yaw_deg = 0.0f;
+
+  if (!settings.snap_turn_enabled || !snapshot.runtime_active ||
+      s_frame_counter < s_vr_menu_input_suppress_until_frame || s_vr_menu_visible)
+  {
+    if (!settings.snap_turn_enabled)
+      s_snap_turn_ready = true;
+    return false;
+  }
+
+  constexpr size_t right_hand_index = 1;
+  const Common::VR::OpenXRControllerState& controller = snapshot.controllers[right_hand_index];
+  if (!controller.connected)
+  {
+    s_snap_turn_ready = true;
+    s_snap_turn_cooldown_until_frame = 0;
+    return false;
+  }
+
+  constexpr float snap_enter_threshold = 0.72f;
+  constexpr float snap_exit_threshold = 0.32f;
+  const float stick_x = std::clamp(controller.thumbstick_x, -1.0f, 1.0f);
+  if (std::fabs(stick_x) <= snap_exit_threshold)
+  {
+    s_snap_turn_ready = true;
+    return false;
+  }
+
+  if (snapshot.head_pose.valid && controller.aim_pose.valid &&
+      LeftControllerNearHead(PoseFromOpenXR(controller.aim_pose), PoseFromOpenXR(snapshot.head_pose),
+                             settings))
+  {
+    s_snap_turn_ready = false;
+    return false;
+  }
+
+  if (!s_snap_turn_ready || std::fabs(stick_x) < snap_enter_threshold ||
+      s_frame_counter < s_snap_turn_cooldown_until_frame)
+  {
+    return false;
+  }
+
+  // Consume the flick even if gameplay is currently unavailable, so holding the stick through
+  // a menu, loading transition, or invalid player state cannot snap on the next valid frame.
+  s_snap_turn_ready = false;
+
+  u32 player = 0;
+  if (!TryReadU32(guard, ADDRESS.state_manager + ADDRESS.player_offset, &player) ||
+      player < 0x80000000u || !PlayerIsFirstPersonUnmorphed(guard, player) ||
+      PlayerIsChangingVisorsInFirstPerson(guard, player))
+  {
+    return false;
+  }
+
+  const int degrees =
+      std::clamp(settings.snap_turn_degrees, SNAP_TURN_DEGREES_CHOICES.front(),
+                 SNAP_TURN_DEGREES_CHOICES.back());
+  const float signed_degrees = (stick_x > 0.0f ? 1.0f : -1.0f) * static_cast<float>(degrees);
+  const float yaw_delta_rad = signed_degrees * (static_cast<float>(MathUtil::PI) / 180.0f);
+  if (RotateTransformYaw2D(guard, player + ADDRESS.transform_offset, yaw_delta_rad))
+  {
+    s_snap_turn_cooldown_until_frame = s_frame_counter + 8;
+    s_cannon_smoothing_bypass_until_frame = s_frame_counter + 10;
+    s_smooth_matrix_valid = false;
+    if (applied_yaw_deg != nullptr)
+      *applied_yaw_deg = signed_degrees;
+    return true;
+  }
+  return false;
 }
 
 DpadDir StickToDpad(float x, float y, float deadzone, DpadDir last_dir)
@@ -3039,6 +3784,48 @@ bool MatrixFromHmdSnapshot(const Common::VR::OpenXRInputSnapshot& snapshot, floa
   return true;
 }
 
+void ClearAudioListenerScratch(const Core::CPUThreadGuard& guard)
+{
+  for (u32 offset = 0; offset <= 0x18u; offset += 4u)
+    TryWriteU32(guard, AUDIO_LISTENER_SCRATCH + offset, 0);
+}
+
+bool WriteAudioListenerScratch(const Core::CPUThreadGuard& guard, const Matrix3x4& hmd)
+{
+  if (!MatrixNumbersLookValid(hmd))
+    return false;
+
+  const bool wrote_vectors =
+      // Prime's UpdateAudioListener passes camera column Y as listener heading.
+      TryWriteFloat(guard, AUDIO_LISTENER_SCRATCH + 0x04u, hmd.At(0, 1)) &&
+      TryWriteFloat(guard, AUDIO_LISTENER_SCRATCH + 0x08u, hmd.At(1, 1)) &&
+      TryWriteFloat(guard, AUDIO_LISTENER_SCRATCH + 0x0Cu, hmd.At(2, 1)) &&
+      // Prime passes camera column Z as listener up.
+      TryWriteFloat(guard, AUDIO_LISTENER_SCRATCH + 0x10u, hmd.At(0, 2)) &&
+      TryWriteFloat(guard, AUDIO_LISTENER_SCRATCH + 0x14u, hmd.At(1, 2)) &&
+      TryWriteFloat(guard, AUDIO_LISTENER_SCRATCH + 0x18u, hmd.At(2, 2));
+  if (!wrote_vectors)
+  {
+    TryWriteU32(guard, AUDIO_LISTENER_SCRATCH, 0);
+    return false;
+  }
+
+  return TryWriteU32(guard, AUDIO_LISTENER_SCRATCH, 1);
+}
+
+void UpdateAudioListenerScratchFromHmd(const Core::CPUThreadGuard& guard,
+                                       const Common::VR::OpenXRInputSnapshot& snapshot,
+                                       float yaw_delta_deg)
+{
+  Matrix3x4 hmd{};
+  if (!snapshot.runtime_active || !snapshot.head_pose.valid ||
+      !MatrixFromHmdSnapshot(snapshot, yaw_delta_deg, &hmd) ||
+      !WriteAudioListenerScratch(guard, hmd))
+  {
+    ClearAudioListenerScratch(guard);
+  }
+}
+
 bool ScanPitchFieldsWritable(const Core::CPUThreadGuard& guard, u32 player)
 {
   if (!PlayerObjectLooksValid(guard, player))
@@ -3129,8 +3916,28 @@ void UpdateScanTargetingFromHmd(const Core::CPUThreadGuard& guard,
     return;
   }
 
+  u32 visor = 0;
+  u32 visor_valid = 0;
+  const bool have_visor =
+      TryReadU32(guard, SCAN_RETICLE_TRACE_SCRATCH + 0x20u, &visor) &&
+      TryReadU32(guard, SCAN_RETICLE_TRACE_SCRATCH + 0x24u, &visor_valid) && visor_valid == 1u;
+  GunTargetPick marker_pick = {};
+  const bool marker_found =
+      have_visor &&
+      SeedScanIndicatorTargetsFromHmd(guard, state_manager, player, visor, hmd, settings,
+                                      &marker_pick);
+
   GunTargetPick pick = {};
-  const bool found = PickScanTargetFromHmd(guard, state_manager, player, hmd, settings, &pick);
+  bool found = false;
+  if (marker_found)
+  {
+    pick = marker_pick;
+    found = true;
+  }
+  else
+  {
+    found = PickScanTargetFromHmd(guard, state_manager, player, hmd, settings, &pick);
+  }
 
   if (found)
   {
@@ -3158,6 +3965,8 @@ void UpdateScanTargetingFromHmd(const Core::CPUThreadGuard& guard,
       s_last_scan_candidate_found = true;
     }
     WriteGunTargetScratch(guard, player, pick.uid);
+    if (have_visor)
+      EnsureUidInScanVisorTargets(guard, visor, pick.uid);
   }
   else
   {
@@ -3384,8 +4193,8 @@ void UpdateDirectionalMovement(const Core::CPUThreadGuard& guard,
     return;
   }
 
-  const bool scan_active = ScanVisorActive(guard, player);
-  if (!scan_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager))
+  if (OrbitLockButtonHeld(guard, ADDRESS.state_manager) &&
+      PlayerHasOrbitControlTarget(guard, ADDRESS.state_manager, player))
   {
     s_directional_move_speed = 0.0f;
     return;
@@ -3585,13 +4394,18 @@ u32 VrMenuItemCountForTab(u32 tab)
 {
   switch (tab)
   {
-  case 0:
-    return 15;
+  case VR_MENU_LAYOUT_TAB:
+    return 0;
+  case VR_MENU_CALIBRATION_TAB:
+    return s_vr_menu_calibration_page == 0 ?
+               VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS + 1 :
+               VR_MENU_CALIBRATION_TOTAL_ITEMS - VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS + 1;
   case VR_MENU_CONTROL_TAB:
     return s_vr_menu_control_page == 0 ? VR_MENU_CONTROL_FIRST_PAGE_ITEMS + 1 :
-                                         14 - VR_MENU_CONTROL_FIRST_PAGE_ITEMS + 1;
+                                         VR_MENU_CONTROL_TOTAL_ITEMS -
+                                             VR_MENU_CONTROL_FIRST_PAGE_ITEMS + 1;
   case VR_MENU_MOVEMENT_TAB:
-    return 9;
+    return 11;
   case VR_MENU_CANNON_TAB:
     return 6;
   case VR_MENU_STATE_TAB:
@@ -3651,6 +4465,12 @@ void ClearVrMenuConfirmations()
   ClearVrResetConfirmation();
 }
 
+void ResetVrMenuToLayoutTab()
+{
+  s_vr_menu_tab = VR_MENU_LAYOUT_TAB;
+  s_vr_menu_selected_index = 0;
+}
+
 void RefreshVrStateConfirmation()
 {
   if (s_vr_state_confirm_action != 0 && s_frame_counter >= s_vr_state_confirm_until_frame)
@@ -3694,18 +4514,30 @@ int VrMenuControlActualIndex(u32 local_index)
              static_cast<int>(VR_MENU_CONTROL_FIRST_PAGE_ITEMS + local_index - 1);
 }
 
+int VrMenuCalibrationActualIndex(u32 local_index)
+{
+  if (local_index == 0)
+    return -1;
+
+  return s_vr_menu_calibration_page == 0 ?
+             static_cast<int>(local_index - 1) :
+             static_cast<int>(VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS + local_index - 1);
+}
+
 u32 VrMenuResetActionForSelection()
 {
-  if (s_vr_menu_tab == 0 && s_vr_menu_selected_index == 4)
+  if (s_vr_menu_tab == VR_MENU_CALIBRATION_TAB &&
+      VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 7)
     return VR_MENU_RESET_TARGETING_ACTION;
-  if (s_vr_menu_tab == 0 && s_vr_menu_selected_index == 12)
+  if (s_vr_menu_tab == VR_MENU_CALIBRATION_TAB &&
+      VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 15)
     return VR_MENU_RESET_CALIBRATION_ACTION;
   if (s_vr_menu_tab == VR_MENU_CONTROL_TAB &&
-      VrMenuControlActualIndex(s_vr_menu_selected_index) == 13)
+      VrMenuControlActualIndex(s_vr_menu_selected_index) == 15)
   {
     return VR_MENU_RESET_CONTROLLER_ACTION;
   }
-  if (s_vr_menu_tab == VR_MENU_MOVEMENT_TAB && s_vr_menu_selected_index == 8)
+  if (s_vr_menu_tab == VR_MENU_MOVEMENT_TAB && s_vr_menu_selected_index == 10)
     return VR_MENU_RESET_MOVEMENT_ACTION;
   return 0;
 }
@@ -3714,19 +4546,26 @@ bool VrMenuRowIsNumeric(u32 tab, u32 index)
 {
   switch (tab)
   {
-  case 0:
-    return index == 1 || index == 2 || (index >= 5 && index <= 10);
+  case VR_MENU_CALIBRATION_TAB:
+  {
+    if (index == 0)
+      return true;
+
+    const int actual_index = VrMenuCalibrationActualIndex(index);
+    return (actual_index >= 1 && actual_index <= 4) ||
+           (actual_index >= 8 && actual_index <= 13);
+  }
   case VR_MENU_CONTROL_TAB:
   {
     if (index == 0)
       return true;
 
     const int actual_index = VrMenuControlActualIndex(index);
-    return actual_index == 3 || actual_index == 7 || actual_index == 10 ||
-           actual_index == 11 || actual_index == 12;
+    return actual_index == 3 || actual_index == 9 || actual_index == 12 ||
+           actual_index == 13 || actual_index == 14;
   }
   case VR_MENU_MOVEMENT_TAB:
-    return index >= 3 && index <= 7;
+    return (index >= 3 && index <= 7) || index == 9;
   default:
     return false;
   }
@@ -3744,6 +4583,12 @@ void ClampVrMenuSelection()
 void SetVrMenuControlPage(u32 page)
 {
   s_vr_menu_control_page = page % VR_MENU_CONTROL_PAGE_COUNT;
+  ClampVrMenuSelection();
+}
+
+void SetVrMenuCalibrationPage(u32 page)
+{
+  s_vr_menu_calibration_page = page % VR_MENU_CALIBRATION_PAGE_COUNT;
   ClampVrMenuSelection();
 }
 
@@ -3843,6 +4688,8 @@ void ResetControllerSettings(RuntimeSettings* settings)
   settings->primegun_grip_inputs_use_trackpad = false;
   settings->primegun_trackpad_press_threshold = 0.5f;
   settings->combat_jump_use_primary_button = false;
+  settings->vr_menu_hold_left_stick = false;
+  settings->vr_menu_requires_head_zone = false;
   settings->xr_dpad_enabled = true;
   settings->xr_dpad_head_radius = 0.28f;
   settings->xr_dpad_head_y_below = 0.02f;
@@ -3859,6 +4706,77 @@ void ResetMovementSettings(RuntimeSettings* settings)
   settings->directional_movement_accel = 45.0f;
   settings->directional_movement_air_accel = 8.0f;
   settings->look_yaw_sensitivity = 1.0f;
+  settings->snap_turn_enabled = false;
+  settings->snap_turn_degrees = 45;
+}
+
+bool CinematicCameraActive(const Core::CPUThreadGuard& guard)
+{
+  u32 camera_manager = 0;
+  u32 cine_camera_count = 0;
+  return TryReadU32(guard, ADDRESS.state_manager + ADDRESS.camera_manager_offset, &camera_manager) &&
+         camera_manager >= 0x80000000u &&
+         TryReadU32(guard, camera_manager + 0x08u, &cine_camera_count) &&
+         cine_camera_count > 0 && cine_camera_count < 16;
+}
+
+bool ElevatorWorldTransitionActive(const Core::CPUThreadGuard& guard)
+{
+  u32 trans_ref_data = 0;
+  u32 trans_manager = 0;
+  if (!TryReadU32(guard, ADDRESS.state_manager + STATE_MANAGER_WORLD_TRANS_MANAGER_REF_OFFSET,
+                  &trans_ref_data) ||
+      !PrimeDataPointerLooksValid(trans_ref_data, RSTL_REF_DATA_OBJECT_OFFSET + sizeof(u32)) ||
+      !TryReadU32(guard, trans_ref_data + RSTL_REF_DATA_OBJECT_OFFSET, &trans_manager) ||
+      !PrimeDataPointerLooksValid(trans_manager, WORLD_TRANS_MANAGER_TYPE_OFFSET + sizeof(u32)))
+  {
+    return false;
+  }
+
+  u32 trans_type = 0;
+  return TryReadU32(guard, trans_manager + WORLD_TRANS_MANAGER_TYPE_OFFSET, &trans_type) &&
+         trans_type == WORLD_TRANS_MANAGER_TYPE_ELEVATOR;
+}
+
+void SetCinematicScreenActive(bool active)
+{
+  if (active && !s_cinematic_screen_active)
+    ++s_cinematic_screen_generation;
+  s_cinematic_screen_active = active;
+}
+
+void ClearCinematicScreenState(bool enabled)
+{
+  SetCinematicScreenActive(false);
+  s_cinematic_screen_hold_until_frame = 0;
+#ifdef ENABLE_VR
+  Common::VR::PrimedGunVrOverlayState overlay =
+      Common::VR::OpenXRInputState::GetPrimedGunOverlay();
+  overlay.cinematic_screen_enabled = enabled;
+  overlay.cinematic_screen_active = false;
+  overlay.cinematic_screen_generation = s_cinematic_screen_generation;
+  Common::VR::OpenXRInputState::SetPrimedGunOverlay(overlay);
+#endif
+}
+
+void UpdateCinematicScreenState(const Core::CPUThreadGuard& guard, const RuntimeSettings& settings)
+{
+  if (!settings.cinematic_screen_enabled)
+  {
+    ClearCinematicScreenState(false);
+    return;
+  }
+
+  if (CinematicCameraActive(guard) || ElevatorWorldTransitionActive(guard))
+  {
+    SetCinematicScreenActive(true);
+    s_cinematic_screen_hold_until_frame =
+        s_frame_counter + CINEMATIC_SCREEN_SIGNAL_LOSS_GRACE_FRAMES;
+    return;
+  }
+
+  if (s_frame_counter >= s_cinematic_screen_hold_until_frame)
+    SetCinematicScreenActive(false);
 }
 
 void ResetVrRuntimeSettings(RuntimeSettings* settings)
@@ -3891,39 +4809,57 @@ void AdjustVrMenuSetting(RuntimeSettings* settings, int direction)
   const float sign = direction < 0 ? -1.0f : 1.0f;
   switch (s_vr_menu_tab)
   {
-  case 0:
-    switch (s_vr_menu_selected_index)
+  case VR_MENU_CALIBRATION_TAB:
+  {
+    if (s_vr_menu_selected_index == 0)
+    {
+      SetVrMenuCalibrationPage(direction < 0 ?
+                                   s_vr_menu_calibration_page + VR_MENU_CALIBRATION_PAGE_COUNT - 1 :
+                                   s_vr_menu_calibration_page + 1);
+      break;
+    }
+
+    switch (VrMenuCalibrationActualIndex(s_vr_menu_selected_index))
     {
     case 1:
+      settings->metroid_hud_distance =
+          std::clamp(settings->metroid_hud_distance + sign * 0.05f, 0.1f, 3.0f);
+      break;
+    case 2:
+      settings->metroid_hud_size =
+          std::clamp(settings->metroid_hud_size + sign * 0.05f, 0.1f, 3.0f);
+      break;
+    case 3:
       settings->gun_targeting_distance =
           std::clamp(settings->gun_targeting_distance + sign * 1.0f, 1.0f, 200.0f);
       break;
-    case 2:
+    case 4:
       settings->gun_targeting_radius =
           std::clamp(settings->gun_targeting_radius + sign * 0.1f, 0.1f, 25.0f);
       break;
-    case 5:
+    case 8:
       settings->model_offset_x += sign * 0.01f;
       break;
-    case 6:
+    case 9:
       settings->model_offset_y += sign * 0.01f;
       break;
-    case 7:
+    case 10:
       settings->model_offset_z += sign * 0.01f;
       break;
-    case 8:
+    case 11:
       settings->rot_offset_x += sign * 1.0f;
       break;
-    case 9:
+    case 12:
       settings->rot_offset_y += sign * 1.0f;
       break;
-    case 10:
+    case 13:
       settings->rot_offset_z += sign * 1.0f;
       break;
     default:
       break;
     }
     break;
+  }
   case VR_MENU_CONTROL_TAB:
   {
     if (s_vr_menu_selected_index == 0)
@@ -3939,19 +4875,19 @@ void AdjustVrMenuSetting(RuntimeSettings* settings, int direction)
       settings->rumble_intensity =
           std::clamp(settings->rumble_intensity + sign * 0.05f, 0.0f, 1.0f);
       break;
-    case 7:
+    case 9:
       settings->primegun_trackpad_press_threshold =
           std::clamp(settings->primegun_trackpad_press_threshold + sign * 0.05f, 0.05f, 1.0f);
       break;
-    case 10:
+    case 12:
       settings->xr_dpad_head_radius =
           std::clamp(settings->xr_dpad_head_radius + sign * 0.01f, 0.05f, 0.60f);
       break;
-    case 11:
+    case 13:
       settings->xr_dpad_head_y_below =
           std::clamp(settings->xr_dpad_head_y_below + sign * 0.01f, 0.0f, 0.60f);
       break;
-    case 12:
+    case 14:
       settings->xr_dpad_deadzone =
           std::clamp(settings->xr_dpad_deadzone + sign * 0.05f, 0.0f, 0.95f);
       break;
@@ -3983,6 +4919,10 @@ void AdjustVrMenuSetting(RuntimeSettings* settings, int direction)
       settings->look_yaw_sensitivity =
           std::clamp(settings->look_yaw_sensitivity + sign * 0.05f, 0.20f, 3.00f);
       break;
+    case 9:
+      settings->snap_turn_degrees =
+          SnapTurnStepDegrees(settings->snap_turn_degrees, direction < 0 ? -1 : 1);
+      break;
     default:
       break;
     }
@@ -3998,13 +4938,22 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
   if (reset_action == 0)
     ClearVrResetConfirmation();
 
-  if (s_vr_menu_tab == 0)
+  if (s_vr_menu_tab == VR_MENU_CALIBRATION_TAB)
   {
     if (s_vr_menu_selected_index == 0)
-      settings->gun_targeting_enabled = !settings->gun_targeting_enabled;
-    else if (s_vr_menu_selected_index == 3)
+    {
+      SetVrMenuCalibrationPage(s_vr_menu_calibration_page + 1);
+      return;
+    }
+
+    const int actual_index = VrMenuCalibrationActualIndex(s_vr_menu_selected_index);
+    if (actual_index == 0)
+      settings->cinematic_screen_enabled = !settings->cinematic_screen_enabled;
+    else if (actual_index == 5)
       settings->visor_helmet_enabled = !settings->visor_helmet_enabled;
-    else if (s_vr_menu_selected_index == 4)
+    else if (actual_index == 6)
+      settings->height_prompt_enabled = !settings->height_prompt_enabled;
+    else if (actual_index == 7)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4014,9 +4963,9 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->gun_targeting_radius = 4.0f;
       settings->visor_helmet_enabled = false;
     }
-    else if (s_vr_menu_selected_index == 11)
+    else if (actual_index == 14)
       settings->position_marker_enabled = !settings->position_marker_enabled;
-    else if (s_vr_menu_selected_index == 12)
+    else if (actual_index == 15)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4028,7 +4977,7 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->rot_offset_y = DEFAULT_ROT_OFFSET_Y;
       settings->rot_offset_z = DEFAULT_ROT_OFFSET_Z;
     }
-    else if (s_vr_menu_selected_index == 13)
+    else if (actual_index == 16)
     {
       settings->offset_x = 0.0f;
       settings->offset_y = 0.0f;
@@ -4040,7 +4989,7 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->rot_offset_y = DEFAULT_ROT_OFFSET_Y;
       settings->rot_offset_z = DEFAULT_ROT_OFFSET_Z;
     }
-    else if (s_vr_menu_selected_index == 14)
+    else if (actual_index == 17)
     {
       settings->offset_x = 0.0f;
       settings->offset_y = 0.0f;
@@ -4075,10 +5024,14 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
     else if (actual_index == 5)
       settings->combat_jump_use_primary_button = !settings->combat_jump_use_primary_button;
     else if (actual_index == 6)
-      settings->primegun_grip_inputs_use_trackpad = !settings->primegun_grip_inputs_use_trackpad;
+      settings->vr_menu_hold_left_stick = !settings->vr_menu_hold_left_stick;
+    else if (actual_index == 7)
+      settings->vr_menu_requires_head_zone = !settings->vr_menu_requires_head_zone;
     else if (actual_index == 8)
+      settings->primegun_grip_inputs_use_trackpad = !settings->primegun_grip_inputs_use_trackpad;
+    else if (actual_index == 10 || actual_index == 11)
       settings->xr_dpad_enabled = !settings->xr_dpad_enabled;
-    else if (actual_index == 13)
+    else if (actual_index == 15)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4098,6 +5051,8 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->directional_movement_use_hmd_direction =
           !settings->directional_movement_use_hmd_direction;
     else if (s_vr_menu_selected_index == 8)
+      settings->snap_turn_enabled = !settings->snap_turn_enabled;
+    else if (s_vr_menu_selected_index == 10)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4170,6 +5125,7 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.tab = s_vr_menu_tab;
   overlay.selected_index = s_vr_menu_selected_index;
   overlay.item_count = VrMenuItemCountForTab(s_vr_menu_tab);
+  overlay.calibration_page = s_vr_menu_calibration_page;
   overlay.control_page = s_vr_menu_control_page;
   overlay.cannon_texture_slot = s_vr_cannon_texture_slot;
   overlay.cannon_texture_notice = s_frame_counter < s_vr_cannon_texture_notice_until_frame;
@@ -4190,12 +5146,21 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.primegun_grip_inputs_use_trackpad = settings.primegun_grip_inputs_use_trackpad;
   overlay.primegun_trackpad_press_threshold = settings.primegun_trackpad_press_threshold;
   overlay.combat_jump_use_primary_button = settings.combat_jump_use_primary_button;
+  overlay.vr_menu_hold_left_stick = settings.vr_menu_hold_left_stick;
+  overlay.vr_menu_requires_head_zone = settings.vr_menu_requires_head_zone;
   overlay.gun_targeting_enabled = settings.gun_targeting_enabled;
   overlay.gun_targeting_distance = settings.gun_targeting_distance;
   overlay.gun_targeting_radius = settings.gun_targeting_radius;
   overlay.visor_helmet_enabled = settings.visor_helmet_enabled;
+  overlay.vr_overlays_enabled = settings.vr_overlays_enabled;
+  overlay.height_prompt_enabled = settings.height_prompt_enabled;
   overlay.position_marker_visible = settings.vr_overlays_enabled && settings.position_marker_enabled;
   overlay.xr_dpad_enabled = settings.xr_dpad_enabled;
+  overlay.cinematic_screen_enabled = settings.cinematic_screen_enabled;
+  overlay.cinematic_screen_active = settings.cinematic_screen_enabled && s_cinematic_screen_active;
+  overlay.cinematic_screen_generation = s_cinematic_screen_generation;
+  overlay.metroid_hud_distance = settings.metroid_hud_distance;
+  overlay.metroid_hud_size = settings.metroid_hud_size;
   overlay.xr_dpad_head_radius = settings.xr_dpad_head_radius;
   overlay.xr_dpad_head_y_below = settings.xr_dpad_head_y_below;
   overlay.xr_dpad_deadzone = settings.xr_dpad_deadzone;
@@ -4207,6 +5172,8 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.directional_movement_accel = settings.directional_movement_accel;
   overlay.directional_movement_air_accel = settings.directional_movement_air_accel;
   overlay.look_yaw_sensitivity = settings.look_yaw_sensitivity;
+  overlay.snap_turn_enabled = settings.snap_turn_enabled;
+  overlay.snap_turn_degrees = settings.snap_turn_degrees;
   overlay.offset_x = settings.offset_x;
   overlay.offset_y = settings.offset_y;
   overlay.offset_z = settings.offset_z;
@@ -4245,16 +5212,76 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
   const u32 pointer_hand_index = settings->use_right_hand ? 1 : 0;
   const auto& panel_hand = snapshot.controllers[panel_hand_index];
   const auto& pointer_hand = snapshot.controllers[pointer_hand_index];
-  const bool menu_toggle =
+  const bool menu_input_raw =
       panel_hand.connected && (panel_hand.thumbstick_button || panel_hand.menu_button);
-  if (menu_toggle && !s_last_vr_menu_thumbstick)
+  const bool menu_hand_near_head =
+      panel_hand.connected && panel_hand.aim_pose.valid && snapshot.head_pose.valid &&
+      LeftControllerNearHead(PoseFromOpenXR(panel_hand.aim_pose),
+                             PoseFromOpenXR(snapshot.head_pose), *settings);
+  const bool menu_input =
+      menu_input_raw && (!settings->vr_menu_requires_head_zone || s_vr_menu_visible ||
+                         menu_hand_near_head);
+  if (settings->vr_menu_hold_left_stick)
+  {
+    if (s_vr_menu_visible)
+    {
+      if (menu_input && !s_last_vr_menu_thumbstick)
+      {
+        s_vr_menu_visible = false;
+        s_vr_menu_long_press_start_frame = 0;
+        s_vr_menu_long_press_consumed = true;
+        ClearVrMenuConfirmations();
+        ++s_vr_menu_generation;
+      }
+      else if (!menu_input)
+      {
+        s_vr_menu_long_press_start_frame = 0;
+        s_vr_menu_long_press_consumed = false;
+      }
+    }
+    else if (!menu_input)
+    {
+      s_vr_menu_long_press_start_frame = 0;
+      s_vr_menu_long_press_consumed = false;
+    }
+    else
+    {
+      if (s_vr_menu_long_press_start_frame == 0)
+        s_vr_menu_long_press_start_frame = s_frame_counter == 0 ? 1 : s_frame_counter;
+
+      if (!s_vr_menu_long_press_consumed &&
+          s_frame_counter >= s_vr_menu_long_press_start_frame + VR_MENU_LONG_PRESS_FRAMES)
+      {
+        s_vr_menu_visible = !s_vr_menu_visible;
+        s_vr_menu_long_press_consumed = true;
+        if (s_vr_menu_visible)
+          ResetVrMenuToLayoutTab();
+        if (!s_vr_menu_visible)
+          ClearVrMenuConfirmations();
+        ++s_vr_menu_generation;
+      }
+    }
+  }
+  else if (menu_input && !s_last_vr_menu_thumbstick)
   {
     s_vr_menu_visible = !s_vr_menu_visible;
+    if (s_vr_menu_visible)
+      ResetVrMenuToLayoutTab();
     if (!s_vr_menu_visible)
       ClearVrMenuConfirmations();
     ++s_vr_menu_generation;
   }
-  s_last_vr_menu_thumbstick = menu_toggle;
+  else if (!menu_input)
+  {
+    s_vr_menu_long_press_start_frame = 0;
+    s_vr_menu_long_press_consumed = false;
+  }
+  if (!settings->vr_menu_hold_left_stick && menu_input)
+  {
+    s_vr_menu_long_press_start_frame = 0;
+    s_vr_menu_long_press_consumed = false;
+  }
+  s_last_vr_menu_thumbstick = menu_input;
 
   float pointer_x = 0.5f;
   float pointer_y = 0.5f;
@@ -4270,7 +5297,8 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
       if (item_count > 0)
       {
         const int hovered =
-            VrMenuRowFromTextureY(s_vr_menu_tab, std::clamp(pointer_y, 0.0f, 1.0f) * 512.0f,
+            VrMenuRowFromTextureY(s_vr_menu_tab,
+                                  std::clamp(pointer_y, 0.0f, 1.0f) * VR_MENU_TEXTURE_HEIGHT,
                                   item_count);
         if (hovered >= 0 && s_vr_menu_selected_index != static_cast<u32>(hovered))
         {
@@ -4290,13 +5318,13 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
     const bool secondary = pointer_hand.connected && pointer_hand.secondary_button;
     if (primary && !s_last_vr_menu_primary)
     {
-      const float texture_x = std::clamp(pointer_x, 0.0f, 1.0f) * 1024.0f;
-      const float texture_y = std::clamp(pointer_y, 0.0f, 1.0f) * 512.0f;
+      const float texture_x = std::clamp(pointer_x, 0.0f, 1.0f) * VR_MENU_TEXTURE_WIDTH;
+      const float texture_y = std::clamp(pointer_y, 0.0f, 1.0f) * VR_MENU_TEXTURE_HEIGHT;
       if (pointer_active && texture_y >= 64.0f && texture_y <= 102.0f)
       {
         constexpr float tab_start_x = 22.0f;
-        constexpr float tab_step = 196.0f;
-        constexpr float tab_width = 180.0f;
+        constexpr float tab_step = 166.0f;
+        constexpr float tab_width = 150.0f;
         const int tab = static_cast<int>((texture_x - tab_start_x) / tab_step);
         const float tab_local_x =
             texture_x - (tab_start_x + static_cast<float>(tab) * tab_step);
@@ -4310,7 +5338,8 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
           ++s_vr_menu_generation;
         }
       }
-      else if (pointer_active && texture_y >= 108.0f && texture_y <= 136.0f)
+      else if (s_vr_menu_tab != VR_MENU_LAYOUT_TAB && pointer_active && texture_y >= 108.0f &&
+               texture_y <= 136.0f)
       {
         if (texture_x >= 52.0f && texture_x <= 272.0f)
           SaveVrMenuSettingsNotice();
@@ -4390,6 +5419,13 @@ bool UpdateHeightPromptGate(const Core::CPUThreadGuard& guard,
                             const Common::VR::OpenXRInputSnapshot& snapshot,
                             const RuntimeSettings& settings, u32 player)
 {
+  if (!settings.height_prompt_enabled)
+  {
+    s_prompt_gameplay_ready_since_frame = 0;
+    s_height_prompt_until_frame = 0;
+    return false;
+  }
+
   if (!snapshot.runtime_active || player < 0x80000000u)
   {
     s_prompt_gameplay_ready_since_frame = 0;
@@ -4463,6 +5499,7 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
   const Common::VR::OpenXRInputSnapshot snapshot = Common::VR::OpenXRInputState::GetSnapshot();
   if (!snapshot.runtime_active)
   {
+    ClearAudioListenerScratch(guard);
     PublishVrOverlayState(settings, false);
     return;
   }
@@ -4475,10 +5512,19 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
   UpdateVrMenu(snapshot, &settings, prompt_visible);
   SetRuntimeSettings(settings);
 
-  const float yaw_delta_deg = GetPlayerYawDeltaDegrees(guard);
+  float yaw_delta_deg = GetPlayerYawDeltaDegrees(guard);
+  if (settings.builtin_patches_enabled)
+    UpdateAudioListenerScratchFromHmd(guard, snapshot, yaw_delta_deg);
+  else
+    ClearAudioListenerScratch(guard);
   UpdateDirectionalMovement(guard, snapshot, settings, yaw_delta_deg);
   UpdateXrDpad(guard, snapshot, settings);
-  ApplyLookYawSensitivityBoost(guard, snapshot, settings, prompt_player);
+  float snap_turn_yaw_deg = 0.0f;
+  const bool snap_turn_applied = UpdateSnapTurn(guard, snapshot, settings, &snap_turn_yaw_deg);
+  if (snap_turn_applied)
+    yaw_delta_deg = WrapDegrees(yaw_delta_deg - snap_turn_yaw_deg);
+  if (!snap_turn_applied)
+    ApplyLookYawSensitivityBoost(guard, snapshot, settings, prompt_player);
 
   const Common::VR::OpenXRControllerState& hand =
       snapshot.controllers[settings.use_right_hand ? 1 : 0];
@@ -4551,7 +5597,8 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
       smooth_dx * smooth_dx + smooth_dy * smooth_dy + smooth_dz * smooth_dz;
   constexpr float cannon_smooth_keep = 0.24f;
   constexpr float cannon_smooth_snap_distance = 2.0f;
-  if (!s_smooth_matrix_valid ||
+  const bool bypass_cannon_smoothing = s_frame_counter < s_cannon_smoothing_bypass_until_frame;
+  if (bypass_cannon_smoothing || !s_smooth_matrix_valid ||
       smooth_jump_sq > cannon_smooth_snap_distance * cannon_smooth_snap_distance)
   {
     for (int i = 0; i < 12; ++i)
@@ -4773,6 +5820,48 @@ bool ApplyRenderModelOffsetPatch(const Core::CPUThreadGuard& guard)
   return patch.applied;
 }
 
+bool ApplyScanIndicatorPointerPatch(const Core::CPUThreadGuard& guard)
+{
+  auto& patch = s_scan_indicator_update_trace_patch;
+  u32 current = 0;
+  if (!TryReadU32(guard, patch.address, &current))
+    return false;
+
+  const u32 branch = PpcBranch(patch.address, patch.cave);
+  if (current == branch)
+  {
+    if (patch.original == 0)
+      TryReadU32(guard, patch.cave + 0x14u, &patch.original);
+    if (patch.original == 0)
+    {
+      patch.applied = false;
+      return false;
+    }
+    current = patch.original;
+  }
+  else if ((current & 0xFFFF0000u) != 0x94210000u)
+  {
+    patch.applied = false;
+    return false;
+  }
+
+  patch.original = current;
+  const u32 trace_hi = (SCAN_RETICLE_TRACE_SCRATCH >> 16) & 0xffffu;
+  const u32 trace_lo = SCAN_RETICLE_TRACE_SCRATCH & 0xffffu;
+  const u32 return_addr = patch.address + 4u;
+
+  patch.applied = InstallBranchAfterCaveWrite(
+      guard, patch.address, patch.cave,
+      {{0x00u, 0x3D800000u | trace_hi},
+       {0x04u, 0x618C0000u | trace_lo},
+       {0x08u, 0x906C0020u},
+       {0x0Cu, 0x38000001u},
+       {0x10u, 0x900C0024u},
+       {0x14u, patch.original},
+       {0x18u, PpcBranch(patch.cave + 0x18u, return_addr)}});
+  return patch.applied;
+}
+
 bool ApplyScanReticleTracePatch(const Core::CPUThreadGuard& guard)
 {
   auto apply_one = [&](DynamicPpcPatch& patch, u32 scratch_offset) {
@@ -4821,48 +5910,6 @@ bool ApplyScanReticleTracePatch(const Core::CPUThreadGuard& guard)
   wrote = apply_one(s_scan_reticle_trace_patch, 0x00u) || wrote;
   wrote = apply_one(s_scan_reticle_trace_curr_patch, 0x10u) || wrote;
 
-  auto& update_patch = s_scan_indicator_update_trace_patch;
-  u32 current = 0;
-  if (TryReadU32(guard, update_patch.address, &current))
-  {
-    const u32 branch = PpcBranch(update_patch.address, update_patch.cave);
-    if (current == branch)
-    {
-      if (update_patch.original == 0)
-        TryReadU32(guard, update_patch.cave + 0x14u, &update_patch.original);
-      if (update_patch.original == 0)
-      {
-        update_patch.applied = false;
-      }
-      else
-      {
-        current = update_patch.original;
-      }
-    }
-    if ((current & 0xFFFF0000u) == 0x94210000u)
-    {
-      update_patch.original = current;
-      const u32 trace_hi = (SCAN_RETICLE_TRACE_SCRATCH >> 16) & 0xffffu;
-      const u32 trace_lo = SCAN_RETICLE_TRACE_SCRATCH & 0xffffu;
-      const u32 return_addr = update_patch.address + 4u;
-
-      update_patch.applied = InstallBranchAfterCaveWrite(
-          guard, update_patch.address, update_patch.cave,
-          {{0x00u, 0x3D800000u | trace_hi},
-           {0x04u, 0x618C0000u | trace_lo},
-           {0x08u, 0x906C0020u},
-           {0x0Cu, 0x38000001u},
-           {0x10u, 0x900C0024u},
-           {0x14u, update_patch.original},
-           {0x18u, PpcBranch(update_patch.cave + 0x18u, return_addr)}});
-      wrote = update_patch.applied || wrote;
-    }
-    else if (current != branch)
-    {
-      update_patch.applied = false;
-    }
-  }
-
   return wrote;
 }
 
@@ -4894,8 +5941,6 @@ bool RestoreScanReticleTracePatches(const Core::CPUThreadGuard& guard)
   bool restored = false;
   restored = RestoreTracePatchIfInstalled(guard, s_scan_reticle_trace_patch, 0x18u) || restored;
   restored = RestoreTracePatchIfInstalled(guard, s_scan_reticle_trace_curr_patch, 0x18u) || restored;
-  restored =
-      RestoreTracePatchIfInstalled(guard, s_scan_indicator_update_trace_patch, 0x14u) || restored;
   return restored;
 }
 
@@ -5212,6 +6257,247 @@ bool ApplyConditionalElevationPitchPatch(const Core::CPUThreadGuard& guard, Dyna
   return patch.applied;
 }
 
+bool RestoreLegacyMorphBallCameraReturnPatch(const Core::CPUThreadGuard& guard)
+{
+  u32 current = 0;
+  if (!TryReadU32(guard, LEGACY_MORPHBALL_CAMERA_RETURN_ADDRESS, &current))
+    return false;
+
+  const u32 legacy_branch =
+      PpcBranch(LEGACY_MORPHBALL_CAMERA_RETURN_ADDRESS, LEGACY_MORPHBALL_CAMERA_RETURN_CAVE);
+  if (current != legacy_branch)
+    return false;
+
+  return TryWriteInstruction(guard, LEGACY_MORPHBALL_CAMERA_RETURN_ADDRESS,
+                             LEGACY_MORPHBALL_CAMERA_RETURN_ORIGINAL);
+}
+
+bool ApplyBallCameraLevelPatch(const Core::CPUThreadGuard& guard)
+{
+  auto& patch = s_ball_camera_level_patch;
+  u32 current = 0;
+  if (!TryReadU32(guard, patch.address, &current))
+    return false;
+
+  const u32 branch = PpcBranch(patch.address, patch.cave);
+  if (current != branch && current != patch.original)
+  {
+    patch.applied = false;
+    return false;
+  }
+
+  const u32 return_addr = patch.address + 4u;
+
+  const std::initializer_list<HookWrite> cave_writes{
+      // copyXf lives at r1+0x80. Keep yaw from the right vector, flatten pitch,
+      // set world up, and leave translation untouched. Use existing r2 small-data
+      // constants so the inline hook does not leak a scratch GPR into game code.
+      {0x00u, 0xC0010090u},  // lfs f0, 0x90(r1)  ; right.y
+      {0x04u, 0xFC000050u},  // fneg f0, f0
+      {0x08u, 0xD0010084u},  // stfs f0, 0x84(r1) ; forward.x = -right.y
+      {0x0Cu, 0xC0010080u},  // lfs f0, 0x80(r1)  ; right.x
+      {0x10u, 0xD0010094u},  // stfs f0, 0x94(r1) ; forward.y = right.x
+
+      {0x14u, 0xC00280B0u},  // lfs f0, -0x7F50(r2) ; 0.0f
+      {0x18u, 0xD0010088u},  // up.x
+      {0x1Cu, 0xD0010098u},  // up.y
+      {0x20u, 0xD00100A0u},  // right.z
+      {0x24u, 0xD00100A4u},  // forward.z
+
+      {0x28u, 0xC00280B4u},  // lfs f0, -0x7F4C(r2) ; 1.0f
+      {0x2Cu, 0xD00100A8u},  // up.z
+
+      {0x30u, patch.original},
+      {0x34u, PpcBranch(patch.cave + 0x34u, return_addr)},
+      {0x38u, 0x60000000u},
+      {0x3Cu, 0x60000000u}};
+
+  const bool patch_wrote = InstallBranchAfterCaveWrite(guard, patch.address, patch.cave, cave_writes);
+  patch.applied = InstructionBlockMatches(guard, patch.cave, cave_writes) &&
+                  TryReadU32(guard, patch.address, &current) && current == branch;
+  return patch_wrote;
+}
+
+bool ApplyInterpolationCameraLevelPatch(const Core::CPUThreadGuard& guard)
+{
+  auto& patch = s_interpolation_camera_level_patch;
+  u32 current = 0;
+  if (!TryReadU32(guard, patch.address, &current))
+    return false;
+
+  const u32 branch = PpcBranch(patch.address, patch.cave);
+  if (current != branch && current != patch.original)
+  {
+    patch.applied = false;
+    return false;
+  }
+
+  constexpr u32 flag_hi = (MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH >> 16) & 0xffffu;
+  constexpr u32 flag_lo = MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH & 0xffffu;
+  const u32 original_label = patch.cave + 0x44u;
+  const u32 return_addr = patch.address + 4u;
+
+  const std::initializer_list<HookWrite> cave_writes{
+      // CInterpolationCamera::Think writes the transition transform to this+0x34
+      // immediately before this patch site. Flatten only while the player is
+      // morphed so first-person/cinematic transitions keep their original pitch.
+      {0x00u, 0x3D800000u | flag_hi},
+      {0x04u, 0x618C0000u | flag_lo},
+      {0x08u, 0x818C0000u},
+      {0x0Cu, 0x2C0C0000u},  // cmpwi r12, 0
+      {0x10u, PpcBeq(patch.cave + 0x10u, original_label)},
+
+      {0x14u, 0xC01E0038u},  // lfs f0, 0x38(r30)  ; right.y
+      {0x18u, 0xFC000050u},  // fneg f0, f0
+      {0x1Cu, 0xD01E0044u},  // stfs f0, 0x44(r30) ; forward.x = -right.y
+      {0x20u, 0xC01E0034u},  // lfs f0, 0x34(r30)  ; right.x
+      {0x24u, 0xD01E0048u},  // stfs f0, 0x48(r30) ; forward.y = right.x
+
+      {0x28u, 0xC00280B0u},  // lfs f0, -0x7F50(r2) ; 0.0f
+      {0x2Cu, 0xD01E003Cu},  // right.z
+      {0x30u, 0xD01E004Cu},  // forward.z
+      {0x34u, 0xD01E0054u},  // up.x
+      {0x38u, 0xD01E0058u},  // up.y
+
+      {0x3Cu, 0xC00280B4u},  // lfs f0, -0x7F4C(r2) ; 1.0f
+      {0x40u, 0xD01E005Cu},  // up.z
+
+      {0x44u, patch.original},
+      {0x48u, PpcBranch(patch.cave + 0x48u, return_addr)}};
+
+  const bool patch_wrote = InstallBranchAfterCaveWrite(guard, patch.address, patch.cave, cave_writes);
+  patch.applied = InstructionBlockMatches(guard, patch.cave, cave_writes) &&
+                  TryReadU32(guard, patch.address, &current) && current == branch;
+  return patch_wrote;
+}
+
+bool ApplyFirstPersonOrbitAimVectorPatch(const Core::CPUThreadGuard& guard)
+{
+  auto& patch = s_first_person_orbit_aim_vector_patch;
+  u32 current = 0;
+  if (!TryReadU32(guard, patch.address, &current))
+    return false;
+
+  const u32 branch = PpcBranch(patch.address, patch.cave);
+  if (current != branch && current != patch.original)
+  {
+    patch.applied = false;
+    return false;
+  }
+
+  const u32 return_addr = patch.address + 4u;
+  constexpr u32 flag_hi = (FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH >> 16) & 0xffffu;
+  constexpr u32 flag_lo = FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH & 0xffffu;
+  const std::initializer_list<HookWrite> cave_writes{
+      // CFirstPersonCamera::UpdateTransform normally replaces rVec with the
+      // orbit/scan target vector here. Keep the hook installed permanently and
+      // gate the scan-only yaw lock through a scratch flag so changing visors
+      // does not rewrite code or invalidate JIT.
+      {0x00u, 0x3D800000u | flag_hi},  // lis r12, flag@ha
+      {0x04u, 0x818C0000u | flag_lo},  // lwz r12, flag@l(r12)
+      {0x08u, 0x2C0C0000u},            // cmpwi r12, 0
+      {0x0Cu, PpcBeq(patch.cave + 0x0Cu, patch.cave + 0x20u)},
+
+      {0x10u, patch.original},  // lwz r0, 0x304(r30)
+      {0x14u, 0x2C000000u},     // cmpwi r0, 0
+      {0x18u, PpcBeq(patch.cave + 0x18u, patch.cave + 0x24u)},
+      {0x1Cu, PpcBranch(patch.cave + 0x1Cu, FIRST_PERSON_ORBIT_AIM_VECTOR_SKIP_ADDRESS)},
+
+      {0x20u, patch.original},
+      {0x24u, PpcBranch(patch.cave + 0x24u, return_addr)}};
+
+  const bool patch_wrote = InstallBranchAfterCaveWrite(guard, patch.address, patch.cave, cave_writes);
+  patch.applied = InstructionBlockMatches(guard, patch.cave, cave_writes) &&
+                  TryReadU32(guard, patch.address, &current) && current == branch;
+  return patch_wrote;
+}
+
+bool RestoreFirstPersonOrbitAimVectorPatch(const Core::CPUThreadGuard& guard)
+{
+  auto& patch = s_first_person_orbit_aim_vector_patch;
+  u32 current = 0;
+  if (!TryReadU32(guard, patch.address, &current))
+    return false;
+
+  const u32 branch = PpcBranch(patch.address, patch.cave);
+  if (current != branch)
+  {
+    patch.applied = false;
+    return false;
+  }
+
+  const bool restored = TryWriteInstruction(guard, patch.address, patch.original);
+  if (restored)
+    patch.applied = false;
+  return restored;
+}
+
+bool ApplyAudioListenerPatch(const Core::CPUThreadGuard& guard)
+{
+  auto& patch = s_audio_listener_patch;
+  u32 current = 0;
+  if (!TryReadU32(guard, patch.address, &current))
+    return false;
+
+  const u32 branch = PpcBranch(patch.address, patch.cave);
+  const u32 legacy_bad_branch = PpcBranch(patch.address, AUDIO_LISTENER_LEGACY_BAD_CAVE);
+  const u32 legacy_high_branch = PpcBranch(patch.address, AUDIO_LISTENER_LEGACY_HIGH_CAVE);
+  if (current != branch && current != patch.original && current != legacy_bad_branch &&
+      current != legacy_high_branch)
+  {
+    patch.applied = false;
+    return false;
+  }
+
+  constexpr u32 scratch_hi = (AUDIO_LISTENER_SCRATCH >> 16) & 0xffffu;
+  constexpr u32 scratch_lo = AUDIO_LISTENER_SCRATCH & 0xffffu;
+  const u32 original_label = patch.cave + 0x60u;
+  const u32 return_addr = patch.address + 0x28u;
+  const std::initializer_list<HookWrite> cave_writes{
+      {0x00u, 0x3D800000u | scratch_hi},  // lis r12, scratch@ha
+      {0x04u, 0x618C0000u | scratch_lo},  // ori r12, r12, scratch@l
+      {0x08u, 0x800C0000u},               // lwz r0, 0(r12)
+      {0x0Cu, 0x2C000000u},               // cmpwi r0, 0
+      {0x10u, PpcBeq(patch.cave + 0x10u, original_label)},
+
+      {0x14u, 0x88E2CC40u},  // lbz r7, -0x33c0(r2)
+      {0x18u, 0xC10C0010u},  // up.x
+      {0x1Cu, 0xD1010008u},
+      {0x20u, 0xC10C0014u},  // up.y
+      {0x24u, 0xD101000Cu},
+      {0x28u, 0xC10C0018u},  // up.z
+      {0x2Cu, 0xD1010010u},
+      {0x30u, 0xC10C0004u},  // heading.x
+      {0x34u, 0xD1010014u},
+      {0x38u, 0xC10C0008u},  // heading.y
+      {0x3Cu, 0xD1010018u},
+      {0x40u, 0xC10C000Cu},  // heading.z
+      {0x44u, 0xD101001Cu},
+      {0x48u, 0xD0410020u},  // original translation column
+      {0x4Cu, 0xD0210024u},
+      {0x50u, 0xD0010028u},
+      {0x54u, PpcBranch(patch.cave + 0x54u, return_addr)},
+      {0x58u, 0x60000000u},
+      {0x5Cu, 0x60000000u},
+
+      {0x60u, patch.original},
+      {0x64u, 0x88E2CC40u},
+      {0x68u, 0xD0E1000Cu},
+      {0x6Cu, 0xD0C10010u},
+      {0x70u, 0xD0A10014u},
+      {0x74u, 0xD0810018u},
+      {0x78u, 0xD061001Cu},
+      {0x7Cu, 0xD0410020u},
+      {0x80u, 0xD0210024u},
+      {0x84u, 0xD0010028u},
+      {0x88u, PpcBranch(patch.cave + 0x88u, return_addr)}};
+
+  const bool patch_wrote = InstallBranchAfterCaveWrite(guard, patch.address, patch.cave, cave_writes);
+  patch.applied = InstructionBlockMatches(guard, patch.cave, cave_writes) &&
+                  TryReadU32(guard, patch.address, &current) && current == branch;
+  return patch_wrote;
+}
+
 void UpdatePitchZeroHookEnabled(const Core::CPUThreadGuard& guard, bool scan_active)
 {
   // Keep the original pitch-zero behavior active in scan mode too; otherwise Prime's
@@ -5220,20 +6506,36 @@ void UpdatePitchZeroHookEnabled(const Core::CPUThreadGuard& guard, bool scan_act
   TryWriteU32(guard, PITCH_ZERO_ENABLE_SCRATCH, 1u);
 }
 
+void UpdateMorphballCameraLevelHookEnabled(const Core::CPUThreadGuard& guard, bool have_player,
+                                           u32 player)
+{
+  u32 morph_state = 0;
+  const bool enabled = have_player && player >= 0x80000000u &&
+                       TryReadU32(guard, player + 0x2F8u, &morph_state) && morph_state != 0;
+  TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, enabled ? 1u : 0u);
+}
+
 bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
 {
   bool wrote = false;
-  wrote = ApplyGameFlowFlagPatches(guard) || wrote;
-  wrote = ApplyRenderModelOffsetPatch(guard) || wrote;
-  wrote = RuntimeLoggingEnabled() ? (ApplyScanReticleTracePatch(guard) || wrote) :
-                                    (RestoreScanReticleTracePatches(guard) || wrote);
-  wrote = ApplyScanIndicatorViewBasisPatch(guard) || wrote;
-  wrote = ApplyFirstPersonPitchLoadPatch(guard) || wrote;
-
   u32 player = 0;
   const bool scan_active =
       TryReadU32(guard, ADDRESS.state_manager + ADDRESS.player_offset, &player) &&
       player >= 0x80000000u && ScanVisorActive(guard, player);
+
+  wrote = ApplyGameFlowFlagPatches(guard) || wrote;
+  wrote = ApplyRenderModelOffsetPatch(guard) || wrote;
+  wrote = RuntimeLoggingEnabled() ? (ApplyScanReticleTracePatch(guard) || wrote) :
+                                    (RestoreScanReticleTracePatches(guard) || wrote);
+  wrote = ApplyScanIndicatorPointerPatch(guard) || wrote;
+  wrote = ApplyScanIndicatorViewBasisPatch(guard) || wrote;
+  wrote = ApplyFirstPersonPitchLoadPatch(guard) || wrote;
+  wrote = ApplyBallCameraLevelPatch(guard) || wrote;
+  wrote = ApplyInterpolationCameraLevelPatch(guard) || wrote;
+  wrote = ApplyFirstPersonOrbitAimVectorPatch(guard) || wrote;
+  TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, scan_active ? 1u : 0u);
+  wrote = ApplyAudioListenerPatch(guard) || wrote;
+
   UpdatePitchZeroHookEnabled(guard, scan_active);
 
   for (DynamicPpcPatch& patch : s_combat_pitch_patches)
@@ -5336,6 +6638,76 @@ bool CannonFeedScratchLooksEmpty(const Core::CPUThreadGuard& guard)
   return true;
 }
 
+bool ReticleBillboardScratchLooksValid(const Core::CPUThreadGuard& guard)
+{
+  u32 enabled = 0;
+  if (!TryReadU32(guard, RETICLE_BILLBOARD_SCRATCH, &enabled) || enabled != 1)
+    return false;
+
+  float m[9] = {};
+  for (int i = 0; i < 9; ++i)
+  {
+    if (!TryReadFloat(guard, RETICLE_BILLBOARD_SCRATCH + 4u + static_cast<u32>(i * 4), &m[i]) ||
+        !std::isfinite(m[i]))
+    {
+      return false;
+    }
+  }
+
+  const float row0_len = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+  const float row1_len = std::sqrt(m[3] * m[3] + m[4] * m[4] + m[5] * m[5]);
+  const float row2_len = std::sqrt(m[6] * m[6] + m[7] * m[7] + m[8] * m[8]);
+  if (row0_len < 0.5f || row0_len > 1.5f || row1_len < 0.5f || row1_len > 1.5f ||
+      row2_len < 0.5f || row2_len > 1.5f)
+  {
+    return false;
+  }
+
+  const float dot01 = std::fabs(m[0] * m[3] + m[1] * m[4] + m[2] * m[5]);
+  const float dot02 = std::fabs(m[0] * m[6] + m[1] * m[7] + m[2] * m[8]);
+  const float dot12 = std::fabs(m[3] * m[6] + m[4] * m[7] + m[5] * m[8]);
+  return dot01 <= 0.35f && dot02 <= 0.35f && dot12 <= 0.35f;
+}
+
+bool ScanTargetScratchLooksCurrent(const Core::CPUThreadGuard& guard, u32 player)
+{
+  u32 scratch_player = 0;
+  u16 uid = 0xffffu;
+  return TryReadU32(guard, GUN_TARGET_SCRATCH, &scratch_player) && scratch_player == player &&
+         TryReadU16(guard, GUN_TARGET_SCRATCH + 4u, &uid) && (uid == 0xffffu || uid <= 0x03ffu);
+}
+
+void VerifyScanReticleWatchdog(const Core::CPUThreadGuard& guard,
+                               const RuntimeSettings& settings, bool have_player, u32 player,
+                               bool scan_active)
+{
+  if (!settings.enabled || !settings.builtin_patches_enabled || !have_player || !scan_active)
+  {
+    s_scan_reticle_bad_samples = 0;
+    return;
+  }
+
+  if (s_frame_counter < s_last_scan_reticle_watchdog_frame + 30u)
+    return;
+  s_last_scan_reticle_watchdog_frame = s_frame_counter;
+
+  const bool scratch_ok = ScanTargetScratchLooksCurrent(guard, player) &&
+                          ReticleBillboardScratchLooksValid(guard);
+  if (scratch_ok)
+  {
+    s_scan_reticle_bad_samples = 0;
+    return;
+  }
+
+  ++s_scan_reticle_bad_samples;
+  if (s_scan_reticle_bad_samples < 2)
+    return;
+
+  s_scan_reticle_bad_samples = 0;
+  ClearScanReticleScratch(guard, player);
+  s_smooth_scan_pitch = 0.0f;
+}
+
 void VerifyCannonFeedWatchdog(Core::System& system, const Core::CPUThreadGuard& guard,
                               const RuntimeSettings& settings, bool have_player, u32 player)
 {
@@ -5353,7 +6725,7 @@ void VerifyCannonFeedWatchdog(Core::System& system, const Core::CPUThreadGuard& 
     return;
   }
 
-  if (s_frame_counter < s_last_cannon_feed_watchdog_frame + 60u)
+  if (s_frame_counter < s_last_cannon_feed_watchdog_frame + 180u)
     return;
   s_last_cannon_feed_watchdog_frame = s_frame_counter;
 
@@ -5374,7 +6746,7 @@ void VerifyCannonFeedWatchdog(Core::System& system, const Core::CPUThreadGuard& 
   }
 
   ++s_cannon_feed_stall_frames;
-  if (s_cannon_feed_stall_frames < 2)
+  if (s_cannon_feed_stall_frames < 3)
     return;
 
   s_cannon_feed_stall_frames = 0;
@@ -5399,6 +6771,11 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   const RuntimeSettings settings = GetRuntimeSettings();
   if (!settings.enabled)
   {
+    TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
+    TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, 0);
+    ClearAudioListenerScratch(guard);
+    ClearCinematicScreenState(settings.cinematic_screen_enabled);
+    s_gameplay_input_hold_until_frame = 0;
     s_gameplay_input_active.store(false, std::memory_order_relaxed);
     s_orbit_lock_active.store(false, std::memory_order_relaxed);
     return;
@@ -5407,6 +6784,11 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   const bool game_active = Core::IsRunning(system) && IsMetroidPrimeRev0(guard);
   if (!game_active)
   {
+    TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
+    TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, 0);
+    ClearAudioListenerScratch(guard);
+    ClearCinematicScreenState(settings.cinematic_screen_enabled);
+    s_gameplay_input_hold_until_frame = 0;
     s_gameplay_input_active.store(false, std::memory_order_relaxed);
     s_orbit_lock_active.store(false, std::memory_order_relaxed);
     if (s_game_was_active)
@@ -5416,7 +6798,10 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   }
 
   s_game_was_active = true;
+  UpdateCinematicScreenState(guard, settings);
   UpdateShaderHunterGameFlowFlags(guard);
+  if (settings.builtin_patches_enabled && RestoreLegacyMorphBallCameraReturnPatch(guard))
+    InvalidatePrimedGunPatchICache(system);
 
   u32 player = 0;
   const bool have_player =
@@ -5424,12 +6809,19 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
       PlayerObjectLooksValid(guard, player);
   if (!have_player)
   {
+    TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
+    TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, 0);
+    ClearAudioListenerScratch(guard);
     if (s_last_patch_player != 0)
       s_patch_reapply_until_frame = s_frame_counter + 180u;
     s_last_patch_player = 0;
     s_patches_applied_this_boot = false;
-    s_gameplay_input_active.store(false, std::memory_order_relaxed);
+    const bool held_gameplay_input_active = s_frame_counter < s_gameplay_input_hold_until_frame;
+    s_gameplay_input_active.store(held_gameplay_input_active, std::memory_order_relaxed);
     s_orbit_lock_active.store(false, std::memory_order_relaxed);
+#ifdef ENABLE_VR
+    PublishVrOverlayState(settings, false);
+#endif
     return;
   }
 
@@ -5440,6 +6832,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
     s_patch_reapply_until_frame = s_frame_counter + 180u;
     TryWriteU32(guard, GAMEFLOW_MENU_SCRATCH, 0);
   }
+  UpdateMorphballCameraLevelHookEnabled(guard, have_player, player);
 
   bool dynamic_patch_applied = false;
   if (settings.builtin_patches_enabled)
@@ -5471,16 +6864,29 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   }
 
   const bool default_controls_active = have_player && PlayerIsInMenuMapOrMorphball(guard, player);
+  if (default_controls_active)
+    s_gameplay_input_hold_until_frame = 0;
+
   const bool scan_active = have_player && !default_controls_active && ScanVisorActive(guard, player);
+  if (settings.builtin_patches_enabled && have_player)
+    FlattenActiveMorphballCameraTransform(guard, player);
+
   const bool raw_gameplay_input_active =
       have_player && !default_controls_active && PlayerIsFirstPersonUnmorphed(guard, player);
   const bool visor_transition_input_active =
       !raw_gameplay_input_active && have_player && !default_controls_active &&
       PlayerIsChangingVisorsInFirstPerson(guard, player);
-  const bool gameplay_input_active = raw_gameplay_input_active || visor_transition_input_active;
+  const bool direct_gameplay_input_active =
+      raw_gameplay_input_active || visor_transition_input_active;
+  if (direct_gameplay_input_active)
+    s_gameplay_input_hold_until_frame = s_frame_counter + GAMEPLAY_INPUT_LOSS_HOLD_FRAMES;
+  const bool gameplay_input_active =
+      direct_gameplay_input_active ||
+      (!default_controls_active && s_frame_counter < s_gameplay_input_hold_until_frame);
   UpdatePitchZeroHookEnabled(guard, scan_active);
   const bool orbit_lock_active =
-      gameplay_input_active && !scan_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager);
+      gameplay_input_active && !scan_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager) &&
+      PlayerHasOrbitControlTarget(guard, ADDRESS.state_manager, player);
   s_gameplay_input_active.store(gameplay_input_active, std::memory_order_relaxed);
   s_orbit_lock_active.store(orbit_lock_active, std::memory_order_relaxed);
   if (!have_player || (!scan_active && !gameplay_input_active))
@@ -5489,11 +6895,13 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   if (have_player && RuntimeLoggingEnabled())
   {
     LogModeProbe(guard, player, gameplay_input_active != s_last_logged_gameplay_input_active);
+    LogCameraWatchdog(guard, player, default_controls_active);
     if (scan_active)
       DumpScanIndicatorCodeOnce(guard);
     LogScanReticleTrace(guard, player);
   }
   VerifyCriticalBuiltinPatches(system, guard, settings, have_player);
+  VerifyScanReticleWatchdog(guard, settings, have_player, player, scan_active);
   VerifyCannonFeedWatchdog(system, guard, settings, have_player, player);
   if (RuntimeLoggingEnabled())
   {
@@ -5555,11 +6963,13 @@ void ResetNativeRuntime()
   s_dpad_input_flags_addr = 0;
   s_dpad_last_disable_refresh_frame = 0;
   s_directional_move_speed = 0.0f;
+  s_gameplay_input_hold_until_frame = 0;
   s_gameplay_input_active.store(false, std::memory_order_relaxed);
   s_orbit_lock_active.store(false, std::memory_order_relaxed);
   s_last_logged_gameplay_input_active = false;
   s_have_logged_gameplay_input_active = false;
   s_last_mode_probe_frame = 0;
+  s_last_camera_watchdog_frame = 0;
   s_last_mode_probe_camera_state = 0xffffffffu;
   s_last_mode_probe_morph_state = 0xffffffffu;
   s_last_mode_probe_movement_state = 0xffffffffu;
@@ -5577,8 +6987,14 @@ void ResetNativeRuntime()
   s_patch_reapply_until_frame = 0;
   s_last_cannon_feed_watchdog_frame = 0;
   s_cannon_feed_stall_frames = 0;
+  s_cinematic_screen_generation = 0;
+  s_cinematic_screen_active = false;
+  s_cinematic_screen_hold_until_frame = 0;
+  s_last_scan_reticle_watchdog_frame = 0;
+  s_scan_reticle_bad_samples = 0;
   s_cannon_hand_pose_ready = false;
   s_smooth_matrix_valid = false;
+  s_cannon_smoothing_bypass_until_frame = 0;
   s_controller_base_x = 0.0f;
   s_controller_base_y = 0.0f;
   s_controller_base_z = 0.0f;
@@ -5592,11 +7008,16 @@ void ResetNativeRuntime()
   s_last_vr_menu_stick_left = false;
   s_last_vr_menu_stick_right = false;
   s_vr_menu_visible = false;
+  s_snap_turn_ready = true;
+  s_snap_turn_cooldown_until_frame = 0;
   s_vr_menu_tab = 0;
   s_vr_menu_selected_index = 0;
+  s_vr_menu_calibration_page = 0;
   s_vr_menu_control_page = 0;
   ++s_vr_menu_generation;
   s_vr_menu_saved_notice_until_frame = 0;
+  s_vr_menu_long_press_start_frame = 0;
+  s_vr_menu_long_press_consumed = false;
   s_vr_cannon_texture_notice_until_frame = 0;
   s_vr_state_confirm_action = 0;
   s_vr_state_confirm_until_frame = 0;
@@ -5621,6 +7042,8 @@ void ResetNativeRuntime()
   s_scan_indicator_update_trace_patch.original = 0;
   s_scan_indicator_view_basis_patch.applied = false;
   s_scan_indicator_view_basis_patch.original = DRAW_SCAN_INDICATOR_MODEL_BASIS_ORIGINAL;
+  s_first_person_orbit_aim_vector_patch.applied = false;
+  s_audio_listener_patch.applied = false;
   for (DynamicPpcPatch& patch : s_combat_pitch_patches)
     patch.applied = false;
   s_combat_elevation_pitch_patch.applied = false;
@@ -5698,6 +7121,10 @@ void SetRuntimeSettings(const RuntimeSettings& settings)
       ClampFinite(s_settings.gun_targeting_distance, defaults.gun_targeting_distance, 1.0f, 500.0f);
   s_settings.gun_targeting_radius =
       ClampFinite(s_settings.gun_targeting_radius, defaults.gun_targeting_radius, 0.1f, 50.0f);
+  s_settings.metroid_hud_distance =
+      ClampFinite(s_settings.metroid_hud_distance, defaults.metroid_hud_distance, 0.1f, 3.0f);
+  s_settings.metroid_hud_size =
+      ClampFinite(s_settings.metroid_hud_size, defaults.metroid_hud_size, 0.1f, 3.0f);
   s_settings.xr_dpad_head_radius =
       ClampFinite(s_settings.xr_dpad_head_radius, defaults.xr_dpad_head_radius, 0.02f, 2.0f);
   s_settings.xr_dpad_head_y_below =
@@ -5718,11 +7145,18 @@ void SetRuntimeSettings(const RuntimeSettings& settings)
                   defaults.directional_movement_air_accel, 0.0f, 500.0f);
   s_settings.look_yaw_sensitivity =
       ClampFinite(s_settings.look_yaw_sensitivity, defaults.look_yaw_sensitivity, 0.1f, 5.0f);
+  s_settings.snap_turn_degrees =
+      SnapTurnStepDegrees(std::clamp(s_settings.snap_turn_degrees,
+                                     SNAP_TURN_DEGREES_CHOICES.front(),
+                                     SNAP_TURN_DEGREES_CHOICES.back()),
+                          0);
 #ifdef ENABLE_VR
   Common::VR::OpenXRInputState::SetRumbleConfig(s_settings.rumble_enabled,
                                                 s_settings.rumble_intensity,
                                                 s_settings.rumble_hand_mode);
 #endif
+  if (!s_settings.enabled || !s_settings.cinematic_screen_enabled)
+    ClearCinematicScreenState(s_settings.cinematic_screen_enabled);
 }
 
 void ResetCalibrationOffsets()

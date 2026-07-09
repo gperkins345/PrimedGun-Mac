@@ -230,10 +230,12 @@ const Info<bool> GFX_VR_AUTO_VBI_FROM_HMD{{System::GFX, "VR", "AutoVBIFromHMD"},
 const Info<bool> GFX_VR_AUTO_LAYER_SPREAD{{System::GFX, "VR", "AutoLayerSpread"}, false};
 const Info<float> GFX_VR_LAYER_OFFSET{{System::GFX, "VR", "LayerOffset"}, 0.002f};
 const Info<float> GFX_VR_ELEMENT_DEPTH{{System::GFX, "VR", "ElementDepth"}, 0.001f};
+const Info<float> GFX_VR_HUD_THICKNESS{{System::GFX, "VR", "HudThickness"}, 0.0f};
 const Info<bool> GFX_VR_HUD_3D_ENABLE{{System::GFX, "VR", "Hud3DEnable"}, false};
 const Info<float> GFX_VR_HUD_3D_CLOSER{{System::GFX, "VR", "Hud3DCloser"}, 0.5f};
 const Info<bool> GFX_VR_REMOVE_BARS{{System::GFX, "VR", "RemoveCinematicBars"}, true};
 const Info<bool> GFX_VR_ORTHO_SCISSOR_FIX{{System::GFX, "VR", "OrthoScissorFix"}, true};
+const Info<bool> GFX_VR_DETECT_SKYBOX{{System::GFX, "VR", "DetectSkybox"}, false};
 const Info<bool> GFX_VR_METROID_VISOR_FIX{{System::GFX, "VR", "MetroidVisorFix"}, true};
 const Info<bool> GFX_VR_LOCK_HEAD_POSE{{System::GFX, "VR", "LockHeadPosePerFrame"}, false};
 const Info<bool> GFX_VR_AR_MODE{{System::GFX, "VR", "ARMode"}, false};

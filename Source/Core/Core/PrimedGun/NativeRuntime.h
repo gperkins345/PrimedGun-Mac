@@ -48,6 +48,12 @@ struct RuntimeSettings
   float gun_targeting_radius = 4.0f;
   bool visor_helmet_enabled = false;
   bool vr_overlays_enabled = true;
+  bool height_prompt_enabled = true;
+  bool vr_menu_hold_left_stick = false;
+  bool vr_menu_requires_head_zone = false;
+  bool cinematic_screen_enabled = false;
+  float metroid_hud_distance = 0.5f;
+  float metroid_hud_size = 0.5f;
   bool position_marker_enabled = false;
   bool xr_dpad_enabled = true;
   float xr_dpad_head_radius = 0.28f;
@@ -61,6 +67,8 @@ struct RuntimeSettings
   float directional_movement_accel = 45.0f;
   float directional_movement_air_accel = 8.0f;
   float look_yaw_sensitivity = 1.0f;
+  bool snap_turn_enabled = false;
+  int snap_turn_degrees = 45;
 };
 
 RuntimeSettings GetRuntimeSettings();

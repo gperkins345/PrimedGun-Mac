@@ -26,6 +26,7 @@ constexpr Common::EnumMap<const char*, PrimitiveType::TriangleStrip> primitives_
 
 constexpr Common::EnumMap<u32, PrimitiveType::TriangleStrip> vertex_in_map{1u, 2u, 3u, 3u};
 constexpr Common::EnumMap<u32, PrimitiveType::TriangleStrip> vertex_out_map{4u, 4u, 4u, 3u};
+constexpr u32 GEOMETRY_SHADER_CODE_VERSION = 40;
 
 bool geometry_shader_uid_data::IsPassthrough() const
 {
@@ -48,7 +49,7 @@ GeometryShaderUid GetGeometryShaderUid(PrimitiveType primitive_type)
   GeometryShaderUid out;
 
   geometry_shader_uid_data* const uid_data = out.GetUidData();
-  uid_data->code_version = 37;
+  uid_data->code_version = GEOMETRY_SHADER_CODE_VERSION;
   uid_data->primitive_type = static_cast<u32>(primitive_type);
   uid_data->numTexGens = xfmem.numTexGen.numTexGens;
 
@@ -296,6 +297,7 @@ ShaderCode GenerateGeometryShaderCode(APIType api_type, const ShaderHostConfig& 
       // triangle winding to match the game's adjusted cull mode.
       out.Write("\t\tfloat4 vp = f.viewPos;\n");
       out.Write("\t\tvp.x *= " I_STEREOPARAMS ".x;\n");
+      out.Write("\t\tvp.w *= " I_STEREOPARAMS ".z;\n");
       out.Write("\t\tfloat z_eye = dot(zrow, vp);\n");
       out.Write("\t\tfloat clip_x = dot(row0, vp);\n");
       out.Write("\t\tfloat clip_y = dot(row1, vp);\n");
@@ -321,6 +323,37 @@ ShaderCode GenerateGeometryShaderCode(APIType api_type, const ShaderHostConfig& 
         out.Write("\t\t}}\n");
       out.Write("\t}}\n");
 
+      // Head-locked perspective HUD: preserve the game's original perspective GUI/model
+      // geometry, then place the transformed object in head-locked HMD space.
+      out.Write("\telse if (" I_STEREOPARAMS ".w < -2.5f)\n");
+      out.Write("\t{{\n");
+      out.Write("\t\tfloat hud_game_w = (abs(f.pos.w) > 1.0e-6) ? f.pos.w : 1.0e-6;\n");
+      out.Write("\t\tfloat hud_game_ndc_z = clamp(f.pos.z / hud_game_w, -1.0, 1.0);\n");
+      out.Write("\t\tfloat4 hudPos = float4(\n");
+      out.Write("\t\t\tf.viewPos.x * " I_HEAD_PARAMS ".y + " I_VR_SCREEN ".x,\n");
+      out.Write("\t\t\tf.viewPos.y * " I_HEAD_PARAMS ".z + " I_VR_SCREEN ".y,\n");
+      out.Write("\t\t\tf.viewPos.z * " I_HEAD_PARAMS ".w + " I_VR_SCREEN ".z,\n");
+      out.Write("\t\t\t1.0);\n");
+      out.Write("\t\thudPos.z = min(hudPos.z, -0.1 * max(" I_VR_DEPTH ".w, 0.001));\n");
+      out.Write("\t\tfloat4 row0 = " I_HEAD_PROJ "[eye * 2 + 0];\n");
+      out.Write("\t\tfloat4 row1 = " I_HEAD_PROJ "[eye * 2 + 1];\n");
+      out.Write("\t\tf.pos.x = dot(row0, hudPos);\n");
+      out.Write("\t\tf.pos.y = dot(row1, hudPos);\n");
+      out.Write("\t\tf.pos.w = max(-hudPos.z, 0.001);\n");
+      out.Write("\t\tf.pos.z = hud_game_ndc_z * f.pos.w;\n");
+      if (!host_config.fast_depth_calc)
+        out.Write("\t\tf.clipPos = f.pos;\n");
+      out.Write("\t\tf.pos.xy *= sign(" I_VR_PIXELCENTER ".xy * float2(1.0, -1.0));\n");
+      out.Write("\t\tf.pos.xy = f.pos.xy - f.pos.w * " I_VR_PIXELCENTER ".xy;\n");
+      if (host_config.backend_depth_clamp)
+      {
+        if (api_type == APIType::Vulkan || api_type == APIType::OpenGL)
+          out.Write("\t\tf.clipDist0 = 1.0;\n\t\tf.clipDist1 = 1.0;\n");
+        else
+          out.Write("\t\tf.clipDist0 = f.pos.z + f.pos.w;\n\t\tf.clipDist1 = -f.pos.z;\n");
+      }
+      out.Write("\t}}\n");
+
       // Head-locked VR: 2D content on a virtual screen that follows head movements.
       // cstereo.w == -2.0 signals head-locked draw.
       // Uses unrotated (raw) per-eye projection — no head rotation baked in.
@@ -344,7 +377,7 @@ ShaderCode GenerateGeometryShaderCode(APIType api_type, const ShaderHostConfig& 
       out.Write("\t\tfloat4 screenPos = float4(\n");
       out.Write("\t\t\tndc_x * " I_VR_SCREEN ".x,\n");
       out.Write("\t\t\tndc_y * " I_VR_SCREEN ".y,\n");
-      out.Write("\t\t\t-" I_VR_SCREEN ".z,\n");
+      out.Write("\t\t\t-" I_VR_SCREEN ".z + ndc_z_clamped * " I_VR_DEPTH ".z,\n");
       out.Write("\t\t\t1.0);\n");
       out.Write("\t\tfloat curve = max(" I_HEAD_PARAMS ".x, 0.0);\n");
       out.Write("\t\tfloat horizontal = 0.5 * (ndc_x * ndc_x);\n");
@@ -409,7 +442,7 @@ ShaderCode GenerateGeometryShaderCode(APIType api_type, const ShaderHostConfig& 
       out.Write("\t\tfloat4 screenPos = float4(\n");
       out.Write("\t\t\tndc_x * " I_VR_SCREEN ".x,\n");
       out.Write("\t\t\tndc_y * " I_VR_SCREEN ".y,\n");
-      out.Write("\t\t\t-" I_VR_SCREEN ".z,\n");
+      out.Write("\t\t\t-" I_VR_SCREEN ".z + ndc_z_clamped * " I_VR_DEPTH ".z,\n");
       out.Write("\t\t\t1.0);\n");
       out.Write("\t\tfloat4 row0 = " I_EYE_PROJ "[eye * 2 + 0];\n");
       out.Write("\t\tfloat4 row1 = " I_EYE_PROJ "[eye * 2 + 1];\n");
@@ -617,6 +650,7 @@ void EnumerateGeometryShaderUids(const std::function<void(const GeometryShaderUi
   for (PrimitiveType primitive : primitive_lut)
   {
     geometry_shader_uid_data* const guid = uid.GetUidData();
+    guid->code_version = GEOMETRY_SHADER_CODE_VERSION;
     guid->primitive_type = static_cast<u32>(primitive);
 
     for (u32 texgens = 0; texgens <= 8; texgens++)

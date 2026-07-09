@@ -37,8 +37,9 @@ public:
   bool dirty = false;
 
   // Per-draw VR stereo mode override (set before RenderDrawCall, consumed in SetConstants).
-  // NaN = no override; -2.0 = force head-locked; -1.0 = force screen;
-  // 0.0 = force fullscreen; 0.25 = force fullscreen mono; 1.0 = force perspective.
+  // NaN = no override; -3.0 = force head-locked perspective HUD; -2.0 = force head-locked;
+  // -1.0 = force screen; 0.0 = force fullscreen; 0.25 = force fullscreen mono;
+  // 1.0 = force perspective.
   float vr_stereo_override = std::numeric_limits<float>::quiet_NaN();
 
   // Per-frame counter for ortho/screen draws — used to spread depth and avoid Z-fighting.
@@ -53,6 +54,19 @@ public:
 
   // Per-draw UPM override from shader overrides (-1 = use global setting).
   float vr_units_per_meter_override = -1.0f;
+
+  // Per-draw headlocked projection tuning for Hydra-style HUD layers.
+  float vr_headlocked_projection_scale_x = 1.0f;
+  float vr_headlocked_projection_scale_y = 1.0f;
+  float vr_headlocked_projection_offset_x = 0.0f;
+  float vr_headlocked_projection_offset_y = 0.0f;
+  float vr_perspective_hud_distance_override = -1.0f;
+  float vr_perspective_hud_size_override = -1.0f;
+
+  // Set by VertexManagerBase for the current -3 (perspective HUD) draw.
+  bool vr_metroid_hud_self_center = false;
+  bool vr_metroid_hud_anchor_candidate = false;
+  int vr_metroid_hud_reference_context = 0;
 
   // Per-draw Metroid HUD layer (set when a profile-classified draw matches a
   // perspective Screen/HeadLocked override).  GeometryShaderManager looks this up in
@@ -72,5 +86,19 @@ private:
   std::array<std::array<float, 4>, 4> m_cached_eye_projection{};
   std::array<std::array<float, 4>, 2> m_cached_eye_z_row{};
   std::array<std::array<float, 4>, 4> m_cached_head_projection{};
+  float m_cached_units_per_meter = 0.0f;
   bool m_vr_pose_needs_refresh = true;
+
+  // Shared reference depth for the headlocked perspective HUD (-3) path. Stable body layers choose
+  // the next frame's anchor; all coherent draws in a frame reuse one anchor so they share one
+  // transform and keep relative scene depth.
+  float m_vr_hud_shared_reference_z = 0.0f;
+  bool m_vr_hud_shared_reference_valid = false;
+  int m_vr_hud_shared_reference_context = 0;
+  float m_vr_hud_stable_reference_z = 0.0f;
+  bool m_vr_hud_stable_reference_valid = false;
+  int m_vr_hud_stable_reference_context = 0;
+  float m_vr_hud_frame_anchor_candidate_z = 0.0f;
+  bool m_vr_hud_frame_anchor_candidate_valid = false;
+  int m_vr_hud_frame_anchor_candidate_context = 0;
 };

@@ -59,6 +59,7 @@
 #include "VideoCommon/CullingCodeFinder.h"
 #include "VideoCommon/HideObjectEngine.h"
 #include "VideoCommon/ShaderHunter.h"
+#include "VideoCommon/TextureElementManager.h"
 #include "VideoCommon/XFStateManager.h"
 
 #include "Core/ConfigManager.h"
@@ -86,11 +87,41 @@ constexpr int METROID_PRIME1_THERMAL_HEAT_HFOV_X100 = 7;
 constexpr int METROID_PRIME1_THERMAL_HEAT_VFOV_X100 = 5;
 constexpr int METROID_PRIME1_THERMAL_HEAT_NEAR_X1000 = 200;
 constexpr int METROID_PRIME1_THERMAL_HEAT_FAR_X100 = 75;
+constexpr u64 METROID_PRIME1_THERMAL_MASK_STAGE7_HASH = 0x8e31231cae45574c;
+constexpr u32 METROID_PRIME1_FULLSCREEN_EFB_EFFECT_PS_HASH = 0x667d9a41;
+constexpr u32 METROID_PRIME1_FULLSCREEN_EFB_EFFECT_SOURCE_STAGE = 7;
 constexpr u64 PRIMEGUN_CANNON_PROBE_PS_HASH = 0x9e0b32f0;
 constexpr u32 PRIMEGUN_CANNON_PROBE_MAX_LOGS = 240;
+constexpr u32 PRIMEGUN_THERMAL_HUD_MAX_LOGS = 240;
+constexpr u32 PRIMEGUN_ELEMENT_HANDLING_MAX_LOGS = 800;
+constexpr bool ENABLE_PRIMEDGUN_VIDEO_DEBUG_LOGGING = false;
+constexpr int METROID_HUD_CONTEXT_DEFAULT = 0;
+constexpr int METROID_HUD_CONTEXT_COMBAT = 1;
+constexpr int METROID_HUD_CONTEXT_MENU = 2;
+constexpr float METROID_PRIME1_PERSPECTIVE_HUD_DEFAULT_DISTANCE = 0.5f;
+constexpr float METROID_PRIME1_PERSPECTIVE_HUD_DEFAULT_SIZE = 0.5f;
+
+struct MetroidHydraHudSettings
+{
+  bool enabled = false;
+  bool perspective_hud = false;
+  float scale = 1.0f;
+  float width = 1.0f;
+  float height = 1.0f;
+  float up = 0.0f;
+  float right = 0.0f;
+};
+
+struct MetroidLayerBehavior
+{
+  bool skip = false;
+  ShaderHunter::HandlingType handling = ShaderHunter::HandlingType::Skip;
+};
 
 u32 s_primegun_cannon_probe_log_count = 0;
 bool s_primegun_cannon_probe_suppressed_notice = false;
+u32 s_primegun_thermal_hud_log_count = 0;
+u32 s_primegun_element_handling_log_count = 0;
 
 int GetFullscreenMonoPerEyeTextureLayer()
 {
@@ -172,6 +203,9 @@ std::string PrimedGunCannonProbeLogPath()
 
 void AppendPrimedGunCannonProbeLog(std::string_view text)
 {
+  if (!ENABLE_PRIMEDGUN_VIDEO_DEBUG_LOGGING)
+    return;
+
   const std::string path = PrimedGunCannonProbeLogPath();
   File::IOFile file(path, "ab");
   if (!file)
@@ -187,6 +221,9 @@ void LogPrimedGunCannonProbeDraw(u32 draw_sequence, u64 vs_hash, u64 ps_hash, u6
                                 const std::array<std::string, 8>& texture_names,
                                 const ShaderHunter::RuntimeElementSignature& signature)
 {
+  if (!ENABLE_PRIMEDGUN_VIDEO_DEBUG_LOGGING)
+    return;
+
   if (ps_hash != PRIMEGUN_CANNON_PROBE_PS_HASH)
     return;
 
@@ -305,6 +342,301 @@ bool ShouldDisableOpenXRLegacyView(float vr_override)
            vr_override < 0.5f));
 }
 
+void AppendPrimedGunThermalHudLog(std::string_view text)
+{
+  if (!ENABLE_PRIMEDGUN_VIDEO_DEBUG_LOGGING)
+    return;
+
+  if (s_primegun_thermal_hud_log_count >= PRIMEGUN_THERMAL_HUD_MAX_LOGS)
+    return;
+
+  ++s_primegun_thermal_hud_log_count;
+  File::CreateFullPath(File::GetUserPath(D_LOGS_IDX));
+  File::IOFile file(File::GetUserPath(D_LOGS_IDX) + "PrimedGunThermalHud.log", "ab");
+  if (!file)
+    return;
+  file.WriteString(std::string(text));
+}
+
+void AppendPrimedGunElementHandlingLog(std::string_view text)
+{
+  if (!ENABLE_PRIMEDGUN_VIDEO_DEBUG_LOGGING)
+    return;
+
+  if (s_primegun_element_handling_log_count >= PRIMEGUN_ELEMENT_HANDLING_MAX_LOGS)
+    return;
+
+  ++s_primegun_element_handling_log_count;
+  File::CreateFullPath(File::GetUserPath(D_LOGS_IDX));
+  File::IOFile file(File::GetUserPath(D_LOGS_IDX) + "PrimedGunElementHandling.log", "ab");
+  if (!file)
+    return;
+  file.WriteString(std::string(text));
+}
+
+bool IsMetroidPrime1Profile(MetroidElementProfile profile)
+{
+  return profile == MetroidElementProfile::Prime1GC ||
+         profile == MetroidElementProfile::Prime1Wii;
+}
+
+float GetPrimedGunPerspectiveHudDistance()
+{
+#ifdef ENABLE_VR
+  return std::clamp(Common::VR::OpenXRInputState::GetPrimedGunOverlay().metroid_hud_distance,
+                    0.1f, 3.0f);
+#else
+  return METROID_PRIME1_PERSPECTIVE_HUD_DEFAULT_DISTANCE;
+#endif
+}
+
+float GetPrimedGunPerspectiveHudSize()
+{
+#ifdef ENABLE_VR
+  return std::clamp(Common::VR::OpenXRInputState::GetPrimedGunOverlay().metroid_hud_size, 0.1f,
+                    3.0f);
+#else
+  return METROID_PRIME1_PERSPECTIVE_HUD_DEFAULT_SIZE;
+#endif
+}
+
+MetroidHydraHudSettings GetMetroidHydraHudSettings(MetroidElementProfile profile,
+                                                   MetroidElementLayer layer)
+{
+  if (!IsMetroidPrime1Profile(profile))
+    return {};
+
+  switch (layer)
+  {
+  case MetroidElementLayer::HUD:
+  case MetroidElementLayer::UnknownHUD:
+  case MetroidElementLayer::MapOrHint:
+  case MetroidElementLayer::Map:
+    return {.enabled = true,
+            .perspective_hud = true,
+            .scale = 30.0f,
+            .width = 0.79f,
+            .height = 0.79f};
+
+  case MetroidElementLayer::XRayHUD:
+    return {.enabled = true,
+            .perspective_hud = true,
+            .scale = 30.0f,
+            .width = 0.79f,
+            .height = 0.79f};
+
+  case MetroidElementLayer::DarkVisorHUD:
+    return {.enabled = true,
+            .perspective_hud = true,
+            .scale = 5.0f,
+            .width = 0.79f,
+            .height = 0.79f};
+
+  case MetroidElementLayer::VisorRadarHint:
+    return {.enabled = true,
+            .perspective_hud = true,
+            .scale = 32.0f,
+            .width = 0.79f,
+            .height = 0.79f};
+
+  case MetroidElementLayer::RadarDot:
+    return {.enabled = true,
+            .perspective_hud = true,
+            .scale = 36.0f,
+            .width = 0.79f,
+            .height = 0.79f};
+
+  case MetroidElementLayer::Visor:
+    return {.enabled = true, .perspective_hud = true, .scale = 90.0f};
+
+  case MetroidElementLayer::Helmet:
+    return {.enabled = true,
+            .perspective_hud = true,
+            .scale = 100.0f,
+            .width = 1.7f,
+            .height = 1.7f};
+
+  case MetroidElementLayer::ScanText:
+    return {.enabled = true,
+            .perspective_hud = true,
+            .scale = 32.0f,
+            .width = 0.8f,
+            .height = 0.8f};
+
+  case MetroidElementLayer::ScanHologram:
+    return {.enabled = true,
+            .perspective_hud = true,
+            .scale = 40.0f,
+            .width = 1.2f,
+            .height = 1.2f};
+
+  case MetroidElementLayer::ScanReticle:
+    return {.enabled = true, .width = 1.0f, .height = 1.0f, .up = 0.14f, .right = 0.01f};
+
+  default:
+    return {};
+  }
+}
+
+bool IsMetroidPerspectiveHudAnchorLayer(MetroidElementLayer layer)
+{
+  switch (layer)
+  {
+  case MetroidElementLayer::HUD:
+  case MetroidElementLayer::UnknownHUD:
+  case MetroidElementLayer::MapOrHint:
+  case MetroidElementLayer::Map:
+  case MetroidElementLayer::XRayHUD:
+  case MetroidElementLayer::DarkVisorHUD:
+  case MetroidElementLayer::Helmet:
+    return true;
+
+  default:
+    return false;
+  }
+}
+
+bool IsMetroidPrime1CombatContextLayer(MetroidElementLayer layer)
+{
+  switch (layer)
+  {
+  case MetroidElementLayer::Gun:
+  case MetroidElementLayer::World:
+  case MetroidElementLayer::Reticle:
+  case MetroidElementLayer::WiiReticle:
+  case MetroidElementLayer::XRayWorld:
+  case MetroidElementLayer::ThermalGunAndDoor:
+    return true;
+
+  default:
+    return false;
+  }
+}
+
+bool IsMetroidPrime1MenuContextLayer(MetroidElementLayer layer)
+{
+  switch (layer)
+  {
+  case MetroidElementLayer::Map0:
+  case MetroidElementLayer::Map1:
+  case MetroidElementLayer::Map2:
+  case MetroidElementLayer::Dialog:
+  case MetroidElementLayer::MapMap:
+  case MetroidElementLayer::MapLegend:
+  case MetroidElementLayer::InventorySamus:
+  case MetroidElementLayer::InventorySamusOutline:
+  case MetroidElementLayer::MapNorth:
+    return true;
+
+  default:
+    return false;
+  }
+}
+
+bool IsMetroidPrime1CombatHudAnchorCandidate(MetroidElementLayer layer, float reference_view_z,
+                                             int hud_context)
+{
+  return hud_context == METROID_HUD_CONTEXT_COMBAT && layer == MetroidElementLayer::ScanText &&
+         std::isfinite(reference_view_z) && reference_view_z >= -22.0f &&
+         reference_view_z <= -18.0f;
+}
+
+bool IsMetroidPrime1ScannerPreviewMask(const ShaderHunter::RuntimeElementSignature& signature)
+{
+  return signature.valid && !signature.perspective && signature.ortho_left_x100 == -32000 &&
+         signature.ortho_right_x100 == 32000 && signature.ortho_top_x100 == 22400 &&
+         signature.ortho_bottom_x100 == -22400 && signature.ortho_layer == 0 &&
+         signature.viewport_x == 662 && signature.viewport_y == 566 &&
+         signature.viewport_width == 320 && signature.viewport_height == 224 &&
+         signature.scissor_left == 342 && signature.scissor_top == 342 &&
+         signature.scissor_right == 981 && signature.scissor_bottom == 789 &&
+         signature.alpha_test_hex == 0x007f0000 && signature.ztest && signature.zupdate &&
+         signature.zfunc == 3 && signature.blend_color_update && signature.blend_alpha_update;
+}
+
+bool IsMetroidPrime1ThermalContextLayer(MetroidElementLayer layer)
+{
+  switch (layer)
+  {
+  case MetroidElementLayer::ThermalEffect:
+  case MetroidElementLayer::ThermalEffectGun:
+  case MetroidElementLayer::ThermalGunAndDoor:
+    return true;
+
+  default:
+    return false;
+  }
+}
+
+bool IsMetroidPrime1ThermalChargeBeamMaskDraw(
+    const std::optional<ElementsGroupManager::DrawRecord>& draw)
+{
+  if (!draw || draw->profile_id != MetroidElementProfile::Prime1GC ||
+      draw->profile_layer != MetroidElementLayer::ChargeBeamEffect)
+  {
+    return false;
+  }
+
+  const ShaderHunter::RuntimeElementSignature& signature = draw->signature;
+  return signature.valid && !signature.perspective && signature.ortho_left_x100 == 0 &&
+         signature.ortho_right_x100 == 64000 && signature.ortho_top_x100 == 0 &&
+         signature.ortho_bottom_x100 == 44800 && signature.ortho_layer == 0 &&
+         signature.viewport_x == 662 && signature.viewport_y == 566 &&
+         signature.viewport_width == 320 && signature.viewport_height == 224 &&
+         signature.scissor_left == 342 && signature.scissor_top == 342 &&
+         signature.scissor_right == 981 && signature.scissor_bottom == 789 &&
+         signature.alpha_test_hex == 0x007f0000 && !signature.ztest && !signature.zupdate &&
+         signature.zfunc == 7 && signature.blend_color_update && signature.blend_alpha_update &&
+         draw->textures[7] == METROID_PRIME1_THERMAL_MASK_STAGE7_HASH;
+}
+
+MetroidLayerBehavior GetMetroidLayerBehavior(MetroidElementLayer layer)
+{
+  switch (layer)
+  {
+  case MetroidElementLayer::EFBCopy:
+  case MetroidElementLayer::BlackBars:
+  case MetroidElementLayer::ScanVisor:
+  case MetroidElementLayer::ScanDarken:
+  case MetroidElementLayer::ScanHighlighter:
+  case MetroidElementLayer::ScanBox:
+  case MetroidElementLayer::ScanCircle:
+  case MetroidElementLayer::ScanReticle:
+    return {.skip = true};
+
+  case MetroidElementLayer::Helmet:
+  case MetroidElementLayer::HUD:
+  case MetroidElementLayer::MorphballHUD:
+  case MetroidElementLayer::XRayHUD:
+  case MetroidElementLayer::DarkVisorHUD:
+  case MetroidElementLayer::UnknownHUD:
+  case MetroidElementLayer::VisorRadarHint:
+  case MetroidElementLayer::RadarDot:
+  case MetroidElementLayer::MorphballMapOrHint:
+  case MetroidElementLayer::MapOrHint:
+  case MetroidElementLayer::MorphballMap:
+  case MetroidElementLayer::Map:
+  case MetroidElementLayer::Map0:
+  case MetroidElementLayer::Map1:
+  case MetroidElementLayer::Map2:
+  case MetroidElementLayer::Dialog:
+  case MetroidElementLayer::MapMap:
+  case MetroidElementLayer::MapLegend:
+  case MetroidElementLayer::InventorySamus:
+  case MetroidElementLayer::InventorySamusOutline:
+  case MetroidElementLayer::MapNorth:
+  case MetroidElementLayer::ScanText:
+  case MetroidElementLayer::ScanHologram:
+  case MetroidElementLayer::Visor:
+  case MetroidElementLayer::VisorBootup:
+  case MetroidElementLayer::UnknownVisor:
+    return {.handling = ShaderHunter::HandlingType::HeadLocked};
+
+  default:
+    return {};
+  }
+}
+
 bool ShouldSampleMetroidFullscreenEffectPerEye(
     const std::optional<ElementsGroupManager::DrawRecord>& draw,
     int thermal_effect_gun_draws_seen)
@@ -384,6 +716,51 @@ bool HasMetroidPrime1ThermalScissor(const ShaderHunter::RuntimeElementSignature&
          signature.scissor_right == 981 && signature.scissor_bottom == 789;
 }
 
+bool HasMetroidPrime1MainViewport(const ShaderHunter::RuntimeElementSignature& signature)
+{
+  return signature.viewport_x == 662 && signature.viewport_y == 566 &&
+         signature.viewport_width == 320 && signature.viewport_height == 224 &&
+         HasMetroidPrime1ThermalScissor(signature);
+}
+
+bool HasBoundEfbCopyTexture()
+{
+  if (!g_texture_cache)
+    return false;
+
+  for (u32 stage = 0; stage < 8; ++stage)
+  {
+    if (g_texture_cache->IsBoundTextureEfbCopy(stage))
+      return true;
+  }
+
+  return false;
+}
+
+bool HasBoundEfbCopyTextureAtStage(u32 stage)
+{
+  return g_texture_cache && g_texture_cache->IsBoundTextureEfbCopy(stage);
+}
+
+bool IsMetroidPrime1FramebufferEffectDraw(
+    const std::optional<ElementsGroupManager::DrawRecord>& draw)
+{
+  if (!draw || !IsMetroidPrime1Profile(draw->profile_id))
+    return false;
+
+  const ShaderHunter::RuntimeElementSignature& signature = draw->signature;
+  const bool fullscreen_efb_effect_shader =
+      static_cast<u32>(draw->ps_hash) == METROID_PRIME1_FULLSCREEN_EFB_EFFECT_PS_HASH;
+  if (!fullscreen_efb_effect_shader)
+    return false;
+
+  const bool efb_copy_source =
+      HasBoundEfbCopyTextureAtStage(METROID_PRIME1_FULLSCREEN_EFB_EFFECT_SOURCE_STAGE) ||
+      HasBoundEfbCopyTexture();
+  return signature.valid && !signature.perspective && HasMetroidPrime1MainViewport(signature) &&
+         signature.blend_color_update && efb_copy_source;
+}
+
 bool HasMetroidPrime1ThermalHeatProjection(
     const ShaderHunter::RuntimeElementSignature& signature)
 {
@@ -458,6 +835,9 @@ void LogMetroidPrime1XRayDraw(u32 draw_counter,
                               u64 gs_hash, int forced_texture_layer,
                               bool signature_fallback, bool d3d_tex0_layer_fallback)
 {
+  if (!ENABLE_PRIMEDGUN_VIDEO_DEBUG_LOGGING)
+    return;
+
   if (!ShouldLogMetroidPrime1XRayDraw(draw))
     return;
 
@@ -505,6 +885,63 @@ void LogMetroidPrime1XRayDraw(u32 draw_counter,
       g_texture_cache ? g_texture_cache->GetBoundTextureNativeHeight(7) : 0,
       g_texture_cache ? g_texture_cache->GetBoundTextureLayers(7) : 0,
       g_texture_cache ? g_texture_cache->GetBoundTextureHash(7) : 0);
+}
+
+void LogPrimedGunElementHandling(u32 draw_counter,
+                                 const std::optional<ElementsGroupManager::DrawRecord>& draw,
+                                 ShaderHunter::HandlingType handling, u64 vs_hash, u64 ps_hash,
+                                  u64 gs_hash, const std::array<u64, 8>& texture_hashes,
+                                  int forced_texture_layer, float stereo_override)
+{
+  if (!ENABLE_PRIMEDGUN_VIDEO_DEBUG_LOGGING)
+    return;
+
+  if (!draw || draw->profile_id != MetroidElementProfile::Prime1GC)
+    return;
+
+  const bool interesting_handling = handling == ShaderHunter::HandlingType::Screen ||
+                                    handling == ShaderHunter::HandlingType::Fullscreen ||
+                                    handling == ShaderHunter::HandlingType::FullscreenMono ||
+                                    handling == ShaderHunter::HandlingType::HeadLocked;
+  const bool interesting_layer =
+      draw->profile_layer == MetroidElementLayer::ScreenFade ||
+      draw->profile_layer == MetroidElementLayer::ScreenOverlay ||
+      draw->profile_layer == MetroidElementLayer::XRayEffect ||
+      draw->profile_layer == MetroidElementLayer::VisorDirt ||
+      draw->profile_layer == MetroidElementLayer::ThermalEffect ||
+      draw->profile_layer == MetroidElementLayer::ThermalEffectGun ||
+      draw->profile_layer == MetroidElementLayer::ChargeBeamEffect ||
+      draw->profile_layer == MetroidElementLayer::ScanDarken ||
+      draw->profile_layer == MetroidElementLayer::ScanHighlighter ||
+      draw->profile_layer == MetroidElementLayer::ScanReticle ||
+      draw->profile_layer == MetroidElementLayer::ScanText ||
+      draw->profile_layer == MetroidElementLayer::XRayHUD ||
+      draw->profile_layer == MetroidElementLayer::HUD ||
+      draw->profile_layer == MetroidElementLayer::UnknownHUD;
+  if (!interesting_layer && handling == ShaderHunter::HandlingType::Screen)
+    return;
+  if (!interesting_handling && !interesting_layer)
+    return;
+
+  const auto& s = draw->signature;
+  AppendPrimedGunElementHandlingLog(fmt::format(
+      "element-handling draw={} layer={} handling={} tex_layer={} proj={} "
+      "override={} "
+      "persp(h={} v={} n={} f={}) ortho(l={} r={} t={} b={} layer={}) "
+      "vp=({},{} {}x{}) sc=({},{} {},{}) alpha={:08x} ztest={} zupdate={} zfunc={} "
+      "blend(col={} alpha={}) VS={:08x} PS={:08x} GS={:08x} "
+      "t0={:016x} t1={:016x} t2={:016x} t3={:016x} t7={:016x}\n",
+      draw_counter, draw->profile_layer_name, HandlingToDebugName(handling),
+      forced_texture_layer, s.perspective ? "perspective" : "ortho",
+      std::isnan(stereo_override) ? 999.0f : stereo_override,
+      s.perspective_hfov_x100, s.perspective_vfov_x100, s.perspective_near_x1000,
+      s.perspective_far_x100, s.ortho_left_x100, s.ortho_right_x100,
+      s.ortho_top_x100, s.ortho_bottom_x100, s.ortho_layer, s.viewport_x, s.viewport_y,
+      s.viewport_width, s.viewport_height, s.scissor_left, s.scissor_top, s.scissor_right,
+      s.scissor_bottom, s.alpha_test_hex, s.ztest, s.zupdate, s.zfunc,
+      s.blend_color_update, s.blend_alpha_update, static_cast<u32>(vs_hash),
+      static_cast<u32>(ps_hash), static_cast<u32>(gs_hash), texture_hashes[0],
+      texture_hashes[1], texture_hashes[2], texture_hashes[3], texture_hashes[7]));
 }
 
 ShaderHunter::RuntimeElementSignature BuildRuntimeElementSignature(const XFMemory& xf_memory,
@@ -1239,8 +1676,10 @@ void VertexManagerBase::Flush()
         // Also check persistent overrides (always active, even when hunting is disabled).
         bool hunter_skip = false;
         bool elements_skip = false;
+        bool texmgr_skip = false;
         auto& hunter = ShaderHunter::GetInstance();
         auto& elements = ElementsGroupManager::GetInstance();
+        auto& texmgr = TextureElementManager::GetInstance();
         const bool primegun_cannon_probe_enabled = false;
         const bool hunter_enabled = hunter.IsEnabled();
         const bool hunter_debug_logging = hunter.IsDebugLogging();
@@ -1248,6 +1687,7 @@ void VertexManagerBase::Flush()
         const bool elements_popup_open = elements.IsPopupOpen();
         const bool elements_has_overrides = elements.HasOverrides();
         const bool elements_runtime_active = elements_popup_open || elements_has_overrides;
+        const bool texmgr_has_overrides = texmgr.HasOverrides();
         const bool hunter_needs_families = hunter.NeedsShaderFamilySignatures();
         const bool hunter_needs_textures = hunter.NeedsTextureHashes();
         const bool hunter_needs_counters = hunter.NeedsOverrideDrawCounters();
@@ -1261,8 +1701,8 @@ void VertexManagerBase::Flush()
         static const bool qpvr_blend_trace = getenv("QPVR_BLEND_TRACE") != nullptr;
         const bool qpvr_draw_id_active = !qpvr_pink_ps.empty() || !qpvr_skip_ps.empty();
         if (primegun_cannon_probe_enabled || hunter_enabled || hunter_has_overrides ||
-            hunter_debug_logging || elements_runtime_active || qpvr_draw_id_active ||
-            qpvr_blend_trace)
+            hunter_debug_logging || elements_runtime_active || texmgr_has_overrides ||
+            qpvr_draw_id_active || qpvr_blend_trace)
         {
           const auto& vs = m_current_pipeline_config.vs_uid;
           const auto& ps = m_current_pipeline_config.ps_uid;
@@ -1278,7 +1718,7 @@ void VertexManagerBase::Flush()
           std::array<std::string, 8> tex_names{};
           const bool needs_texture_hashes =
               primegun_cannon_probe_enabled || hunter_enabled || hunter_needs_textures ||
-              elements_runtime_active;
+              elements_runtime_active || texmgr_has_overrides;
           const bool needs_texture_names =
               primegun_cannon_probe_enabled || hunter_enabled || elements_popup_open;
           if (needs_texture_hashes || needs_texture_names)
@@ -1461,6 +1901,45 @@ void VertexManagerBase::Flush()
                 .texture_names = tex_names});
             if (needs_profile_classification)
               elements.ClassifyProfileDraw(&*element_draw, profile_metrics);
+            if (needs_profile_classification && IsMetroidPrime1Profile(element_draw->profile_id))
+            {
+              if (IsMetroidPrime1ScannerPreviewMask(draw_signature))
+              {
+                element_draw->profile_layer = MetroidElementLayer::ScanDarken;
+                element_draw->profile_layer_name =
+                    std::string(MetroidElementLayerToDisplayName(element_draw->profile_layer));
+              }
+
+              if (IsMetroidPrime1ThermalChargeBeamMaskDraw(element_draw))
+              {
+                element_draw->profile_layer = MetroidElementLayer::ThermalEffectGun;
+                element_draw->profile_layer_name =
+                    std::string(MetroidElementLayerToDisplayName(element_draw->profile_layer));
+                AppendPrimedGunThermalHudLog(fmt::format(
+                    "thermal-chargebeam-remap draw={} active_prev={} seen_this_frame={}\n",
+                    element_draw->draw_sequence, m_metroid_prime1_thermal_context_active,
+                    m_metroid_prime1_thermal_context_seen));
+              }
+
+              if (IsMetroidPrime1MenuContextLayer(element_draw->profile_layer))
+              {
+                m_metroid_prime1_menu_context_seen = true;
+                m_metroid_prime1_combat_context_seen = false;
+              }
+              else if (!m_metroid_prime1_menu_context_seen &&
+                       IsMetroidPrime1CombatContextLayer(element_draw->profile_layer))
+              {
+                m_metroid_prime1_combat_context_seen = true;
+              }
+              if (IsMetroidPrime1ThermalContextLayer(element_draw->profile_layer))
+              {
+                AppendPrimedGunThermalHudLog(fmt::format(
+                    "thermal-context draw={} layer={} perspective={} active_prev={}\n",
+                    element_draw->draw_sequence, element_draw->profile_layer_name,
+                    element_draw->signature.perspective, m_metroid_prime1_thermal_context_active));
+                m_metroid_prime1_thermal_context_seen = true;
+              }
+            }
             if (g_ActiveConfig.vr_metroid_visor_fix && g_texture_cache &&
                 needs_profile_classification &&
                 elements.IsMetroidPrime1GCProfileActive() &&
@@ -1502,16 +1981,37 @@ void VertexManagerBase::Flush()
           if (!hunter_skip && !elements_skip && elements_has_overrides)
             elements_skip = elements.ShouldSkipByOverride(*element_draw);
 
+          if (!hunter_skip && !elements_skip && element_draw)
+          {
+            const MetroidLayerBehavior layer_behavior =
+                GetMetroidLayerBehavior(element_draw->profile_layer);
+            if (layer_behavior.skip)
+            {
+              LogPrimedGunElementHandling(m_draw_counter, element_draw,
+                                          ShaderHunter::HandlingType::Skip, vs_hash, ps_hash,
+                                            gs_hash, tex_hashes, -1,
+                                            std::numeric_limits<float>::quiet_NaN());
+                elements_skip = true;
+              }
+          }
+
           if (!hunter_skip && !elements_skip && hunter_has_overrides)
             hunter_skip = hunter.ShouldSkipByOverride(vs_hash, ps_hash, gs_hash);
 
+          if (!hunter_skip && !elements_skip && texmgr_has_overrides)
+            texmgr_skip = texmgr.ShouldSkipByTexture(tex_hashes);
+
           // Check for screen/fullscreen handling overrides (VR stereo mode override)
-          if (!hunter_skip && !elements_skip)
+          if (!hunter_skip && !elements_skip && !texmgr_skip)
           {
             auto handling = ShaderHunter::HandlingType::Skip;
             int manual_layer = -1;
             float element_depth = -1.0f;
             float units_per_meter = -1.0f;
+            const MetroidHydraHudSettings metroid_hydra_hud =
+                element_draw ? GetMetroidHydraHudSettings(element_draw->profile_id,
+                                                          element_draw->profile_layer) :
+                               MetroidHydraHudSettings{};
 
             if (elements_has_overrides)
               handling = elements.GetOverrideHandling(*element_draw);
@@ -1542,6 +2042,14 @@ void VertexManagerBase::Flush()
                 units_per_meter = hunter.GetOverrideUnitsPerMeter(vs_hash, ps_hash, gs_hash);
               }
             }
+            if (handling == ShaderHunter::HandlingType::Skip && element_draw)
+              handling = GetMetroidLayerBehavior(element_draw->profile_layer).handling;
+            if (handling == ShaderHunter::HandlingType::Skip && texmgr_has_overrides)
+            {
+              handling =
+                  texmgr.GetHandlingForTextures(tex_hashes, &manual_layer, &element_depth,
+                                                &units_per_meter);
+            }
             const bool metroid_visor_fix_active = g_ActiveConfig.vr_metroid_visor_fix;
             const bool xray_effect_draw =
                 metroid_visor_fix_active && IsMetroidPrime1XRayEffectDraw(element_draw);
@@ -1549,12 +2057,25 @@ void VertexManagerBase::Flush()
                 xray_effect_draw && element_draw &&
                 element_draw->profile_layer != MetroidElementLayer::XRayEffect;
             const bool xray_signature_fallback = xray_signature_match;
+            const bool thermal_hud_context_active =
+                m_metroid_prime1_thermal_context_active || m_metroid_prime1_thermal_context_seen;
             const bool d3d_xray_hud_tex0_layer_fallback =
                 metroid_visor_fix_active && g_backend_info.api_type == APIType::D3D &&
-                IsMetroidPrime1XRayHUDDraw(element_draw);
+                !thermal_hud_context_active && IsMetroidPrime1XRayHUDDraw(element_draw);
             if (xray_signature_fallback && handling == ShaderHunter::HandlingType::Skip)
             {
               handling = ShaderHunter::HandlingType::FullscreenMono;
+            }
+            const bool framebuffer_effect_draw =
+                metroid_visor_fix_active && IsMetroidPrime1FramebufferEffectDraw(element_draw);
+            if (framebuffer_effect_draw &&
+                (handling == ShaderHunter::HandlingType::Skip ||
+                 handling == ShaderHunter::HandlingType::Screen ||
+                 handling == ShaderHunter::HandlingType::HeadLocked))
+            {
+              handling = ShaderHunter::HandlingType::FullscreenMono;
+              manual_layer = -1;
+              element_depth = -1.0f;
             }
 
             // QuestPrimeVR: trace label -> applied handling (QPVR_DRAW_TRACE env), the
@@ -1646,9 +2167,37 @@ void VertexManagerBase::Flush()
             }
             else if (handling == ShaderHunter::HandlingType::HeadLocked)
             {
+              const bool perspective_metroid_hud =
+                  metroid_hydra_hud.perspective_hud && element_draw &&
+                  element_draw->signature.perspective;
               geometry_shader_manager.vr_stereo_override =
                   d3d_xray_hud_tex0_layer_fallback ? VR_STEREO_OVERRIDE_HEAD_LOCKED_TEX0_LAYER :
-                                                     VR_STEREO_OVERRIDE_HEAD_LOCKED;
+                  perspective_metroid_hud ? -3.0f :
+                                           VR_STEREO_OVERRIDE_HEAD_LOCKED;
+              if (metroid_hydra_hud.enabled && element_draw)
+              {
+                const auto& pnm = vertex_shader_manager.constants.posnormalmatrix;
+                const float metroid_hud_ref_z = pnm[2][3];
+                int metroid_hud_context = METROID_HUD_CONTEXT_DEFAULT;
+                if (IsMetroidPrime1Profile(element_draw->profile_id))
+                {
+                  if (m_metroid_prime1_menu_context_seen)
+                    metroid_hud_context = METROID_HUD_CONTEXT_MENU;
+                  else if (m_metroid_prime1_combat_context_seen)
+                    metroid_hud_context = METROID_HUD_CONTEXT_COMBAT;
+                }
+                const std::string_view layer_name =
+                    MetroidElementLayerToININame(element_draw->profile_layer);
+                geometry_shader_manager.vr_metroid_hud_self_center =
+                    layer_name.find("RADAR") != std::string_view::npos;
+                geometry_shader_manager.vr_metroid_hud_anchor_candidate =
+                    perspective_metroid_hud &&
+                    (IsMetroidPerspectiveHudAnchorLayer(element_draw->profile_layer) ||
+                     IsMetroidPrime1CombatHudAnchorCandidate(element_draw->profile_layer,
+                                                             metroid_hud_ref_z,
+                                                             metroid_hud_context));
+                geometry_shader_manager.vr_metroid_hud_reference_context = metroid_hud_context;
+              }
               if (manual_layer >= 0)
                 geometry_shader_manager.vr_ortho_layer_override = manual_layer;
               if (element_depth >= 0.0f)
@@ -1657,6 +2206,28 @@ void VertexManagerBase::Flush()
               // Hydra-style per-layer hacks (Helmet/Visor/HUD scale + FOV mods).
               if (element_draw)
                 geometry_shader_manager.vr_metroid_layer = element_draw->profile_layer;
+              if (metroid_hydra_hud.enabled)
+              {
+                if (metroid_hydra_hud.scale > 0.0f)
+                {
+                  geometry_shader_manager.vr_units_per_meter_override =
+                      g_ActiveConfig.vr_units_per_meter * metroid_hydra_hud.scale;
+                }
+                geometry_shader_manager.vr_headlocked_projection_scale_x =
+                    metroid_hydra_hud.width;
+                geometry_shader_manager.vr_headlocked_projection_scale_y =
+                    metroid_hydra_hud.height;
+                geometry_shader_manager.vr_headlocked_projection_offset_x =
+                    metroid_hydra_hud.right;
+                geometry_shader_manager.vr_headlocked_projection_offset_y = metroid_hydra_hud.up;
+                if (metroid_hydra_hud.perspective_hud)
+                {
+                  geometry_shader_manager.vr_perspective_hud_distance_override =
+                      GetPrimedGunPerspectiveHudDistance();
+                  geometry_shader_manager.vr_perspective_hud_size_override =
+                      GetPrimedGunPerspectiveHudSize();
+                }
+              }
               if (d3d_xray_hud_tex0_layer_fallback)
               {
                 forced_texture_layer = VR_TEXTURE_LAYER_FROM_D3D_FULLSCREEN_TEX0_Z;
@@ -1673,6 +2244,9 @@ void VertexManagerBase::Flush()
               // No override matched — log for debugging if relevant
               hunter.DebugLogUnmatched(vs_hash, ps_hash, gs_hash);
             }
+            LogPrimedGunElementHandling(m_draw_counter, element_draw, handling, vs_hash, ps_hash,
+                                        gs_hash, tex_hashes, forced_texture_layer,
+                                        geometry_shader_manager.vr_stereo_override);
             LogMetroidPrime1XRayDraw(m_draw_counter, element_draw, handling, vs_hash, ps_hash,
                                      gs_hash, forced_texture_layer, xray_signature_fallback,
                                      d3d_xray_hud_tex0_layer_fallback);
@@ -1819,7 +2393,7 @@ void VertexManagerBase::Flush()
           }
         }
 
-        if (!hunter_skip && !elements_skip)
+        if (!hunter_skip && !elements_skip && !texmgr_skip)
         {
           if (shader_hunter_force_pink && !m_pink_pixel_shader)
           {
@@ -2345,17 +2919,23 @@ void VertexManagerBase::OnEndFrame()
   {
     hunter.LoadOverridesIfNeeded(game_id);
     ElementsGroupManager::GetInstance().LoadOverridesIfNeeded(game_id);
+    TextureElementManager::GetInstance().LoadOverridesIfNeeded(game_id);
     HideObjectEngine::Engine::GetInstance().LoadCodesIfNeeded(game_id);
   }
   hunter.OnFrameEnd();
   CullingCodeFinder::GetInstance().OnFrameEnd();
   ElementsGroupManager::GetInstance().OnFrameEnd();
+  TextureElementManager::GetInstance().OnFrameEnd();
   HideObjectEngine::Engine::GetInstance().OnFrameEnd();
   auto& system = Core::System::GetInstance();
   system.GetGeometryShaderManager().vr_ortho_draw_counter = 0;
   m_draw_counter = 0;
   m_last_efb_copy_draw_counter = 0;
   m_metroid_thermal_effect_gun_draws = 0;
+  m_metroid_prime1_combat_context_seen = false;
+  m_metroid_prime1_menu_context_seen = false;
+  m_metroid_prime1_thermal_context_active = m_metroid_prime1_thermal_context_seen;
+  m_metroid_prime1_thermal_context_seen = false;
   m_scheduled_command_buffer_kicks.clear();
 
   // If we have no CPU access at all, leave everything in the one command buffer for maximum

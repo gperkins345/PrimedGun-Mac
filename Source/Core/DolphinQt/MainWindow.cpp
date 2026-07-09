@@ -14,6 +14,7 @@
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
+#include <QDirIterator>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -32,6 +33,7 @@
 #include <QMimeData>
 #include <QLabel>
 #include <QKeyEvent>
+#include <QMessageBox>
 #include <QPixmap>
 #include <QSizePolicy>
 #include <QButtonGroup>
@@ -46,11 +48,13 @@
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QWidgetAction>
 #include <QWindow>
 
 #include <fmt/format.h>
 
 #include <array>
+#include <cstring>
 #include <future>
 #include <functional>
 #include <iterator>
@@ -93,6 +97,7 @@
 #include "Core/Core.h"
 #include "Core/FreeLookManager.h"
 #include "Core/HW/DVD/DVDInterface.h"
+#include "Core/HW/EXI/EXI.h"
 #include "Core/HW/EXI/EXI_Device.h"
 #include "Core/HW/GBAPad.h"
 #include "Core/HW/AddressSpace.h"
@@ -112,6 +117,7 @@
 #include "Core/WiiUtils.h"
 
 #include "DiscIO/DirectoryBlob.h"
+#include "DiscIO/Enums.h"
 #include "DiscIO/NANDImporter.h"
 #include "DiscIO/RiivolutionPatcher.h"
 
@@ -228,6 +234,425 @@ QString PrimedGunCannonLibraryFilePath(const QString& relative_path)
     return app_path;
 
   return user_path;
+}
+
+void PrimedGunAddUniquePath(QStringList* paths, const QString& path)
+{
+  const QString clean_path = QDir::cleanPath(path);
+  if (!paths->contains(clean_path, Qt::CaseInsensitive))
+    paths->append(clean_path);
+}
+
+bool PrimedGunLooksLikeMemoryCard(const QFileInfo& file)
+{
+  if (!file.isFile())
+    return false;
+
+  const QString suffix = file.suffix().toLower();
+  if (file.fileName().contains(QStringLiteral(".backup-"), Qt::CaseInsensitive))
+    return false;
+
+  return suffix == QStringLiteral("raw") || suffix == QStringLiteral("gcp");
+}
+
+int PrimedGunMemoryCardScore(const QFileInfo& file)
+{
+  const QString name = file.fileName().toLower();
+  int score = 0;
+  if (name == QStringLiteral("online.usa.raw"))
+    score += 100;
+  if (name == QStringLiteral("memorycarda.usa.raw"))
+    score += 90;
+  if (name.contains(QStringLiteral(".usa.")) || name.endsWith(QStringLiteral(".usa.raw")) ||
+      name.endsWith(QStringLiteral(".usa.gcp")))
+  {
+    score += 50;
+  }
+  if (name.contains(QStringLiteral("memorycarda")) || name.contains(QStringLiteral("online")))
+    score += 25;
+  if (file.suffix().compare(QStringLiteral("raw"), Qt::CaseInsensitive) == 0)
+    score += 10;
+  return score;
+}
+
+QString PrimedGunBestMemoryCardInDir(const QString& dir_path)
+{
+  const QDir dir(dir_path);
+  if (!dir.exists())
+    return {};
+
+  const QFileInfoList files =
+      dir.entryInfoList({QStringLiteral("*.raw"), QStringLiteral("*.gcp")}, QDir::Files,
+                        QDir::Time);
+  QFileInfo best_file;
+  int best_score = -1;
+  for (const QFileInfo& file : files)
+  {
+    if (!PrimedGunLooksLikeMemoryCard(file))
+      continue;
+
+    const int score = PrimedGunMemoryCardScore(file);
+    if (score > best_score)
+    {
+      best_score = score;
+      best_file = file;
+    }
+  }
+
+  return best_file.exists() ? best_file.absoluteFilePath() : QString{};
+}
+
+void PrimedGunAddMemoryCardSearchBase(QStringList* search_dirs, const QString& candidate_base)
+{
+  PrimedGunAddUniquePath(search_dirs, candidate_base);
+  PrimedGunAddUniquePath(search_dirs, candidate_base + QStringLiteral("/GC"));
+  PrimedGunAddUniquePath(search_dirs, candidate_base + QStringLiteral("/User/GC"));
+  PrimedGunAddUniquePath(search_dirs, candidate_base + QStringLiteral("/x64/User/GC"));
+  PrimedGunAddUniquePath(search_dirs, candidate_base + QStringLiteral("/Binary/User/GC"));
+  PrimedGunAddUniquePath(search_dirs, candidate_base + QStringLiteral("/Binary/x64/User/GC"));
+  PrimedGunAddUniquePath(search_dirs, candidate_base + QStringLiteral("/build/bin/User/GC"));
+  PrimedGunAddUniquePath(search_dirs, candidate_base + QStringLiteral("/build/bin/x64/User/GC"));
+  PrimedGunAddUniquePath(search_dirs, candidate_base + QStringLiteral("/core/User/GC"));
+}
+
+QStringList PrimedGunOneFolderAboveX64MemoryCardSearchDirs()
+{
+  QStringList search_dirs;
+  const QFileInfo app_dir(QApplication::applicationDirPath());
+  const QString x64_dir = app_dir.absoluteFilePath();
+  const QString install_root = app_dir.absoluteDir().absolutePath();
+
+  // First pass: folders beside x64 in the same release/runtime folder.
+  const QDir install_root_dir(install_root);
+  const QFileInfoList install_root_children =
+      install_root_dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time);
+  for (const QFileInfo& child : install_root_children)
+  {
+    if (QDir::cleanPath(child.absoluteFilePath()) == QDir::cleanPath(x64_dir))
+      continue;
+    PrimedGunAddMemoryCardSearchBase(&search_dirs, child.absoluteFilePath());
+  }
+
+  return search_dirs;
+}
+
+QStringList PrimedGunTwoFoldersAboveX64MemoryCardSearchDirs()
+{
+  QStringList search_dirs;
+  const QFileInfo app_dir(QApplication::applicationDirPath());
+  const QString install_root = app_dir.absoluteDir().absolutePath();
+  const QString install_parent = QFileInfo(install_root).absoluteDir().absolutePath();
+
+  // Fallback pass: folders beside the current release/runtime folder.
+  PrimedGunAddUniquePath(&search_dirs, install_parent + QStringLiteral("/GC"));
+  PrimedGunAddUniquePath(&search_dirs, install_parent + QStringLiteral("/User/GC"));
+  PrimedGunAddUniquePath(&search_dirs, install_parent + QStringLiteral("/core/User/GC"));
+
+  const QDir parent_dir(install_parent);
+  const QFileInfoList siblings =
+      parent_dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time);
+  for (const QFileInfo& sibling : siblings)
+  {
+    if (QDir::cleanPath(sibling.absoluteFilePath()) == QDir::cleanPath(install_root))
+      continue;
+    PrimedGunAddMemoryCardSearchBase(&search_dirs, sibling.absoluteFilePath());
+  }
+
+  return search_dirs;
+}
+
+bool PrimedGunSamePath(const QString& a, const QString& b)
+{
+#ifdef _WIN32
+  constexpr Qt::CaseSensitivity path_case_sensitivity = Qt::CaseInsensitive;
+#else
+  constexpr Qt::CaseSensitivity path_case_sensitivity = Qt::CaseSensitive;
+#endif
+  return QString::compare(QDir::cleanPath(QFileInfo(a).absoluteFilePath()),
+                          QDir::cleanPath(QFileInfo(b).absoluteFilePath()),
+                          path_case_sensitivity) == 0;
+}
+
+bool PrimedGunUserDirHasNearbyExe(const QString& user_dir_path)
+{
+  const QDir user_dir(user_dir_path);
+  if (!user_dir.exists())
+    return false;
+
+  const QFileInfo user_dir_info(user_dir.absolutePath());
+  const QDir install_dir = user_dir_info.absoluteDir();
+  QStringList candidates;
+  PrimedGunAddUniquePath(&candidates, install_dir.filePath(QStringLiteral("PrimedGun.exe")));
+  PrimedGunAddUniquePath(&candidates, install_dir.filePath(QStringLiteral("x64/PrimedGun.exe")));
+  PrimedGunAddUniquePath(&candidates, install_dir.filePath(QStringLiteral("Binary/PrimedGun.exe")));
+  PrimedGunAddUniquePath(&candidates,
+                         install_dir.filePath(QStringLiteral("Binary/x64/PrimedGun.exe")));
+  PrimedGunAddUniquePath(&candidates,
+                         install_dir.filePath(QStringLiteral("build/bin/PrimedGun.exe")));
+  PrimedGunAddUniquePath(&candidates,
+                         install_dir.filePath(QStringLiteral("build/bin/x64/PrimedGun.exe")));
+
+  for (const QString& candidate : candidates)
+  {
+    const QFileInfo exe_info(candidate);
+    if (exe_info.isFile() &&
+        exe_info.fileName().compare(QStringLiteral("PrimedGun.exe"), Qt::CaseInsensitive) == 0)
+    {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+QString PrimedGunFindOldMemoryCardInDirs(const QStringList& search_dirs,
+                                         const QString& current_memory_card)
+{
+  QString best_path;
+  int best_score = -1;
+  for (const QString& dir : search_dirs)
+  {
+    const QString candidate = PrimedGunBestMemoryCardInDir(dir);
+    if (candidate.isEmpty())
+      continue;
+    if (PrimedGunSamePath(candidate, current_memory_card))
+      continue;
+
+    const QFileInfo candidate_info(candidate);
+    const int score = PrimedGunMemoryCardScore(candidate_info);
+    if (score > best_score)
+    {
+      best_score = score;
+      best_path = candidate_info.absoluteFilePath();
+    }
+  }
+
+  return best_path;
+}
+
+QString PrimedGunFindNearbyOldMemoryCard(const QString& current_memory_card)
+{
+  QString source = PrimedGunFindOldMemoryCardInDirs(
+      PrimedGunOneFolderAboveX64MemoryCardSearchDirs(), current_memory_card);
+  if (!source.isEmpty())
+    return source;
+
+  return PrimedGunFindOldMemoryCardInDirs(PrimedGunTwoFoldersAboveX64MemoryCardSearchDirs(),
+                                          current_memory_card);
+}
+
+QString PrimedGunUserDirNearMemoryCard(const QString& memory_card_path)
+{
+  const QFileInfo memory_card_info(memory_card_path);
+  const QDir gc_dir = memory_card_info.absoluteDir();
+  const QFileInfo user_dir_info(gc_dir.absolutePath());
+  return user_dir_info.absoluteDir().absolutePath();
+}
+
+QString PrimedGunConfigDirNearMemoryCard(const QString& memory_card_path)
+{
+  const QString user_dir_path = PrimedGunUserDirNearMemoryCard(memory_card_path);
+  if (user_dir_path.isEmpty())
+    return {};
+
+  const QString config_dir_path = QDir(user_dir_path).filePath(QStringLiteral("Config"));
+  return QFileInfo(config_dir_path).isDir() ? config_dir_path : QString{};
+}
+
+QString PrimedGunFindSettingsNearMemoryCard(const QString& memory_card_path)
+{
+  const QString user_dir_path = PrimedGunUserDirNearMemoryCard(memory_card_path);
+  if (!PrimedGunUserDirHasNearbyExe(user_dir_path))
+    return {};
+
+  const QString config_dir_path = PrimedGunConfigDirNearMemoryCard(memory_card_path);
+  if (config_dir_path.isEmpty())
+    return {};
+
+  const QString qt_settings_path = QDir(config_dir_path).filePath(QStringLiteral("Qt.ini"));
+  return QFileInfo::exists(qt_settings_path) ? qt_settings_path : QString{};
+}
+
+bool PrimedGunShouldImportSettingKey(const QString& key)
+{
+  // Keep transfer focused on user-facing PrimeGun preferences. Runtime activation and old
+  // path/history fields should stay owned by the current install.
+  return key != QStringLiteral("enabled") &&
+         key != QStringLiteral("last_memcard_transfer_dir");
+}
+
+int PrimedGunImportSettingsFromFile(const QString& settings_path, QSettings* destination_settings)
+{
+  if (settings_path.isEmpty() || destination_settings == nullptr)
+    return 0;
+
+  QSettings source_settings(settings_path, QSettings::IniFormat);
+  source_settings.beginGroup(QStringLiteral("primegun"));
+  const QStringList keys = source_settings.allKeys();
+
+  int imported_count = 0;
+  for (const QString& key : keys)
+  {
+    if (!PrimedGunShouldImportSettingKey(key))
+      continue;
+
+    destination_settings->setValue(QStringLiteral("primegun/%1").arg(key),
+                                   source_settings.value(key));
+    ++imported_count;
+  }
+
+  source_settings.endGroup();
+  const QString selected_game_key = QStringLiteral("mainwindow/selected_metroid_prime_path");
+  if (source_settings.contains(selected_game_key))
+  {
+    destination_settings->setValue(selected_game_key, source_settings.value(selected_game_key));
+    ++imported_count;
+  }
+
+  if (imported_count > 0)
+    destination_settings->sync();
+  return imported_count;
+}
+
+bool PrimedGunShouldTransferDolphinSettingsFile(const QString& relative_path)
+{
+  const QFileInfo file(relative_path);
+  const QString file_name = file.fileName();
+  if (file_name.compare(QStringLiteral("Qt.ini"), Qt::CaseInsensitive) == 0 ||
+      file_name.compare(QStringLiteral("Logger.ini"), Qt::CaseInsensitive) == 0 ||
+      file_name.compare(QStringLiteral("TimePlayed.ini"), Qt::CaseInsensitive) == 0)
+  {
+    return false;
+  }
+
+  if (file_name.contains(QStringLiteral(".backup-"), Qt::CaseInsensitive))
+    return false;
+
+  return file.suffix().compare(QStringLiteral("ini"), Qt::CaseInsensitive) == 0;
+}
+
+bool PrimedGunCopySettingsTree(const QString& source_dir_path, const QString& destination_dir_path,
+                               const QString& timestamp, int* copied_count,
+                               QString* error_message)
+{
+  const QDir source_dir(source_dir_path);
+  if (!source_dir.exists())
+    return true;
+
+  QDir destination_dir(destination_dir_path);
+  if (!destination_dir.exists() && !destination_dir.mkpath(QStringLiteral(".")))
+  {
+    if (error_message != nullptr)
+      *error_message = QObject::tr("Could not create settings folder:\n%1").arg(destination_dir_path);
+    return false;
+  }
+
+  QDirIterator iterator(source_dir_path, QStringList{QStringLiteral("*.ini")}, QDir::Files,
+                        QDirIterator::Subdirectories);
+  while (iterator.hasNext())
+  {
+    const QString source_path = iterator.next();
+    const QString relative_path = source_dir.relativeFilePath(source_path);
+    if (!PrimedGunShouldTransferDolphinSettingsFile(relative_path))
+      continue;
+
+    const QString destination_path = destination_dir.filePath(relative_path);
+    if (PrimedGunSamePath(source_path, destination_path))
+      continue;
+
+    const QFileInfo destination_info(destination_path);
+    QDir destination_file_dir = destination_info.absoluteDir();
+    if (!destination_file_dir.exists() && !destination_file_dir.mkpath(QStringLiteral(".")))
+    {
+      if (error_message != nullptr)
+      {
+        *error_message = QObject::tr("Could not create settings folder:\n%1")
+                             .arg(destination_file_dir.absolutePath());
+      }
+      return false;
+    }
+
+    QString backup_path;
+    if (destination_info.exists())
+    {
+      const QString suffix = destination_info.suffix();
+      const QString backup_name =
+          suffix.isEmpty() ?
+              QStringLiteral("%1.backup-%2").arg(destination_info.fileName(), timestamp) :
+              QStringLiteral("%1.backup-%2.%3")
+                  .arg(destination_info.completeBaseName(), timestamp, suffix);
+      backup_path = destination_file_dir.filePath(backup_name);
+      if (!QFile::rename(destination_path, backup_path))
+      {
+        if (error_message != nullptr)
+          *error_message =
+              QObject::tr("Could not back up current Dolphin setting:\n%1").arg(destination_path);
+        return false;
+      }
+    }
+
+    if (!QFile::copy(source_path, destination_path))
+    {
+      if (!backup_path.isEmpty())
+        QFile::rename(backup_path, destination_path);
+      if (error_message != nullptr)
+        *error_message =
+            QObject::tr("Could not copy Dolphin setting to:\n%1").arg(destination_path);
+      return false;
+    }
+
+    if (copied_count != nullptr)
+      ++*copied_count;
+  }
+
+  return true;
+}
+
+int PrimedGunTransferDolphinSettingsNearMemoryCard(const QString& memory_card_path,
+                                                   QString* source_user_dir,
+                                                   QString* error_message)
+{
+  const QString old_user_dir_path = PrimedGunUserDirNearMemoryCard(memory_card_path);
+  if (old_user_dir_path.isEmpty())
+    return 0;
+  if (!PrimedGunUserDirHasNearbyExe(old_user_dir_path))
+    return 0;
+
+  const QString current_user_dir_path =
+      QDir::cleanPath(QString::fromStdString(File::GetUserPath(D_USER_IDX)));
+  if (PrimedGunSamePath(old_user_dir_path, current_user_dir_path))
+    return 0;
+
+  if (source_user_dir != nullptr)
+    *source_user_dir = old_user_dir_path;
+
+  const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss"));
+  int copied_count = 0;
+  const QDir old_user_dir(old_user_dir_path);
+  const QDir current_user_dir(current_user_dir_path);
+
+  if (!PrimedGunCopySettingsTree(old_user_dir.filePath(QStringLiteral("Config")),
+                                 current_user_dir.filePath(QStringLiteral("Config")), timestamp,
+                                 &copied_count, error_message))
+  {
+    return -1;
+  }
+
+  if (!PrimedGunCopySettingsTree(old_user_dir.filePath(QStringLiteral("GameSettings")),
+                                 current_user_dir.filePath(QStringLiteral("GameSettings")),
+                                 timestamp, &copied_count, error_message))
+  {
+    return -1;
+  }
+
+  if (!PrimedGunCopySettingsTree(old_user_dir.filePath(QStringLiteral("GameSettingsVR")),
+                                 current_user_dir.filePath(QStringLiteral("GameSettingsVR")),
+                                 timestamp, &copied_count, error_message))
+  {
+    return -1;
+  }
+
+  return copied_count;
 }
 
 QString PrimedGunCannonSlotDir(int slot)
@@ -755,19 +1180,139 @@ void PrimedGunDumpMem1(QWidget* parent)
 
       return *(begin + offset);
     };
+    const auto read_mem1_f32 = [&read_mem1_u32](u32 address) -> std::optional<float> {
+      const std::optional<u32> word = read_mem1_u32(address);
+      if (!word)
+        return std::nullopt;
+
+      float value = 0.0f;
+      const u32 bits = *word;
+      std::memcpy(&value, &bits, sizeof(value));
+      return value;
+    };
     const auto format_u32 = [](std::optional<u32> value) {
       return value ? fmt::format("{:08X}", *value) : std::string{"unreadable"};
     };
     const auto format_u8 = [](std::optional<u8> value) {
       return value ? fmt::format("{:02X}", *value) : std::string{"unreadable"};
     };
+    const auto format_f32 = [](std::optional<float> value) {
+      return value ? fmt::format("{:.6f}", *value) : std::string{"unreadable"};
+    };
+    const auto ppc_branch = [](u32 from, u32 to) {
+      const s32 offset = static_cast<s32>(to - from);
+      return 0x48000000u | (static_cast<u32>(offset) & 0x03FFFFFCu);
+    };
+    const auto append_words = [&](const char* label, u32 base, int count) {
+      context += fmt::format("{} base={:08X}", label, base);
+      for (int i = 0; i < count; ++i)
+      {
+        const u32 address = base + static_cast<u32>(i * 4);
+        context += fmt::format(" +{:02X}={}", i * 4, format_u32(read_mem1_u32(address)));
+      }
+      context += "\n";
+    };
+    const auto append_transform = [&](const char* label, std::optional<u32> transform) {
+      context += fmt::format("{}={}\n", label, format_u32(transform));
+      if (!transform || *transform < 0x80000000u)
+        return;
+
+      for (u32 row = 0; row < 3; ++row)
+      {
+        const u32 base = *transform + row * 0x10u;
+        context += fmt::format(
+            "{} row{} raw={} {} {} {} f32={} {} {} {}\n", label, row,
+            format_u32(read_mem1_u32(base + 0x00u)), format_u32(read_mem1_u32(base + 0x04u)),
+            format_u32(read_mem1_u32(base + 0x08u)), format_u32(read_mem1_u32(base + 0x0Cu)),
+            format_f32(read_mem1_f32(base + 0x00u)), format_f32(read_mem1_f32(base + 0x04u)),
+            format_f32(read_mem1_f32(base + 0x08u)), format_f32(read_mem1_f32(base + 0x0Cu)));
+      }
+    };
+    const auto append_branch_watch = [&](const char* label, u32 site, u32 original, u32 cave) {
+      const u32 branch = ppc_branch(site, cave);
+      const std::optional<u32> actual = read_mem1_u32(site);
+      std::string status = "unreadable";
+      if (actual)
+      {
+        if (*actual == original)
+          status = "original";
+        else if (*actual == branch)
+          status = "branch-installed";
+        else
+          status = "changed";
+      }
+      context += fmt::format("{} site={:08X} actual={} original={:08X} branch={:08X} "
+                             "cave={:08X} status={}\n",
+                             label, site, format_u32(actual), original, branch, cave, status);
+    };
+    const auto append_code_window = [&](const char* label, u32 center, int before_words,
+                                        int after_words) {
+      if (center < 0x80000000u || center > 0x817FFFFFu)
+      {
+        context += fmt::format("{} center={:08X} outside_mem1\n", label, center);
+        return;
+      }
+
+      const u32 aligned = center & ~3u;
+      const u32 start = aligned - static_cast<u32>(std::max(before_words, 0) * 4);
+      const u32 end = aligned + static_cast<u32>(std::max(after_words, 0) * 4);
+      context += fmt::format("{} center={:08X} range={:08X}-{:08X}\n", label, center, start, end);
+      for (u32 address = start; address <= end; address += 4u)
+      {
+        const std::optional<u32> value = read_mem1_u32(address);
+        context += fmt::format("{}{:08X}={}", address == aligned ? ">" : " ", address,
+                               format_u32(value));
+        if (((address - start) / 4u % 4u) == 3u || address == end)
+          context += "\n";
+        else
+          context += " ";
+      }
+    };
+    const auto append_vtable = [&](const char* label, std::optional<u32> vtable, int entries) {
+      context += fmt::format("{}={}\n", label, format_u32(vtable));
+      if (!vtable || *vtable < 0x80000000u)
+        return;
+
+      for (int i = 0; i < entries; ++i)
+      {
+        const u32 entry_address = *vtable + static_cast<u32>(i * 4);
+        const std::optional<u32> function = read_mem1_u32(entry_address);
+        context += fmt::format("{}[{:02}]@{:08X}={}\n", label, i, entry_address,
+                               format_u32(function));
+        if (i < 6 && function && *function >= 0x80000000u)
+        {
+          const std::string code_label = fmt::format("{}[{:02}]code", label, i);
+          append_code_window(code_label.c_str(), *function, 0, 7);
+        }
+      }
+    };
+    const auto append_object_deep = [&](const char* label, std::optional<u32> object) {
+      context += fmt::format("{}={}\n", label, format_u32(object));
+      if (!object || *object < 0x80000000u)
+        return;
+
+      const std::optional<u32> vtable = read_mem1_u32(*object);
+      append_words(fmt::format("{}+000", label).c_str(), *object, 32);
+      append_words(fmt::format("{}+080", label).c_str(), *object + 0x80u, 24);
+      append_transform(fmt::format("{}Transform+34", label).c_str(), *object + 0x34u);
+      append_vtable(fmt::format("{}VTable", label).c_str(), vtable, 16);
+    };
+
+    context += "\nCPU path code windows\n";
+    append_code_window("PCWindow", ppc_state.pc, 8, 12);
+    append_code_window("NPCWindow", ppc_state.npc, 4, 8);
+    append_code_window("LRWindow", ppc_state.spr[SPR_LR], 8, 12);
+    append_code_window("CTRWindow", ppc_state.spr[SPR_CTR], 4, 8);
+    append_code_window("SRR0Window", ppc_state.spr[SPR_SRR0], 8, 12);
 
     context += "\nPatch sites\n";
     for (const u32 address :
-         {0x8000E548u, 0x80041A8Cu, 0x8000E7B4u, 0x8000E808u, 0x8000E83Cu,
+         {0x8000A968u, 0x8000A9B4u, 0x8000E548u, 0x80041A8Cu, 0x8000E7B4u,
+          0x8000E808u, 0x8000E83Cu, 0x8000E71Cu,
           0x8000FA50u, 0x800BD808u, 0x800BE25Cu, 0x80112508u, 0x801122CCu,
-          0x800E0434u, 0x801B9070u, 0x8018C950u, 0x8018C988u, 0x800243CCu,
-          0x80024414u, 0x80024450u, 0x8002448Cu, 0x800244C8u, 0x80024504u})
+          0x800E0434u, 0x801B9070u, 0x800830A0u, 0x8026529Cu, 0x80345200u,
+          0x8017EACCu, 0x8018C950u, 0x8018C988u, 0x800243CCu, 0x80024414u,
+          0x80024450u, 0x8002448Cu, 0x800244C8u, 0x80024504u})
     {
       const std::optional<u32> value = read_mem1_u32(address);
       context += fmt::format("{:08X}={}\n", address, format_u32(value));
@@ -777,19 +1322,51 @@ void PrimedGunDumpMem1(QWidget* parent)
     for (const u32 address :
          {0x80001C00u, 0x80001C80u, 0x80001D00u, 0x80001D40u, 0x80001D80u,
           0x80001DC0u, 0x80001E00u, 0x80001E80u, 0x80001F00u, 0x80001FA0u,
-          0x80002000u, 0x80002180u, 0x80002200u, 0x80002280u, 0x80002300u,
-          0x800023A0u, 0x80002400u, 0x80002620u, 0x80002660u, 0x800026D0u})
+          0x80002000u, 0x80002180u, 0x80002200u, 0x80002280u, 0x800022C0u,
+          0x80002300u,
+          0x800023A0u, 0x80002400u, 0x80002620u, 0x80002660u, 0x800026D0u,
+          0x80002740u, 0x80002780u})
     {
       const std::optional<u32> value = read_mem1_u32(address);
       context += fmt::format("{:08X}={}\n", address, format_u32(value));
     }
 
+    context += "\nPPC/ASM watchdog\n";
+    append_branch_watch("CameraReturnLegacyUnsafe", 0x8000A9B4u, 0x80010054u, 0x80002280u);
+    append_branch_watch("FirstPersonPitchLoad", 0x8000E548u, 0xC3FE03ECu, 0x80001C00u);
+    append_branch_watch("CombatPitch0", 0x8000E7B4u, 0xEC21E828u, 0x80001D40u);
+    append_branch_watch("CombatPitch1", 0x8000E808u, 0xEC21E828u, 0x80001D80u);
+    append_branch_watch("CombatPitch2", 0x8000E83Cu, 0xEC21E828u, 0x80001DC0u);
+    append_branch_watch("FirstPersonOrbitAimVector", 0x8000E71Cu, 0x801E0304u, 0x800022C0u);
+    append_branch_watch("CombatElevationPitch", 0x8000FA50u, 0xD01D01C0u, 0x80001E00u);
+    append_branch_watch("ScanIndicatorViewBasis", 0x801122CCu, 0xC0410074u, 0x80002200u);
+    append_branch_watch("BallCameraLevel", 0x800830A0u, 0x387F0034u, 0x80002740u);
+    append_branch_watch("InterpolationCameraLevel", 0x8026529Cu, 0x887E00E4u, 0x80002780u);
+    append_words("FirstPersonPitchCave", 0x80001C00u, 8);
+    append_words("CombatPitchCave0", 0x80001D40u, 8);
+    append_words("CombatPitchCave1", 0x80001D80u, 8);
+    append_words("CombatPitchCave2", 0x80001DC0u, 8);
+    append_words("CombatElevationPitchCave", 0x80001E00u, 12);
+    append_words("ScanIndicatorViewBasisCave", 0x80002200u, 8);
+    append_words("DisableFrustumCullingCave", 0x80002280u, 10);
+    append_words("FirstPersonOrbitAimVectorCave", 0x800022C0u, 4);
+    append_words("BallCameraLevelCave", 0x80002740u, 16);
+    append_words("InterpolationCameraLevelCave", 0x80002780u, 20);
+
     constexpr u32 state_manager = 0x8045A1A8u;
     constexpr u32 player_offset = 0x84Cu;
+    constexpr u32 camera_manager_offset = 0x86Cu;
+    constexpr u32 object_list_offset = 0x810u;
+    constexpr u32 transform_offset = 0x34u;
     const std::optional<u32> player = read_mem1_u32(state_manager + player_offset);
 
     context += "\nState snapshot\n";
     context += fmt::format("StateManagerPlayer={}\n", format_u32(player));
+    const std::optional<u32> camera_manager =
+        read_mem1_u32(state_manager + camera_manager_offset);
+    const std::optional<u32> object_list = read_mem1_u32(state_manager + object_list_offset);
+    context += fmt::format("StateManagerCameraManager={}\n", format_u32(camera_manager));
+    context += fmt::format("StateManagerObjectList={}\n", format_u32(object_list));
     context += fmt::format("PlayerState={}\n", format_u32(read_mem1_u32(state_manager + 0x8B8u)));
     context += fmt::format("GpGameState={}\n", format_u32(read_mem1_u32(0x805A8C40u)));
     context += fmt::format("AramActiveDmasHead={}\n", format_u32(read_mem1_u32(0x805A679Cu + 4u)));
@@ -812,11 +1389,84 @@ void PrimedGunDumpMem1(QWidget* parent)
       context += fmt::format("PlayerInputFlags={}\n", format_u8(read_mem1_u8(*player + 0x9C6u)));
     }
 
+    context += "\nCamera snapshot\n";
+    std::optional<u32> camera_uid_word;
+    std::optional<u32> active_camera;
+    std::optional<u32> active_camera_transform;
+    if (camera_manager && *camera_manager >= 0x80000000u)
+      camera_uid_word = read_mem1_u32(*camera_manager);
+    if (camera_uid_word && object_list && *object_list >= 0x80000000u)
+    {
+      const u32 camera_uid = (*camera_uid_word >> 16) & 0xffffu;
+      if (camera_uid != 0xffffu)
+        active_camera = read_mem1_u32(*object_list + ((camera_uid & 0x03ffu) << 3) + 4u);
+    }
+    if (active_camera && *active_camera >= 0x80000000u)
+      active_camera_transform = *active_camera + transform_offset;
+
+    context += fmt::format("CameraUidWord={}\n", format_u32(camera_uid_word));
+    context += fmt::format("ActiveCameraObject={}\n", format_u32(active_camera));
+    if (camera_uid_word && object_list && *object_list >= 0x80000000u)
+    {
+      const u32 camera_uid = (*camera_uid_word >> 16) & 0xffffu;
+      if (camera_uid != 0xffffu)
+      {
+        append_words("ActiveCameraObjectListEntry",
+                     *object_list + ((camera_uid & 0x03ffu) << 3), 2);
+      }
+    }
+    append_transform("ActiveCameraTransform", active_camera_transform);
+    if (camera_manager && *camera_manager >= 0x80000000u)
+    {
+      append_words("CameraManager+000", *camera_manager, 12);
+      append_words("CameraManager+080", *camera_manager + 0x80u, 12);
+      for (const u32 slot_offset : {0x10u, 0x80u, 0x84u, 0x88u, 0x8Cu, 0x90u})
+      {
+        const std::optional<u32> candidate = read_mem1_u32(*camera_manager + slot_offset);
+        context += fmt::format("CameraManagerSlot+{:02X}={}\n", slot_offset,
+                               format_u32(candidate));
+        if (candidate && *candidate >= 0x80000000u)
+        {
+          const std::string label = fmt::format("CameraSlot+{:02X}Transform", slot_offset);
+          append_transform(label.c_str(), *candidate + transform_offset);
+        }
+      }
+    }
+
+    context += "\nDeep pointer paths\n";
+    append_words("StateManager+800", state_manager + 0x800u, 32);
+    append_object_deep("PlayerDeep", player);
+    if (player && *player >= 0x80000000u)
+    {
+      const std::optional<u32> cannon = read_mem1_u32(*player + 0x490u);
+      append_object_deep("PlayerCannonDeep", cannon);
+      if (cannon && *cannon >= 0x80000000u)
+      {
+        append_transform("PlayerCannonGunXF+3E8", *cannon + 0x3E8u);
+        append_transform("PlayerCannonBeamXF+418", *cannon + 0x418u);
+        append_transform("PlayerCannonWorldXF+4A8", *cannon + 0x4A8u);
+        append_transform("PlayerCannonLocalXF+4D8", *cannon + 0x4D8u);
+      }
+    }
+    append_object_deep("ActiveCameraDeep", active_camera);
+    if (camera_manager && *camera_manager >= 0x80000000u)
+    {
+      for (const u32 slot_offset : {0x10u, 0x80u, 0x84u, 0x88u, 0x8Cu, 0x90u})
+      {
+        const std::optional<u32> candidate = read_mem1_u32(*camera_manager + slot_offset);
+        if (candidate && *candidate >= 0x80000000u && *candidate <= 0x817FFFFFu)
+        {
+          const std::string label = fmt::format("CameraSlot+{:02X}Deep", slot_offset);
+          append_object_deep(label.c_str(), candidate);
+        }
+      }
+    }
+
     context += "\nPrimedGun scratch\n";
     for (const u32 address :
          {0x80002800u, 0x80002838u, 0x80002840u, 0x80002850u, 0x80002C00u,
           0x80002D00u, 0x80002D40u, 0x80002DA0u, 0x80002E80u, 0x80002E84u,
-          0x80002E88u, 0x80002E8Cu, 0x80002E90u})
+          0x80002E88u, 0x80002E8Cu, 0x80002E90u, 0x80002E94u})
     {
       context += fmt::format("{:08X}={}\n", address, format_u32(read_mem1_u32(address)));
     }
@@ -1482,9 +2132,9 @@ void MainWindow::ConnectStack()
   auto* pause_button = new QPushButton(tr("Pause"), game_tab);
   auto* stop_button = new QPushButton(tr("Stop"), game_tab);
   auto* options_button = new QPushButton(tr("Game Options..."), game_tab);
-  auto* load_state_button = new QPushButton(tr("Load State"), game_tab);
-  auto* save_state_button = new QPushButton(tr("Save State"), game_tab);
   auto* select_state_slot_button = new QPushButton(tr("Select State Slot"), game_tab);
+  auto* transfer_old_save_button =
+      new QPushButton(tr("Transfer Old Memory Card / Settings"), game_tab);
   const QString game_button_style = QStringLiteral(R"(
     QPushButton {
       background-color: #242a33;
@@ -1516,22 +2166,25 @@ void MainWindow::ConnectStack()
       border-color: #3e4c5f;
     }
   )");
+  const QString selected_game_button_style = game_button_style + QStringLiteral(R"(
+    QPushButton {
+      color: #f0a12a;
+    }
+  )");
   select_button->setFlat(true);
   play_button->setFlat(true);
   pause_button->setFlat(true);
   stop_button->setFlat(true);
   options_button->setFlat(true);
-  load_state_button->setFlat(true);
-  save_state_button->setFlat(true);
   select_state_slot_button->setFlat(true);
+  transfer_old_save_button->setFlat(true);
   select_button->setStyleSheet(game_button_style);
   play_button->setStyleSheet(primary_game_button_style);
   pause_button->setStyleSheet(game_button_style);
   stop_button->setStyleSheet(game_button_style);
   options_button->setStyleSheet(game_button_style);
-  load_state_button->setStyleSheet(game_button_style);
-  save_state_button->setStyleSheet(game_button_style);
   select_state_slot_button->setStyleSheet(game_button_style);
+  transfer_old_save_button->setStyleSheet(game_button_style);
   QSettings& settings = Settings::GetQSettings();
   const auto load_primegun_runtime_settings = [&settings] {
     PrimedGun::RuntimeSettings runtime = PrimedGun::GetRuntimeSettings();
@@ -1620,6 +2273,25 @@ void MainWindow::ConnectStack()
         settings.value(QStringLiteral("primegun/combat_jump_use_primary_button"),
                        runtime.combat_jump_use_primary_button)
             .toBool();
+    runtime.vr_menu_hold_left_stick =
+        settings.value(QStringLiteral("primegun/vr_menu_hold_left_stick"),
+                       runtime.vr_menu_hold_left_stick)
+            .toBool();
+    runtime.vr_menu_requires_head_zone =
+        settings.value(QStringLiteral("primegun/vr_menu_requires_head_zone"),
+                       runtime.vr_menu_requires_head_zone)
+            .toBool();
+    runtime.cinematic_screen_enabled =
+        settings.value(QStringLiteral("primegun/cinematic_screen_enabled"),
+                       runtime.cinematic_screen_enabled)
+            .toBool();
+    runtime.metroid_hud_distance =
+        settings.value(QStringLiteral("primegun/metroid_hud_distance"),
+                       runtime.metroid_hud_distance)
+            .toFloat();
+    runtime.metroid_hud_size =
+        settings.value(QStringLiteral("primegun/metroid_hud_size"), runtime.metroid_hud_size)
+            .toFloat();
     runtime.gun_targeting_enabled =
         settings.value(QStringLiteral("primegun/gun_targeting_enabled"),
                        runtime.gun_targeting_enabled)
@@ -1639,6 +2311,10 @@ void MainWindow::ConnectStack()
     runtime.vr_overlays_enabled =
         settings.value(QStringLiteral("primegun/vr_overlays_enabled"),
                        runtime.vr_overlays_enabled)
+            .toBool();
+    runtime.height_prompt_enabled =
+        settings.value(QStringLiteral("primegun/height_prompt_enabled"),
+                       runtime.height_prompt_enabled)
             .toBool();
     runtime.position_marker_enabled =
         settings.value(QStringLiteral("primegun/position_marker_enabled"),
@@ -1689,6 +2365,12 @@ void MainWindow::ConnectStack()
         settings.value(QStringLiteral("primegun/look_yaw_sensitivity"),
                        runtime.look_yaw_sensitivity)
             .toFloat();
+    runtime.snap_turn_enabled =
+        settings.value(QStringLiteral("primegun/snap_turn_enabled"), runtime.snap_turn_enabled)
+            .toBool();
+    runtime.snap_turn_degrees =
+        settings.value(QStringLiteral("primegun/snap_turn_degrees"), runtime.snap_turn_degrees)
+            .toInt();
     PrimedGun::SetRuntimeSettings(runtime);
   };
   const auto save_primegun_runtime_settings = [&settings](const PrimedGun::RuntimeSettings& runtime) {
@@ -1731,6 +2413,15 @@ void MainWindow::ConnectStack()
                       runtime.primegun_trackpad_press_threshold);
     settings.setValue(QStringLiteral("primegun/combat_jump_use_primary_button"),
                       runtime.combat_jump_use_primary_button);
+    settings.setValue(QStringLiteral("primegun/vr_menu_hold_left_stick"),
+                      runtime.vr_menu_hold_left_stick);
+    settings.setValue(QStringLiteral("primegun/vr_menu_requires_head_zone"),
+                      runtime.vr_menu_requires_head_zone);
+    settings.setValue(QStringLiteral("primegun/cinematic_screen_enabled"),
+                      runtime.cinematic_screen_enabled);
+    settings.setValue(QStringLiteral("primegun/metroid_hud_distance"),
+                      runtime.metroid_hud_distance);
+    settings.setValue(QStringLiteral("primegun/metroid_hud_size"), runtime.metroid_hud_size);
     settings.setValue(QStringLiteral("primegun/gun_targeting_enabled"),
                       runtime.gun_targeting_enabled);
     settings.setValue(QStringLiteral("primegun/gun_targeting_distance"),
@@ -1739,6 +2430,8 @@ void MainWindow::ConnectStack()
     settings.setValue(QStringLiteral("primegun/visor_helmet_enabled"),
                       runtime.visor_helmet_enabled);
     settings.setValue(QStringLiteral("primegun/vr_overlays_enabled"), runtime.vr_overlays_enabled);
+    settings.setValue(QStringLiteral("primegun/height_prompt_enabled"),
+                      runtime.height_prompt_enabled);
     settings.setValue(QStringLiteral("primegun/position_marker_enabled"),
                       runtime.position_marker_enabled);
     settings.setValue(QStringLiteral("primegun/xr_dpad_enabled"), runtime.xr_dpad_enabled);
@@ -1762,6 +2455,8 @@ void MainWindow::ConnectStack()
                       runtime.directional_movement_air_accel);
     settings.setValue(QStringLiteral("primegun/look_yaw_sensitivity"),
                       runtime.look_yaw_sensitivity);
+    settings.setValue(QStringLiteral("primegun/snap_turn_enabled"), runtime.snap_turn_enabled);
+    settings.setValue(QStringLiteral("primegun/snap_turn_degrees"), runtime.snap_turn_degrees);
   };
   load_primegun_runtime_settings();
   auto* primegun_vr_save_timer = new QTimer(this);
@@ -1946,66 +2641,81 @@ void MainWindow::ConnectStack()
   const auto apply_runtime = [runtime] { PrimedGun::SetRuntimeSettings(*runtime); };
   const QString assets_dir = QApplication::applicationDirPath() + QStringLiteral("/assets/");
 
-  auto* load_state_menu = new QMenu(load_state_button);
-  load_state_menu->addAction(tr("Load State from File"), this, &MainWindow::StateLoad);
-  load_state_menu->addAction(tr("Load State from Selected Slot"), this, &MainWindow::StateLoadSlot);
-  auto* load_state_slots_menu = load_state_menu->addMenu(tr("Load State from Slot"));
-  load_state_menu->addAction(tr("Undo Load State"), this, &MainWindow::StateLoadUndo);
-
-  auto* save_state_menu = new QMenu(save_state_button);
-  save_state_menu->addAction(tr("Save State to File"), this, &MainWindow::StateSave);
-  save_state_menu->addAction(tr("Save State to Selected Slot"), this, &MainWindow::StateSaveSlot);
-  save_state_menu->addAction(tr("Save State to Oldest Slot"), this, &MainWindow::StateSaveOldest);
-  auto* save_state_slots_menu = save_state_menu->addMenu(tr("Save State to Slot"));
-  save_state_menu->addAction(tr("Undo Save State"), this, &MainWindow::StateSaveUndo);
-
   auto* select_state_slot_menu = new QMenu(select_state_slot_button);
-  auto* select_state_group = new QActionGroup(select_state_slot_menu);
-  QList<QAction*> load_state_slot_actions;
-  QList<QAction*> save_state_slot_actions;
-  QList<QAction*> select_state_slot_actions;
+  struct StateSlotMenuRow
+  {
+    QPushButton* select = nullptr;
+    QPushButton* load = nullptr;
+    QPushButton* save = nullptr;
+  };
+  std::vector<StateSlotMenuRow> state_slot_menu_rows;
+  state_slot_menu_rows.reserve(State::NUM_STATES);
   const int state_slot_count = static_cast<int>(State::NUM_STATES);
   for (int slot = 1; slot <= state_slot_count; ++slot)
   {
-    QAction* load_action = load_state_slots_menu->addAction(QString{});
-    QAction* save_action = save_state_slots_menu->addAction(QString{});
-    QAction* select_action = select_state_slot_menu->addAction(QString{});
-    select_action->setCheckable(true);
-    select_action->setActionGroup(select_state_group);
+    auto* action = new QWidgetAction(select_state_slot_menu);
+    auto* row = new QWidget(select_state_slot_menu);
+    auto* row_layout = new QHBoxLayout(row);
+    row_layout->setContentsMargins(8, 2, 8, 2);
+    row_layout->setSpacing(6);
 
-    load_state_slot_actions.append(load_action);
-    save_state_slot_actions.append(save_action);
-    select_state_slot_actions.append(select_action);
+    auto* select = new QPushButton(row);
+    auto* load = new QPushButton(tr("Load"), row);
+    auto* save = new QPushButton(tr("Save"), row);
+    select->setFlat(true);
+    load->setFlat(true);
+    save->setFlat(true);
+    select->setStyleSheet(game_button_style);
+    load->setStyleSheet(game_button_style);
+    save->setStyleSheet(game_button_style);
+    select->setMinimumWidth(176);
+    select->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    load->setMinimumWidth(56);
+    save->setMinimumWidth(56);
 
-    connect(load_action, &QAction::triggered, this, [this, slot] { StateLoadSlotAt(slot); });
-    connect(save_action, &QAction::triggered, this, [this, slot] { StateSaveSlotAt(slot); });
-    connect(select_action, &QAction::triggered, this, [this, slot] {
+    row_layout->addWidget(select, 1);
+    row_layout->addWidget(load);
+    row_layout->addWidget(save);
+    action->setDefaultWidget(row);
+    select_state_slot_menu->addAction(action);
+
+    state_slot_menu_rows.push_back({select, load, save});
+
+    connect(select, &QPushButton::clicked, this, [this, select_state_slot_menu, slot] {
       m_menu_bar->SetStateSlot(slot);
+      select_state_slot_menu->close();
+    });
+    connect(load, &QPushButton::clicked, this, [this, select_state_slot_menu, slot] {
+      m_menu_bar->SetStateSlot(slot);
+      StateLoadSlotAt(slot);
+      select_state_slot_menu->close();
+    });
+    connect(save, &QPushButton::clicked, this, [this, select_state_slot_menu, slot] {
+      m_menu_bar->SetStateSlot(slot);
+      StateSaveSlotAt(slot);
+      select_state_slot_menu->close();
     });
   }
 
-  const auto refresh_state_slot_menus = [load_state_slot_actions, save_state_slot_actions,
-                                         select_state_slot_actions, state_slot_count] {
+  const auto refresh_state_slot_menu = [state_slot_menu_rows, state_slot_count, game_button_style,
+                                        selected_game_button_style] {
     const int selected_slot = Settings::Instance().GetStateSlot();
     for (int index = 0; index < state_slot_count; ++index)
     {
       const int slot = index + 1;
       const QString info = QString::fromStdString(State::GetInfoStringOfSlot(slot));
-      load_state_slot_actions.at(index)->setText(
-          QObject::tr("Load from Slot %1 - %2").arg(slot).arg(info));
-      save_state_slot_actions.at(index)->setText(
-          QObject::tr("Save to Slot %1 - %2").arg(slot).arg(info));
-      select_state_slot_actions.at(index)->setText(
-          QObject::tr("Select Slot %1 - %2").arg(slot).arg(info));
-      select_state_slot_actions.at(index)->setChecked(selected_slot == slot);
+      const QString label =
+          (selected_slot == slot ? QObject::tr("Current Slot %1 - %2") :
+                                   QObject::tr("Select Slot %1 - %2"))
+              .arg(slot)
+              .arg(info);
+      state_slot_menu_rows.at(index).select->setText(label);
+      state_slot_menu_rows.at(index).select->setStyleSheet(
+          selected_slot == slot ? selected_game_button_style : game_button_style);
     }
   };
-  connect(load_state_menu, &QMenu::aboutToShow, this, refresh_state_slot_menus);
-  connect(save_state_menu, &QMenu::aboutToShow, this, refresh_state_slot_menus);
-  connect(select_state_slot_menu, &QMenu::aboutToShow, this, refresh_state_slot_menus);
-  refresh_state_slot_menus();
-  load_state_button->setMenu(load_state_menu);
-  save_state_button->setMenu(save_state_menu);
+  connect(select_state_slot_menu, &QMenu::aboutToShow, this, refresh_state_slot_menu);
+  refresh_state_slot_menu();
   select_state_slot_button->setMenu(select_state_slot_menu);
 
   auto* setup_layout = make_scroll_tab(tr("Setup"));
@@ -2032,10 +2742,9 @@ void MainWindow::ConnectStack()
   setup_layout->addLayout(play_control_row);
   setup_layout->addWidget(options_button);
   setup_layout->addSpacing(10);
-  setup_layout->addWidget(section_label(tr("Save States"), game_tab));
-  setup_layout->addWidget(load_state_button);
-  setup_layout->addWidget(save_state_button);
+  setup_layout->addWidget(section_label(tr("Save States / Memory Card"), game_tab));
   setup_layout->addWidget(select_state_slot_button);
+  setup_layout->addWidget(transfer_old_save_button);
   setup_layout->addSpacing(12);
   setup_layout->addStretch();
   auto* setup_art = new QLabel(game_tab);
@@ -2073,7 +2782,16 @@ void MainWindow::ConnectStack()
   controller_layout->addWidget(auto_bindings);
   auto* vr_overlays_enabled = new QCheckBox(tr("In-headset overlays"), game_tab);
   vr_overlays_enabled->setChecked(runtime->vr_overlays_enabled);
-  controller_layout->addWidget(vr_overlays_enabled);
+  auto* vr_menu_hold_left_stick =
+      new QCheckBox(tr("Longer held press for VR menu"), game_tab);
+  vr_menu_hold_left_stick->setChecked(runtime->vr_menu_hold_left_stick);
+  controller_layout->addWidget(vr_menu_hold_left_stick);
+  auto* vr_menu_requires_head_zone =
+      new QCheckBox(tr("VR menu requires controller near head to activate"), game_tab);
+  vr_menu_requires_head_zone->setChecked(runtime->vr_menu_requires_head_zone);
+  controller_layout->addWidget(vr_menu_requires_head_zone);
+  auto* cinematic_screen_enabled = new QCheckBox(tr("Show cutscenes on cinema screen"), game_tab);
+  cinematic_screen_enabled->setChecked(runtime->cinematic_screen_enabled);
   auto* combat_jump_use_primary_button = new QCheckBox(tr("Use A button for jump"), game_tab);
   combat_jump_use_primary_button->setChecked(runtime->combat_jump_use_primary_button);
   controller_layout->addWidget(combat_jump_use_primary_button);
@@ -2095,7 +2813,7 @@ void MainWindow::ConnectStack()
   auto* dpad_enabled = new QCheckBox(tr("Enable visor gesture input"), game_tab);
   dpad_enabled->setChecked(runtime->xr_dpad_enabled);
   auto* primegun_grip_inputs_enabled =
-      new QCheckBox(tr("Use PrimedGun grip inputs"), game_tab);
+      new QCheckBox(tr("Use grip input"), game_tab);
   primegun_grip_inputs_enabled->setChecked(runtime->primegun_grip_inputs_enabled);
   auto* primegun_grip_inputs_use_trackpad =
       new QCheckBox(tr("Use touchpad for PrimedGun grip inputs (Index users)"), game_tab);
@@ -2234,23 +2952,37 @@ void MainWindow::ConnectStack()
       add_float_row(controller_layout, tr("Look yaw sensitivity"), 0.20, 3.00, 0.05,
                     runtime->look_yaw_sensitivity,
                     [runtime](float v) { runtime->look_yaw_sensitivity = v; });
+  auto* snap_turn_enabled = new QCheckBox(tr("Snap turn"), game_tab);
+  snap_turn_enabled->setChecked(runtime->snap_turn_enabled);
+  controller_layout->addWidget(snap_turn_enabled);
+  auto* snap_turn_degrees = new QComboBox(game_tab);
+  snap_turn_degrees->addItem(tr("30 degrees"), 30);
+  snap_turn_degrees->addItem(tr("45 degrees"), 45);
+  snap_turn_degrees->addItem(tr("60 degrees"), 60);
+  snap_turn_degrees->addItem(tr("90 degrees"), 90);
+  const auto set_snap_turn_degrees_combo = [snap_turn_degrees](int degrees) {
+    const int index = snap_turn_degrees->findData(degrees);
+    snap_turn_degrees->setCurrentIndex(index >= 0 ? index : 1);
+  };
+  set_snap_turn_degrees_combo(runtime->snap_turn_degrees);
+  snap_turn_degrees->installEventFilter(this);
+  auto* snap_turn_degrees_row = new QHBoxLayout;
+  auto* snap_turn_degrees_label = new QLabel(tr("Snap turn angle"), game_tab);
+  snap_turn_degrees_label->setMinimumWidth(170);
+  snap_turn_degrees_label->setMaximumWidth(170);
+  snap_turn_degrees_row->addWidget(snap_turn_degrees_label);
+  snap_turn_degrees_row->addWidget(snap_turn_degrees, 0);
+  snap_turn_degrees_row->addStretch();
+  controller_layout->addLayout(snap_turn_degrees_row);
   controller_layout->addStretch();
 
   auto* calibration_layout = make_scroll_tab(tr("Calibration"));
-  calibration_layout->addWidget(section_label(tr("Targeting"), game_tab));
-  auto* reset_aiming = new QPushButton(tr("Reset Targeting"), game_tab);
-  calibration_layout->addWidget(reset_aiming);
-  auto* targeting_enabled = new QCheckBox(tr("Gun selects lock/scan target"), game_tab);
-  targeting_enabled->setChecked(runtime->gun_targeting_enabled);
-  calibration_layout->addWidget(targeting_enabled);
-  auto* target_distance_spin =
-      add_float_row(calibration_layout, tr("Target distance"), 10.0, 120.0, 1.0,
-                    runtime->gun_targeting_distance,
-                    [runtime](float v) { runtime->gun_targeting_distance = v; });
-  auto* target_radius_spin =
-      add_float_row(calibration_layout, tr("Target radius"), 0.5, 8.0, 0.1,
-                    runtime->gun_targeting_radius,
-                    [runtime](float v) { runtime->gun_targeting_radius = v; });
+  calibration_layout->addWidget(section_label(tr("In-headset Display"), game_tab));
+  calibration_layout->addWidget(vr_overlays_enabled);
+  auto* height_prompt_enabled = new QCheckBox(tr("Show height prompt"), game_tab);
+  height_prompt_enabled->setChecked(runtime->height_prompt_enabled);
+  calibration_layout->addWidget(height_prompt_enabled);
+  calibration_layout->addWidget(cinematic_screen_enabled);
   auto* visor_helmet_enabled = new QCheckBox(tr("Enable visor helmet"), game_tab);
   visor_helmet_enabled->setChecked(runtime->visor_helmet_enabled);
   auto* visor_helmet_row = new QHBoxLayout;
@@ -2261,12 +2993,37 @@ void MainWindow::ConnectStack()
   visor_helmet_row->addWidget(visor_helmet_note);
   visor_helmet_row->addStretch();
   calibration_layout->addLayout(visor_helmet_row);
-
-  separator(calibration_layout);
-  calibration_layout->addWidget(section_label(tr("Offset Tuning"), game_tab));
   auto* position_marker_enabled = new QCheckBox(tr("Show floor position marker"), game_tab);
   position_marker_enabled->setChecked(runtime->position_marker_enabled);
   calibration_layout->addWidget(position_marker_enabled);
+  separator(calibration_layout);
+  calibration_layout->addWidget(section_label(tr("HUD"), game_tab));
+  auto* reset_hud = new QPushButton(tr("Reset HUD"), game_tab);
+  calibration_layout->addWidget(reset_hud);
+  auto* metroid_hud_distance_spin =
+      add_float_row(calibration_layout, tr("HUD distance"), 0.10, 3.00, 0.05,
+                    runtime->metroid_hud_distance,
+                    [runtime](float v) { runtime->metroid_hud_distance = v; });
+  auto* metroid_hud_size_spin =
+      add_float_row(calibration_layout, tr("HUD size"), 0.10, 3.00, 0.05,
+                    runtime->metroid_hud_size,
+                    [runtime](float v) { runtime->metroid_hud_size = v; });
+  separator(calibration_layout);
+  calibration_layout->addWidget(section_label(tr("Targeting"), game_tab));
+  auto* reset_aiming = new QPushButton(tr("Reset Targeting"), game_tab);
+  calibration_layout->addWidget(reset_aiming);
+  auto* target_distance_spin =
+      add_float_row(calibration_layout, tr("Target distance"), 10.0, 120.0, 1.0,
+                    runtime->gun_targeting_distance,
+                    [runtime](float v) { runtime->gun_targeting_distance = v; });
+  auto* target_radius_spin =
+      add_float_row(calibration_layout, tr("Target radius"), 0.5, 8.0, 0.1,
+                    runtime->gun_targeting_radius,
+                    [runtime](float v) { runtime->gun_targeting_radius = v; });
+  separator(calibration_layout);
+  calibration_layout->addWidget(section_label(tr("Offset Tuning"), game_tab));
+  auto* reset_calibration = new QPushButton(tr("Reset Calibration"), game_tab);
+  calibration_layout->addWidget(reset_calibration);
   separator(calibration_layout);
   calibration_layout->addWidget(section_label(tr("Position"), game_tab));
   auto* model_x_spin =
@@ -2716,6 +3473,10 @@ void MainWindow::ConnectStack()
     const QSignalBlocker right_hand_blocker{right_hand};
     const QSignalBlocker left_hand_blocker{left_hand};
     const QSignalBlocker vr_overlays_enabled_blocker{vr_overlays_enabled};
+    const QSignalBlocker height_prompt_enabled_blocker{height_prompt_enabled};
+    const QSignalBlocker vr_menu_hold_left_stick_blocker{vr_menu_hold_left_stick};
+    const QSignalBlocker vr_menu_requires_head_zone_blocker{vr_menu_requires_head_zone};
+    const QSignalBlocker cinematic_screen_enabled_blocker{cinematic_screen_enabled};
     const QSignalBlocker rumble_enabled_blocker{rumble_enabled};
     const QSignalBlocker rumble_hand_mode_blocker{rumble_hand_mode};
     const QSignalBlocker dpad_enabled_blocker{dpad_enabled};
@@ -2729,7 +3490,8 @@ void MainWindow::ConnectStack()
     const QSignalBlocker right_stick_blocker{right_stick};
     const QSignalBlocker controller_direction_blocker{controller_direction};
     const QSignalBlocker hmd_direction_blocker{hmd_direction};
-    const QSignalBlocker targeting_enabled_blocker{targeting_enabled};
+    const QSignalBlocker snap_turn_enabled_blocker{snap_turn_enabled};
+    const QSignalBlocker snap_turn_degrees_blocker{snap_turn_degrees};
     const QSignalBlocker visor_helmet_enabled_blocker{visor_helmet_enabled};
     const QSignalBlocker position_marker_enabled_blocker{position_marker_enabled};
     const auto set_float = [float_rows](QDoubleSpinBox* spin, double value) {
@@ -2755,6 +3517,10 @@ void MainWindow::ConnectStack()
     right_hand->setChecked(runtime->use_right_hand);
     left_hand->setChecked(!runtime->use_right_hand);
     vr_overlays_enabled->setChecked(runtime->vr_overlays_enabled);
+    height_prompt_enabled->setChecked(runtime->height_prompt_enabled);
+    vr_menu_hold_left_stick->setChecked(runtime->vr_menu_hold_left_stick);
+    vr_menu_requires_head_zone->setChecked(runtime->vr_menu_requires_head_zone);
+    cinematic_screen_enabled->setChecked(runtime->cinematic_screen_enabled);
     rumble_enabled->setChecked(runtime->rumble_enabled);
     rumble_hand_mode->setCurrentIndex(std::clamp(runtime->rumble_hand_mode, 0, 2));
     dpad_enabled->setChecked(runtime->xr_dpad_enabled);
@@ -2766,7 +3532,8 @@ void MainWindow::ConnectStack()
     right_stick->setChecked(runtime->directional_movement_use_right_stick);
     controller_direction->setChecked(!runtime->directional_movement_use_hmd_direction);
     hmd_direction->setChecked(runtime->directional_movement_use_hmd_direction);
-    targeting_enabled->setChecked(runtime->gun_targeting_enabled);
+    snap_turn_enabled->setChecked(runtime->snap_turn_enabled);
+    set_snap_turn_degrees_combo(runtime->snap_turn_degrees);
     visor_helmet_enabled->setChecked(runtime->visor_helmet_enabled);
     position_marker_enabled->setChecked(runtime->position_marker_enabled);
     set_float(dpad_radius_spin, runtime->xr_dpad_head_radius);
@@ -2779,6 +3546,8 @@ void MainWindow::ConnectStack()
     set_float(movement_accel_spin, runtime->directional_movement_accel);
     set_float(movement_air_accel_spin, runtime->directional_movement_air_accel);
     set_float(look_yaw_sensitivity_spin, runtime->look_yaw_sensitivity);
+    set_float(metroid_hud_distance_spin, runtime->metroid_hud_distance);
+    set_float(metroid_hud_size_spin, runtime->metroid_hud_size);
     set_float(target_distance_spin, runtime->gun_targeting_distance);
     set_float(target_radius_spin, runtime->gun_targeting_radius);
     set_float(model_x_spin, runtime->model_offset_x);
@@ -2803,6 +3572,9 @@ void MainWindow::ConnectStack()
           [runtime, refresh_visible_settings, apply_runtime] {
     runtime->use_right_hand = true;
     runtime->vr_overlays_enabled = true;
+    runtime->vr_menu_hold_left_stick = false;
+    runtime->vr_menu_requires_head_zone = false;
+    runtime->cinematic_screen_enabled = false;
     runtime->rumble_enabled = true;
     runtime->rumble_intensity = 0.35f;
     runtime->rumble_hand_mode = 2;
@@ -2822,6 +3594,8 @@ void MainWindow::ConnectStack()
     runtime->directional_movement_accel = 45.0f;
     runtime->directional_movement_air_accel = 8.0f;
     runtime->look_yaw_sensitivity = 1.0f;
+    runtime->snap_turn_enabled = false;
+    runtime->snap_turn_degrees = 45;
     refresh_visible_settings();
     apply_runtime();
   });
@@ -2851,6 +3625,21 @@ void MainWindow::ConnectStack()
   connect(vr_overlays_enabled, &QCheckBox::toggled, this,
           [runtime, apply_runtime](bool checked) {
     runtime->vr_overlays_enabled = checked;
+    apply_runtime();
+  });
+  connect(vr_menu_hold_left_stick, &QCheckBox::toggled, this,
+          [runtime, apply_runtime](bool checked) {
+    runtime->vr_menu_hold_left_stick = checked;
+    apply_runtime();
+  });
+  connect(vr_menu_requires_head_zone, &QCheckBox::toggled, this,
+          [runtime, apply_runtime](bool checked) {
+    runtime->vr_menu_requires_head_zone = checked;
+    apply_runtime();
+  });
+  connect(cinematic_screen_enabled, &QCheckBox::toggled, this,
+          [runtime, apply_runtime](bool checked) {
+    runtime->cinematic_screen_enabled = checked;
     apply_runtime();
   });
   connect(rumble_enabled, &QCheckBox::toggled, this, [runtime, apply_runtime](bool checked) {
@@ -2914,8 +3703,15 @@ void MainWindow::ConnectStack()
       apply_runtime();
     }
   });
-  connect(targeting_enabled, &QCheckBox::toggled, this, [runtime, apply_runtime](bool checked) {
-    runtime->gun_targeting_enabled = checked;
+  connect(snap_turn_enabled, &QCheckBox::toggled, this, [runtime, apply_runtime](bool checked) {
+    runtime->snap_turn_enabled = checked;
+    apply_runtime();
+  });
+  connect(snap_turn_degrees, qOverload<int>(&QComboBox::currentIndexChanged), this,
+          [runtime, snap_turn_degrees, apply_runtime](int index) {
+    if (index < 0)
+      return;
+    runtime->snap_turn_degrees = snap_turn_degrees->itemData(index).toInt();
     apply_runtime();
   });
   connect(visor_helmet_enabled, &QCheckBox::toggled, this,
@@ -2923,11 +3719,25 @@ void MainWindow::ConnectStack()
     runtime->visor_helmet_enabled = checked;
     apply_runtime();
   });
+  connect(height_prompt_enabled, &QCheckBox::toggled, this,
+          [runtime, apply_runtime](bool checked) {
+    runtime->height_prompt_enabled = checked;
+    apply_runtime();
+  });
   connect(position_marker_enabled, &QCheckBox::toggled, this,
           [runtime, apply_runtime](bool checked) {
     runtime->position_marker_enabled = checked;
     apply_runtime();
   });
+  connect(reset_hud, &QPushButton::clicked, this,
+          [runtime, refresh_visible_settings, apply_runtime] {
+    const PrimedGun::RuntimeSettings defaults{};
+    runtime->metroid_hud_distance = defaults.metroid_hud_distance;
+    runtime->metroid_hud_size = defaults.metroid_hud_size;
+    refresh_visible_settings();
+    apply_runtime();
+  });
+  connect(reset_calibration, &QPushButton::clicked, this, reset_calibration_values);
   connect(default_preset, &QPushButton::clicked, this, reset_calibration_values);
   connect(samus_preset, &QPushButton::clicked, this,
           [runtime, refresh_visible_settings, apply_runtime] {
@@ -2979,6 +3789,140 @@ void MainWindow::ConnectStack()
   });
   connect(pause_button, &QPushButton::clicked, this, &MainWindow::TogglePause);
   connect(stop_button, &QPushButton::clicked, this, &MainWindow::RequestStop);
+  connect(transfer_old_save_button, &QPushButton::clicked, this,
+          [this, load_primegun_runtime_settings, runtime, refresh_visible_settings,
+           selected_metroid_game_setting, update_selected_game] {
+    if (Core::GetState(m_system) != Core::State::Uninitialized)
+    {
+      ModalMessageBox::warning(this, tr("Transfer Old Memory Card"),
+                               tr("Stop the game before transferring a memory card save."));
+      return;
+    }
+
+    QMessageBox prompt(this);
+    prompt.setWindowTitle(tr("Transfer Old Memory Card"));
+    prompt.setText(tr("Transfer old save game."));
+    prompt.setInformativeText(
+        tr("PrimedGun will search nearby old PrimedGun folders and automatically transfer and "
+           "apply your save."));
+    auto* transfer_button = prompt.addButton(tr("Transfer"), QMessageBox::AcceptRole);
+    prompt.addButton(QMessageBox::Cancel);
+    prompt.exec();
+
+    if (prompt.clickedButton() != transfer_button)
+      return;
+
+    const QString destination = QDir::toNativeSeparators(QString::fromStdString(
+        Config::GetMemcardPath(ExpansionInterface::Slot::A, DiscIO::Region::NTSC_U)));
+    const QString source = PrimedGunFindNearbyOldMemoryCard(destination);
+    if (source.isEmpty())
+    {
+      ModalMessageBox::critical(
+          this, tr("Transfer Old Memory Card"),
+          tr("Could not find an old memory card near this PrimedGun install.\n\n"
+             "Place the new version near your old PrimedGun folder, then try again."));
+      return;
+    }
+
+    const QFileInfo destination_info(destination);
+    QDir destination_dir = destination_info.absoluteDir();
+    if (!destination_dir.exists() && !destination_dir.mkpath(QStringLiteral(".")))
+    {
+      ModalMessageBox::critical(
+          this, tr("Transfer Old Memory Card"),
+          tr("Could not create the current memory card folder:\n%1")
+              .arg(destination_dir.absolutePath()));
+      return;
+    }
+
+#ifdef _WIN32
+    constexpr Qt::CaseSensitivity path_case_sensitivity = Qt::CaseInsensitive;
+#else
+    constexpr Qt::CaseSensitivity path_case_sensitivity = Qt::CaseSensitive;
+#endif
+    if (QString::compare(QDir::cleanPath(QFileInfo(source).absoluteFilePath()),
+                         QDir::cleanPath(destination_info.absoluteFilePath()),
+                         path_case_sensitivity) == 0)
+    {
+      ModalMessageBox::information(this, tr("Transfer Old Memory Card"),
+                                   tr("That save is already the current memory card."));
+      return;
+    }
+
+    QString backup_path;
+    if (destination_info.exists())
+    {
+      const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss"));
+      const QString suffix = destination_info.suffix();
+      const QString backup_name =
+          suffix.isEmpty() ?
+              QStringLiteral("%1.backup-%2").arg(destination_info.fileName(), timestamp) :
+              QStringLiteral("%1.backup-%2.%3")
+                  .arg(destination_info.completeBaseName(), timestamp, suffix);
+      backup_path = destination_dir.filePath(backup_name);
+      if (!QFile::rename(destination, backup_path))
+      {
+        ModalMessageBox::critical(
+          this, tr("Transfer Old Memory Card"),
+            tr("Could not back up the current memory card:\n%1").arg(destination));
+        return;
+      }
+    }
+
+    if (!QFile::copy(source, destination))
+    {
+      if (!backup_path.isEmpty())
+        QFile::rename(backup_path, destination);
+      ModalMessageBox::critical(this, tr("Transfer Old Memory Card"),
+                                tr("Could not copy the selected save to:\n%1").arg(destination));
+      return;
+    }
+
+    const QString old_settings_path = PrimedGunFindSettingsNearMemoryCard(source);
+    const int imported_settings_count =
+        PrimedGunImportSettingsFromFile(old_settings_path, &Settings::GetQSettings());
+    QString old_dolphin_settings_source;
+    QString dolphin_settings_error;
+    const int imported_dolphin_settings_count = PrimedGunTransferDolphinSettingsNearMemoryCard(
+        source, &old_dolphin_settings_source, &dolphin_settings_error);
+    if (imported_dolphin_settings_count < 0)
+    {
+      ModalMessageBox::critical(this, tr("Transfer Old Memory Card"), dolphin_settings_error);
+      return;
+    }
+
+    if (imported_settings_count > 0)
+    {
+      load_primegun_runtime_settings();
+      *runtime = PrimedGun::GetRuntimeSettings();
+      refresh_visible_settings();
+      update_selected_game(Settings::GetQSettings().value(selected_metroid_game_setting).toString());
+    }
+
+    QString message = tr("Old memory card transferred to:\n%1").arg(destination);
+    if (!backup_path.isEmpty())
+      message += tr("\n\nPrevious memory card backed up to:\n%1").arg(backup_path);
+    if (imported_settings_count > 0)
+    {
+      message += tr("\n\nPrimeGun settings transferred from:\n%1").arg(old_settings_path);
+    }
+    else
+    {
+      message += tr("\n\nNo old PrimeGun settings were found in a folder with PrimedGun.exe.");
+    }
+    if (imported_dolphin_settings_count > 0)
+    {
+      message += tr("\n\nDolphin settings transferred from:\n%1\n%2 file(s) copied.")
+                     .arg(old_dolphin_settings_source)
+                     .arg(imported_dolphin_settings_count);
+    }
+    else
+    {
+      message += tr("\n\nNo old user-created Dolphin settings were found in a folder with "
+                    "PrimedGun.exe.");
+    }
+    ModalMessageBox::information(this, tr("Transfer Old Memory Card"), message);
+  });
 
   connect(options_button, &QPushButton::clicked, this,
           [this, make_selected_game, selected_metroid_game_setting, options_button] {

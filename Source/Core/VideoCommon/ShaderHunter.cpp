@@ -1104,48 +1104,6 @@ static void MergeParsedShaderOverrideFile(std::vector<ShaderHunter::ShaderOverri
   }
 }
 
-void AppendPrimedGunBuiltinShaderOverrides(std::vector<ShaderHunter::ShaderOverride>* overrides,
-                                           const std::string& game_id)
-{
-  if (overrides == nullptr || game_id != "GM8E01")
-    return;
-
-  // QuestPrimeVR diagnostic: QPVR_NO_BUILTIN_OVERRIDES disables the hard-coded
-  // scan-mask/menu-picker skip overrides (active in ALL modes, including flat)
-  // to bisect the black-backing composites.
-  static const bool s_qpvr_no_builtin_overrides =
-      getenv("QPVR_NO_BUILTIN_OVERRIDES") != nullptr;
-  if (s_qpvr_no_builtin_overrides)
-    return;
-
-  ShaderHunter::ShaderOverride scan_mask{};
-  scan_mask.name = "PrimedGun Scan Mask Element Zero";
-  scan_mask.hash = 0x00000000e270bbdbULL;
-  scan_mask.type = ShaderHunter::ShaderType::Vertex;
-  scan_mask.handling = ShaderHunter::HandlingType::Skip;
-  scan_mask.match_mode = ShaderHunter::MatchMode::ExactHash;
-  scan_mask.element_start = 0;
-  scan_mask.element_end = 0;
-  scan_mask.condition_flag = "primedgun_map_or_pause";
-  scan_mask.condition_inverted = true;
-  scan_mask.enabled = true;
-  scan_mask.user_defined = false;
-  overrides->push_back(std::move(scan_mask));
-
-  ShaderHunter::ShaderOverride main_menu_picker{};
-  main_menu_picker.name = "PrimedGun Main Menu Picker";
-  main_menu_picker.hash = 0x0000000007ad8d1fULL;
-  main_menu_picker.type = ShaderHunter::ShaderType::Pixel;
-  main_menu_picker.handling = ShaderHunter::HandlingType::Skip;
-  main_menu_picker.match_mode = ShaderHunter::MatchMode::ExactHash;
-  main_menu_picker.element_start = 6;
-  main_menu_picker.element_end = 6;
-  main_menu_picker.element_reference_total = 7;
-  main_menu_picker.enabled = true;
-  main_menu_picker.user_defined = false;
-  overrides->push_back(std::move(main_menu_picker));
-}
-
 std::vector<ShaderHunter::ShaderOverride>
 ShaderHunter::LoadOverridesFromINI(const std::string& game_id, std::optional<u16> revision)
 {
@@ -1304,7 +1262,6 @@ void ShaderHunter::LoadOverrides(const std::string& game_id)
     return;
 
   auto all = LoadOverridesFromINI(game_id);
-  AppendPrimedGunBuiltinShaderOverrides(&all, game_id);
   bool has_overrides = false;
   bool needs_shader_family_signatures = false;
   bool needs_texture_hashes = false;

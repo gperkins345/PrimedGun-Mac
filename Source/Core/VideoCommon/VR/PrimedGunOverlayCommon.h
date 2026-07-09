@@ -253,6 +253,12 @@ struct MenuRow
   std::string value;
 };
 
+constexpr uint32_t VR_MENU_LAYOUT_TAB = 0;
+constexpr uint32_t VR_MENU_CALIBRATION_TAB = 1;
+constexpr uint32_t VR_MENU_CONTROL_TAB = 2;
+constexpr uint32_t VR_MENU_MOVEMENT_TAB = 3;
+constexpr uint32_t VR_MENU_CANNON_TAB = 4;
+constexpr uint32_t VR_MENU_STATE_TAB = 5;
 constexpr uint32_t RESET_ALL_ACTION = 1;
 constexpr uint32_t RESET_TARGETING_ACTION = 2;
 constexpr uint32_t RESET_CALIBRATION_ACTION = 3;
@@ -269,7 +275,16 @@ inline int ControlMenuActualIndex(uint32_t page, int local_index)
   if (local_index <= 0)
     return -1;
 
-  constexpr int first_page_items = 6;
+  constexpr int first_page_items = 8;
+  return page == 0 ? local_index - 1 : first_page_items + local_index - 1;
+}
+
+inline int CalibrationMenuActualIndex(uint32_t page, int local_index)
+{
+  if (local_index <= 0)
+    return -1;
+
+  constexpr int first_page_items = 8;
   return page == 0 ? local_index - 1 : first_page_items + local_index - 1;
 }
 
@@ -277,18 +292,25 @@ inline bool MenuRowIsNumeric(const Common::VR::PrimedGunVrOverlayState& s, int i
 {
   switch (s.tab)
   {
-  case 0:
-    return index == 1 || index == 2 || (index >= 5 && index <= 10);
-  case 2:
-    return index >= 3 && index <= 7;
-  case 1:
+  case VR_MENU_CALIBRATION_TAB:
+  {
+    if (index == 0)
+      return true;
+
+    const int actual_index = CalibrationMenuActualIndex(s.calibration_page, index);
+    return (actual_index >= 1 && actual_index <= 4) ||
+           (actual_index >= 8 && actual_index <= 13);
+  }
+  case VR_MENU_MOVEMENT_TAB:
+    return (index >= 3 && index <= 7) || index == 9;
+  case VR_MENU_CONTROL_TAB:
   {
     if (index == 0)
       return true;
 
     const int actual_index = ControlMenuActualIndex(s.control_page, index);
-    return actual_index == 3 || actual_index == 7 || actual_index == 10 ||
-           actual_index == 11 || actual_index == 12;
+    return actual_index == 3 || actual_index == 9 || actual_index == 12 ||
+           actual_index == 13 || actual_index == 14;
   }
   default:
     return false;
@@ -311,7 +333,7 @@ inline std::string RumbleHandModeText(int mode)
 inline int MenuRowTextY(const Common::VR::PrimedGunVrOverlayState& s, int index)
 {
   int y = 146 + index * 22;
-  if (s.tab == 4 && index >= 1)
+  if (s.tab == VR_MENU_STATE_TAB && index >= 1)
     y += 18;
   return y;
 }
@@ -320,23 +342,38 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
 {
   switch (s.tab)
   {
-  case 0:
-    return {{"TARGETING", s.gun_targeting_enabled ? "ON" : "OFF"},
-            {"TARGET DISTANCE", FloatText(s.gun_targeting_distance, 1)},
-            {"TARGET RADIUS", FloatText(s.gun_targeting_radius, 1)},
-            {"VISOR HELMET", s.visor_helmet_enabled ? "ON" : "OFF"},
-            {"RESET TARGETING", ConfirmText(s, RESET_TARGETING_ACTION)},
-            {"POSITION LEFT/RIGHT", FloatText(s.model_offset_x, 3)},
-            {"POSITION FORWARD/BACK", FloatText(s.model_offset_y, 3)},
-            {"POSITION UP/DOWN", FloatText(s.model_offset_z, 3)},
-            {"ROTATION PITCH", FloatText(s.rot_offset_x, 1)},
-            {"ROTATION YAW", FloatText(s.rot_offset_y, 1)},
-            {"ROTATION ROLL", FloatText(s.rot_offset_z, 1)},
-            {"FLOOR POSITION MARKER", s.position_marker_visible ? "ON" : "OFF"},
-            {"RESET CALIBRATION", ConfirmText(s, RESET_CALIBRATION_ACTION)},
-            {"DEFAULT ARM PRESET", "APPLY"},
-            {"SAMUS ARM PRESET", "APPLY"}};
-  case 1:
+  case VR_MENU_CALIBRATION_TAB:
+  {
+    std::vector<MenuRow> rows;
+    rows.push_back({"PAGE", s.calibration_page == 0 ? "1/2" : "2/2"});
+
+    if (s.calibration_page == 0)
+    {
+      rows.push_back({"CUTSCENE CINEMA SCREEN", s.cinematic_screen_enabled ? "ON" : "OFF"});
+      rows.push_back({"HUD DISTANCE", FloatText(s.metroid_hud_distance, 2)});
+      rows.push_back({"HUD SIZE", FloatText(s.metroid_hud_size, 2)});
+      rows.push_back({"TARGET DISTANCE", FloatText(s.gun_targeting_distance, 1)});
+      rows.push_back({"TARGET RADIUS", FloatText(s.gun_targeting_radius, 1)});
+      rows.push_back({"VISOR HELMET", s.visor_helmet_enabled ? "ON" : "OFF"});
+      rows.push_back({"HEIGHT PROMPT", s.height_prompt_enabled ? "ON" : "OFF"});
+      rows.push_back({"RESET TARGETING", ConfirmText(s, RESET_TARGETING_ACTION)});
+    }
+    else
+    {
+      rows.push_back({"POSITION LEFT/RIGHT", FloatText(s.model_offset_x, 3)});
+      rows.push_back({"POSITION FORWARD/BACK", FloatText(s.model_offset_y, 3)});
+      rows.push_back({"POSITION UP/DOWN", FloatText(s.model_offset_z, 3)});
+      rows.push_back({"ROTATION PITCH", FloatText(s.rot_offset_x, 1)});
+      rows.push_back({"ROTATION YAW", FloatText(s.rot_offset_y, 1)});
+      rows.push_back({"ROTATION ROLL", FloatText(s.rot_offset_z, 1)});
+      rows.push_back({"FLOOR POSITION MARKER", s.position_marker_visible ? "ON" : "OFF"});
+      rows.push_back({"RESET CALIBRATION", ConfirmText(s, RESET_CALIBRATION_ACTION)});
+      rows.push_back({"DEFAULT ARM PRESET", "APPLY"});
+      rows.push_back({"SAMUS ARM PRESET", "APPLY"});
+    }
+    return rows;
+  }
+  case VR_MENU_CONTROL_TAB:
   {
     std::vector<MenuRow> rows;
     rows.push_back({"PAGE", s.control_page == 0 ? "1/2" : "2/2"});
@@ -347,8 +384,10 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
       rows.push_back({"RUMBLE", s.rumble_enabled ? "ON" : "OFF"});
       rows.push_back({"RUMBLE TARGET", RumbleHandModeText(s.rumble_hand_mode)});
       rows.push_back({"RUMBLE INTENSITY", FloatText(s.rumble_intensity, 2)});
-      rows.push_back({"PRIMEDGUN GRIP INPUTS", s.primegun_grip_inputs_enabled ? "ON" : "OFF"});
+      rows.push_back({"GRIP INPUT", s.primegun_grip_inputs_enabled ? "ON" : "OFF"});
       rows.push_back({"A BUTTON JUMP", s.combat_jump_use_primary_button ? "ON" : "OFF"});
+      rows.push_back({"LONGER HELD PRESS FOR VR MENU", s.vr_menu_hold_left_stick ? "ON" : "OFF"});
+      rows.push_back({"MENU REQUIRES HAND NEAR HEAD", s.vr_menu_requires_head_zone ? "ON" : "OFF"});
     }
     else
     {
@@ -365,7 +404,7 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
 
     return rows;
   }
-  case 2:
+  case VR_MENU_MOVEMENT_TAB:
     return {{"LEFT STICK STRAFE", s.directional_movement_enabled ? "ON" : "OFF"},
             {"MOVEMENT STICK", s.directional_movement_use_right_stick ? "RIGHT" : "LEFT"},
             {"MOVEMENT DIRECTION",
@@ -375,8 +414,10 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
             {"MOVEMENT ACCELERATION", FloatText(s.directional_movement_accel, 1)},
             {"AIR ACCELERATION", FloatText(s.directional_movement_air_accel, 1)},
             {"LOOK YAW SENSITIVITY", FloatText(s.look_yaw_sensitivity, 2)},
+            {"SNAP TURN", s.snap_turn_enabled ? "ON" : "OFF"},
+            {"SNAP TURN ANGLE", std::to_string(s.snap_turn_degrees)},
             {"RESET MOVEMENT", ConfirmText(s, RESET_MOVEMENT_ACTION)}};
-  case 3:
+  case VR_MENU_CANNON_TAB:
   {
     auto slot_status = [&](uint32_t slot) {
       return s.cannon_texture_slot == slot ? std::string("SELECTED") : std::string("SELECT");
@@ -385,7 +426,7 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
             {"SLOT 2", slot_status(2)}, {"SLOT 3", slot_status(3)},
             {"SLOT 4", slot_status(4)}, {"CUSTOM", slot_status(5)}};
   }
-  case 4:
+  case VR_MENU_STATE_TAB:
     return {{"LOAD STATE", s.state_confirm_action == 1 ? "ARE YOU SURE?" : "PRESS"},
             {"SAVE STATE", s.state_confirm_action == 2 ? "ARE YOU SURE?" : "PRESS"}};
   default:
@@ -411,6 +452,52 @@ inline std::vector<uint32_t> BuildPromptPixels(uint32_t width, uint32_t height)
   return pixels;
 }
 
+inline void DrawLayoutTextPage(std::vector<uint32_t>& pixels, uint32_t width, uint32_t height)
+{
+  constexpr uint32_t title_color = 0xFFFFE6B8u;
+  constexpr uint32_t body_color = 0xFFD8C0A0u;
+  constexpr uint32_t accent_color = 0xFF40F0E0u;
+  constexpr uint32_t row_color = 0x50201810u;
+  constexpr uint32_t rule_color = 0x80FFB030u;
+
+  constexpr const char* title = "CONTROLLER LAYOUT";
+  DrawText(pixels, width, height, title, (static_cast<int>(width) - TextWidth(title, 3)) / 2, 124,
+           3, title_color);
+
+  constexpr const char* visor_help =
+      "PLACE OFFHAND NEAR YOUR HEAD AND USE THE CONTROL STICK TO CHANGE VISORS";
+  DrawText(pixels, width, height, visor_help,
+           (static_cast<int>(width) - TextWidth(visor_help, 2)) / 2, 174, 2, accent_color);
+
+  constexpr int left_x = 72;
+  constexpr int right_x = 570;
+  constexpr int heading_y = 220;
+  DrawText(pixels, width, height, "LEFT HAND", left_x, heading_y, 2, title_color);
+  DrawText(pixels, width, height, "RIGHT HAND", right_x, heading_y, 2, title_color);
+  FillRect(pixels, width, height, left_x, heading_y + 24, 360, 3, rule_color);
+  FillRect(pixels, width, height, right_x, heading_y + 24, 360, 3, rule_color);
+
+  constexpr std::array<const char*, 6> left_rows = {
+      "LEFT STICK - MOVE",       "Y BUTTON - START/PAUSE", "X BUTTON - MORPH BALL",
+      "LEFT STICK CLICK - VR SETTINGS", "LEFT GRIP - MAP",       "L TRIGGER - LOCK ON"};
+  constexpr std::array<const char*, 6> right_rows = {
+      "RIGHT STICK - LOOK/JUMP", "B BUTTON - BEAM SELECT", "A BUTTON - SELECT",
+      "RIGHT STICK CLICK - SET HEIGHT", "RIGHT GRIP - MISSILES", "RIGHT TRIGGER - SHOOT"};
+
+  for (int i = 0; i < 6; ++i)
+  {
+    const int y = 262 + i * 34;
+    FillRect(pixels, width, height, left_x - 14, y - 8, 398, 26, row_color);
+    FillRect(pixels, width, height, right_x - 14, y - 8, 398, 26, row_color);
+    FillRect(pixels, width, height, left_x - 14, y - 8, 5, 26, rule_color);
+    FillRect(pixels, width, height, right_x - 14, y - 8, 5, 26, rule_color);
+    DrawText(pixels, width, height, left_rows[static_cast<size_t>(i)], left_x, y, 2,
+             body_color);
+    DrawText(pixels, width, height, right_rows[static_cast<size_t>(i)], right_x, y, 2,
+             body_color);
+  }
+}
+
 inline std::vector<uint32_t> BuildMenuPixels(uint32_t width, uint32_t height,
                                              const Common::VR::PrimedGunVrOverlayState& s)
 {
@@ -424,9 +511,10 @@ inline std::vector<uint32_t> BuildMenuPixels(uint32_t width, uint32_t height,
   if (s.saved_notice)
     DrawText(pixels, width, height, "SETTINGS SAVED", 760, 34, 2, 0xFFFFE6B8u);
 
-  constexpr const char* tabs[] = {"CALIBRATION", "CONTROL", "MOVEMENT", "TEXTURES", "STATES"};
-  constexpr int tab_width = 180;
-  constexpr int tab_step = 196;
+  constexpr const char* tabs[] = {"LAYOUT",   "CALIBRATION", "CONTROL",
+                                  "MOVEMENT", "TEXTURES",    "STATES"};
+  constexpr int tab_width = 150;
+  constexpr int tab_step = 166;
   for (int i = 0; i < static_cast<int>(std::size(tabs)); ++i)
   {
     const int x = 22 + i * tab_step;
@@ -443,6 +531,13 @@ inline std::vector<uint32_t> BuildMenuPixels(uint32_t width, uint32_t height,
     DrawText(pixels, width, height, label, x + (w - TextWidth(label, 2)) / 2, y + 7, 2,
              0xFFFFE6B8u);
   };
+
+  if (s.tab == VR_MENU_LAYOUT_TAB)
+  {
+    DrawLayoutTextPage(pixels, width, height);
+    return pixels;
+  }
+
   draw_button("SAVE SETTINGS", 52, 108, 220);
   draw_button(s.reset_confirm_action == RESET_ALL_ACTION ? "ARE YOU SURE?" : "RESET ALL", 300,
               108, 220);
@@ -507,6 +602,22 @@ inline XrVector3f RotateVector(const XrQuaternionf& q, const XrVector3f& v)
   return {v.x + q.w * t.x + (q.y * t.z - q.z * t.y),
           v.y + q.w * t.y + (q.z * t.x - q.x * t.z),
           v.z + q.w * t.z + (q.x * t.y - q.y * t.x)};
+}
+
+inline XrQuaternionf YawOnlyQuaternion(const XrQuaternionf& q)
+{
+  XrVector3f forward = RotateVector(q, {0.0f, 0.0f, -1.0f});
+  forward.y = 0.0f;
+
+  const float len = std::sqrt(forward.x * forward.x + forward.z * forward.z);
+  if (len < 0.0001f)
+    return {0.0f, 0.0f, 0.0f, 1.0f};
+
+  forward.x /= len;
+  forward.z /= len;
+  const float yaw = std::atan2(-forward.x, -forward.z);
+  const float half_yaw = yaw * 0.5f;
+  return {0.0f, std::sin(half_yaw), 0.0f, std::cos(half_yaw)};
 }
 
 inline XrQuaternionf MulQuat(const XrQuaternionf& a, const XrQuaternionf& b)

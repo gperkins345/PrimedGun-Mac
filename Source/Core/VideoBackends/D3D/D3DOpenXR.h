@@ -91,6 +91,7 @@ private:
   // Reused per-frame composition data (avoids per-frame heap allocation).
   std::array<XrCompositionLayerProjectionView, 2> m_projection_views{};
   XrCompositionLayerProjection m_projection_layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+  XrCompositionLayerQuad m_cinematic_screen_layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
 
 };
 

@@ -27,6 +27,7 @@
 #include "VideoCommon/Widescreen.h"
 
 #ifdef ENABLE_VR
+#include "Common/VR/OpenXRInputState.h"
 #include "VideoCommon/VR/OpenXRManager.h"
 #endif
 
@@ -885,6 +886,9 @@ void Presenter::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
     // Diagnostic (env QPVR_FORCE_LAYER0): blit EFB layer 0 to both eyes — pairs with
     // UseVulkanMultiview=False for a mono-VR run that exercises no multiview passes.
     static const bool kForceOpenXRLayer0ToBothEyes = getenv("QPVR_FORCE_LAYER0") != nullptr;
+    const auto primegun_overlay = Common::VR::OpenXRInputState::GetPrimedGunOverlay();
+    const bool cinematic_screen_active = primegun_overlay.cinematic_screen_enabled &&
+                                         primegun_overlay.cinematic_screen_active;
     static bool s_first_openxr_render = true;
     if (s_first_openxr_render)
     {
@@ -899,9 +903,16 @@ void Presenter::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
     }
     // Mirror view on the desktop window (side-by-side, left eye | right eye).
     // This is purely for debugging/monitoring — the HMD receives full-resolution images below.
-    const auto [left_rc, right_rc] = ConvertStereoRectangle(target_rc);
-    m_post_processor->BlitFromTexture(left_rc, source_rc, source_texture, 0);
-    m_post_processor->BlitFromTexture(right_rc, source_rc, source_texture, 1);
+    if (cinematic_screen_active)
+    {
+      m_post_processor->BlitFromTexture(target_rc, source_rc, source_texture, 0);
+    }
+    else
+    {
+      const auto [left_rc, right_rc] = ConvertStereoRectangle(target_rc);
+      m_post_processor->BlitFromTexture(left_rc, source_rc, source_texture, 0);
+      m_post_processor->BlitFromTexture(right_rc, source_rc, source_texture, 1);
+    }
 
     // Blit each eye layer into its dedicated OpenXR swapchain image.
     // We save and restore the current framebuffer so the UI still renders to the desktop.
@@ -913,7 +924,7 @@ void Presenter::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
           0, 0, static_cast<int>(sc->GetEyeWidth()), static_cast<int>(sc->GetEyeHeight())};
       bool rendered_layered = false;
 
-      if (sc->SupportsLayeredRendering() &&
+      if (!cinematic_screen_active && sc->SupportsLayeredRendering() &&
           m_post_processor->CanBlitFromTextureLayeredMultiview() &&
           !kForceOpenXRLayer0ToBothEyes)
       {
@@ -942,13 +953,15 @@ void Presenter::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
         }
       }
 
-      for (uint32_t eye = 0; !rendered_layered && eye < 2; ++eye)
+      const uint32_t eye_count = cinematic_screen_active ? 1u : 2u;
+      for (uint32_t eye = 0; !rendered_layered && eye < eye_count; ++eye)
       {
         AbstractFramebuffer* eye_fb = sc->AcquireEyeFramebuffer(eye);
         if (eye_fb)
         {
           g_gfx->SetAndClearFramebuffer(eye_fb, {0.f, 0.f, 0.f, 1.f});
-          const int source_layer = kForceOpenXRLayer0ToBothEyes ? 0 : static_cast<int>(eye);
+          const int source_layer =
+              (cinematic_screen_active || kForceOpenXRLayer0ToBothEyes) ? 0 : static_cast<int>(eye);
           m_post_processor->BlitFromTexture(eye_rect, source_rc, source_texture,
                                             source_layer);
           sc->ReleaseEyeTexture(eye);
