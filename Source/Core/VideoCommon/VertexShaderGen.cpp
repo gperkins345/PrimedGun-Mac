@@ -16,7 +16,7 @@
 
 // QuestPrimeVR: bump this whenever the generated vertex-shader GLSL (esp. the multiview VR block)
 // changes, so the on-disk specialized-shader cache is invalidated and shaders regenerate.
-static constexpr u32 VERTEX_SHADER_CODE_VERSION = 10;
+static constexpr u32 VERTEX_SHADER_CODE_VERSION = 11;
 
 VertexShaderUid GetVertexShaderUid()
 {
@@ -859,7 +859,13 @@ ShaderCode GenerateVertexShaderCode(APIType api_type, const ShaderHostConfig& ho
       out.Write("\t\tfloat ndc_y = o.pos.y / o.pos.w;\n");
       out.Write("\t\tfloat ndc_z = o.pos.z / o.pos.w;\n");
     }
-    out.Write("\t\tfloat ndc_z_clamped = clamp(ndc_z, -1.0, 1.0);\n");
+    // QuestPrimeVR: match the GS input on Quest — there the trailing VS fixups have already
+    // remapped console depth (-1..0) to backend depth before the GS runs; this branch reads
+    // o.pos BEFORE those fixups, so apply the same remap to ndc_z or every draw on the virtual
+    // screen gets a wrong depth-in-screen offset and layer bias (the pause-map 3D model sorted
+    // behind the opaque menu background and was depth-rejected -> invisible/flickering).
+    out.Write("\t\tfloat ndc_z_clamped = clamp(" I_PIXELCENTERCORRECTION ".w - ndc_z * "
+              I_PIXELCENTERCORRECTION ".z, -1.0, 1.0);\n");
     out.Write("\t\tfloat4 screenPos = float4(\n");
     out.Write("\t\t\tndc_x * " I_VR_SCREEN ".x,\n");
     out.Write("\t\t\tndc_y * " I_VR_SCREEN ".y,\n");
@@ -914,7 +920,13 @@ ShaderCode GenerateVertexShaderCode(APIType api_type, const ShaderHostConfig& ho
       out.Write("\t\tfloat ndc_y = o.pos.y / o.pos.w;\n");
       out.Write("\t\tfloat ndc_z = o.pos.z / o.pos.w;\n");
     }
-    out.Write("\t\tfloat ndc_z_clamped = clamp(ndc_z, -1.0, 1.0);\n");
+    // QuestPrimeVR: match the GS input on Quest — there the trailing VS fixups have already
+    // remapped console depth (-1..0) to backend depth before the GS runs; this branch reads
+    // o.pos BEFORE those fixups, so apply the same remap to ndc_z or every draw on the virtual
+    // screen gets a wrong depth-in-screen offset and layer bias (the pause-map 3D model sorted
+    // behind the opaque menu background and was depth-rejected -> invisible/flickering).
+    out.Write("\t\tfloat ndc_z_clamped = clamp(" I_PIXELCENTERCORRECTION ".w - ndc_z * "
+              I_PIXELCENTERCORRECTION ".z, -1.0, 1.0);\n");
     out.Write("\t\tfloat4 screenPos = float4(\n");
     out.Write("\t\t\tndc_x * " I_VR_SCREEN ".x,\n");
     out.Write("\t\t\tndc_y * " I_VR_SCREEN ".y,\n");

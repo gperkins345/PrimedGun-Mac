@@ -294,7 +294,11 @@ constexpr u64 GAMEPLAY_INPUT_LOSS_HOLD_FRAMES = 18u;
 
 bool RuntimeLoggingEnabled()
 {
-  return ENABLE_PRIMEDGUN_RUNTIME_LOGGING;
+  // QuestPrimeVR: upstream compiles this out; QPVR_PG_LOG=1 enables the mod's own scan/mode
+  // telemetry (Logs/PrimedGunScan.log + scan_candidate NOTICE lines) at launch, so the scan
+  // chain can be diagnosed on Mac without a rebuild.
+  static const bool s_qpvr_pg_log = getenv("QPVR_PG_LOG") != nullptr;
+  return ENABLE_PRIMEDGUN_RUNTIME_LOGGING || s_qpvr_pg_log;
 }
 
 bool LockLoggingEnabled()
@@ -3948,11 +3952,13 @@ void UpdateScanTargetingFromHmd(const Core::CPUThreadGuard& guard,
       AppendScanDebugLine(fmt::format(
           "PrimedGun scan_candidate frame={} player={:08X} state={:08X} current_visor={} "
           "transition_visor={} proxy_visor={} real_state={} uid={:04X} obj={:08X} score={:.3f} "
-          "along={:.3f} perp={:.3f} scan={} target={} orbit={} character={} targetable={} grapple={}",
+          "along={:.3f} perp={:.3f} scan={} target={} orbit={} character={} targetable={} "
+          "grapple={} have_visor={} marker={}",
           s_frame_counter, player, scan_info.player_state, scan_info.current_visor,
           scan_info.transition_visor, scan_info.proxy_visor, scan_info.real_state, pick.uid,
           pick.obj, pick.score, pick.along, pick.perp, pick.has_scan, pick.has_target,
-          pick.has_orbit, pick.has_character, pick.targetable, pick.grapple_point));
+          pick.has_orbit, pick.has_character, pick.targetable, pick.grapple_point, have_visor,
+          marker_found));
       NOTICE_LOG_FMT(CORE,
                      "PrimedGun scan_candidate selected uid={:04X} obj={:08X} score={:.3f} "
                      "along={:.3f} perp={:.3f} pos=({:.3f},{:.3f},{:.3f}) "
@@ -5822,10 +5828,25 @@ bool ApplyRenderModelOffsetPatch(const Core::CPUThreadGuard& guard)
 
 bool ApplyScanIndicatorPointerPatch(const Core::CPUThreadGuard& guard)
 {
+  // QuestPrimeVR: one-shot reason logging (QPVR_PG_LOG) for every way this hook can wedge —
+  // it was failing silently and taking the whole look-at-scan seeding layer with it.
+  const auto log_once = [](const char* reason, u32 a, u32 b) {
+    if (!RuntimeLoggingEnabled())
+      return;
+    static std::string s_last;
+    if (s_last == reason)
+      return;
+    NOTICE_LOG_FMT(CORE, "PrimedGun scan_indicator_ptr {} ({:08X} {:08X})", reason, a, b);
+    s_last = reason;
+  };
+
   auto& patch = s_scan_indicator_update_trace_patch;
   u32 current = 0;
   if (!TryReadU32(guard, patch.address, &current))
+  {
+    log_once("read-fail", patch.address, 0);
     return false;
+  }
 
   const u32 branch = PpcBranch(patch.address, patch.cave);
   if (current == branch)
@@ -5834,6 +5855,7 @@ bool ApplyScanIndicatorPointerPatch(const Core::CPUThreadGuard& guard)
       TryReadU32(guard, patch.cave + 0x14u, &patch.original);
     if (patch.original == 0)
     {
+      log_once("cave-original-zero", patch.cave, 0);
       patch.applied = false;
       return false;
     }
@@ -5841,6 +5863,7 @@ bool ApplyScanIndicatorPointerPatch(const Core::CPUThreadGuard& guard)
   }
   else if ((current & 0xFFFF0000u) != 0x94210000u)
   {
+    log_once("hook-BLOCKED-unexpected-word", current, branch);
     patch.applied = false;
     return false;
   }
@@ -5859,6 +5882,18 @@ bool ApplyScanIndicatorPointerPatch(const Core::CPUThreadGuard& guard)
        {0x10u, 0x900C0024u},
        {0x14u, patch.original},
        {0x18u, PpcBranch(patch.cave + 0x18u, return_addr)}});
+  if (!patch.applied)
+  {
+    // InstallBranchAfterCaveWrite returns false both for "nothing to do" (hook + cave already
+    // installed and intact) and for real write failures — verify which, so patch_status stays
+    // truthful (this bookkeeping gap made a healthy hook look permanently broken).
+    u32 verify = 0;
+    patch.applied = TryReadU32(guard, patch.address, &verify) && verify == branch;
+  }
+  if (patch.applied)
+    log_once("APPLIED", patch.address, patch.original);
+  else
+    log_once("install-cave-write-FAILED", patch.cave, patch.original);
   return patch.applied;
 }
 
@@ -6600,11 +6635,25 @@ void VerifyCriticalBuiltinPatches(Core::System& system, const Core::CPUThreadGua
   if (!settings.builtin_patches_enabled || !have_player)
     return;
 
-  if (BuiltinPatchGroupApplied(guard, settings, PatchCannonRotation) &&
-      BuiltinPatchGroupApplied(guard, settings, PatchGunRayTarget) &&
-      BuiltinPatchGroupApplied(guard, settings, PatchReticle))
-  {
+  const bool cannon_ok = BuiltinPatchGroupApplied(guard, settings, PatchCannonRotation);
+  const bool ray_ok = BuiltinPatchGroupApplied(guard, settings, PatchGunRayTarget);
+  const bool reticle_ok = BuiltinPatchGroupApplied(guard, settings, PatchReticle);
+  if (cannon_ok && ray_ok && reticle_ok)
     return;
+
+  // QuestPrimeVR: this self-heal used to be silent — a group that persistently fails to stick
+  // re-applies every frame and its feature (scan redirect / reticle / cannon) just doesn't work.
+  if (RuntimeLoggingEnabled())
+  {
+    static u64 s_last_patch_heal_log_frame = 0;
+    if (s_frame_counter >= s_last_patch_heal_log_frame + 60u)
+    {
+      NOTICE_LOG_FMT(CORE,
+                     "PrimedGun patch_heal missing groups: cannon_rotation={} gun_ray_target={} "
+                     "reticle={} (reapplying)",
+                     cannon_ok, ray_ok, reticle_ok);
+      s_last_patch_heal_log_frame = s_frame_counter;
+    }
   }
 
   s_patches_applied_this_boot = false;
@@ -6899,6 +6948,23 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
     if (scan_active)
       DumpScanIndicatorCodeOnce(guard);
     LogScanReticleTrace(guard, player);
+    // QuestPrimeVR: dynamic-patch health (QPVR_PG_LOG) — a patch stuck at applied=false silently
+    // disables its feature (scan indicator capture/view basis, pitch, orbit aim, audio).
+    if ((s_frame_counter % 300u) == 2u)
+    {
+      NOTICE_LOG_FMT(CORE,
+                     "PrimedGun patch_status indicator_ptr={} (orig={:08X}) view_basis={} "
+                     "reticle_trace={} (orig={:08X}/{:08X}) pitch_load={} ball_cam={} "
+                     "interp_cam={} orbit_aim={} audio={} render_off={}",
+                     s_scan_indicator_update_trace_patch.applied,
+                     s_scan_indicator_update_trace_patch.original,
+                     s_scan_indicator_view_basis_patch.applied, s_scan_reticle_trace_patch.applied,
+                     s_scan_reticle_trace_patch.original, s_scan_reticle_trace_curr_patch.original,
+                     s_first_person_pitch_load_patch.applied, s_ball_camera_level_patch.applied,
+                     s_interpolation_camera_level_patch.applied,
+                     s_first_person_orbit_aim_vector_patch.applied, s_audio_listener_patch.applied,
+                     s_render_model_offset_patch.applied);
+    }
   }
   VerifyCriticalBuiltinPatches(system, guard, settings, have_player);
   VerifyScanReticleWatchdog(guard, settings, have_player, player, scan_active);

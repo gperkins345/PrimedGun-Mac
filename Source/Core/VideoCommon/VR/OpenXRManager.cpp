@@ -877,6 +877,28 @@ void OpenXRManager::UpdateInputActions()
                           m_eye_views[0].pose.position.y,
                           m_eye_views[0].pose.position.z};
     make_home_relative(&head_pose);
+
+#ifdef __APPLE__
+    // QuestPrimeVR diagnostic: QPVR_FAKE_HEAD_YAW=<deg> rotates the PUBLISHED head orientation
+    // around +Y (rendering is untouched), so look-at-scan divergence from the game camera can be
+    // exercised headlessly — the situation a real headset creates by looking off-axis.
+    static const float s_qpvr_fake_head_yaw = [] {
+      const char* v = getenv("QPVR_FAKE_HEAD_YAW");
+      return v ? static_cast<float>(atof(v)) : 0.0f;
+    }();
+    if (s_qpvr_fake_head_yaw != 0.0f)
+    {
+      const float half = s_qpvr_fake_head_yaw * 0.5f * 3.14159265f / 180.0f;
+      const float sy = std::sin(half);
+      const float cy = std::cos(half);
+      const float x = head_pose.orientation[0];
+      const float y = head_pose.orientation[1];
+      const float z = head_pose.orientation[2];
+      const float w = head_pose.orientation[3];
+      // q_yaw(0, sy, 0, cy) * q_head, xyzw storage
+      head_pose.orientation = {cy * x + sy * z, cy * y + sy * w, cy * z - sy * x, cy * w - sy * y};
+    }
+#endif
   }
 
   const std::array<float, 3> tracking_origin_position{m_home_position.x, m_home_position.y,
