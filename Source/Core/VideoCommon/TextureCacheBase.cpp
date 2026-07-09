@@ -1142,13 +1142,6 @@ std::string TextureCacheBase::GetBoundTextureName(u32 stage) const
   return m_bound_textures[stage]->texture_info_name;
 }
 
-bool TextureCacheBase::IsBoundTextureEfbCopy(u32 stage) const
-{
-  if (stage >= m_bound_textures.size() || !m_bound_textures[stage])
-    return false;
-  return m_bound_textures[stage]->IsEfbCopy();
-}
-
 u32 TextureCacheBase::GetBoundTextureLayers(u32 stage) const
 {
   if (stage >= m_bound_textures.size() || !m_bound_textures[stage] ||
