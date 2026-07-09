@@ -83,6 +83,13 @@ public:
   CreateFramebuffer(AbstractTexture* color_attachment, AbstractTexture* depth_attachment,
                     std::vector<AbstractTexture*> additional_color_attachments = {}) = 0;
 
+  // Creates a framebuffer whose render pass replicates draws to all layers via multiview
+  // (VR stereo without geometry shaders, e.g. VK_KHR_multiview on MoltenVK). Backends
+  // without multiview support fall back to a regular framebuffer.
+  virtual std::unique_ptr<AbstractFramebuffer> CreateMultiviewFramebuffer(
+      AbstractTexture* color_attachment, AbstractTexture* depth_attachment,
+      std::vector<AbstractTexture*> additional_color_attachments = {});
+
   // Framebuffer operations.
   virtual void SetFramebuffer(AbstractFramebuffer* framebuffer);
   virtual void SetAndDiscardFramebuffer(AbstractFramebuffer* framebuffer);

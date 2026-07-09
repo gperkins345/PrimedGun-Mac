@@ -657,7 +657,9 @@ if(ENABLE_VULKAN)
 endif()
 
 set(DOLPHIN_OPENXR_SUPPORTED_PLATFORM OFF)
-if(WIN32 OR ANDROID OR (UNIX AND NOT APPLE AND NOT ANDROID))
+# QuestPrimeVR: macOS is treated like desktop Linux for OpenXR — Vulkan-only via MoltenVK,
+# submitting to the OXRSys system runtime (which does Vulkan->Metal interop internally).
+if(WIN32 OR ANDROID OR (UNIX AND NOT ANDROID))
   set(DOLPHIN_OPENXR_SUPPORTED_PLATFORM ON)
 endif()
 
@@ -666,8 +668,8 @@ if(ENABLE_VR AND NOT DOLPHIN_OPENXR_SUPPORTED_PLATFORM)
   set(ENABLE_VR OFF CACHE BOOL "Enables VR support via OpenXR (Windows D3D/Vulkan, Linux Vulkan, Android Vulkan)" FORCE)
 endif()
 
-if(ENABLE_VR AND UNIX AND NOT APPLE AND NOT ANDROID AND NOT ENABLE_VULKAN)
-  message(FATAL_ERROR "Desktop Linux OpenXR VR requires ENABLE_VULKAN=ON.")
+if(ENABLE_VR AND UNIX AND NOT ANDROID AND NOT ENABLE_VULKAN)
+  message(FATAL_ERROR "Desktop Linux/macOS OpenXR VR requires ENABLE_VULKAN=ON.")
 endif()
 
 if(ENABLE_VR)

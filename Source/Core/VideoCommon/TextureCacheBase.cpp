@@ -291,8 +291,10 @@ RcTcacheEntry TextureCacheBase::ApplyPaletteToEntry(RcTcacheEntry& entry, const 
   bool use_layered_pipeline = entry->GetNumLayers() > 1;
   const AbstractPipeline* pipeline =
       g_shader_cache->GetPaletteConversionPipeline(tlutfmt, use_layered_pipeline);
-  if (!pipeline && use_layered_pipeline)
+  if (!pipeline && use_layered_pipeline && !g_shader_cache->UseMultiviewForEFBCopies())
   {
+    // Note: no such fallback on the multiview path - a non-multiview pipeline is
+    // incompatible with the multiview render pass of the destination framebuffer.
     use_layered_pipeline = false;
     pipeline = g_shader_cache->GetPaletteConversionPipeline(tlutfmt);
   }
@@ -363,8 +365,12 @@ RcTcacheEntry TextureCacheBase::ApplyPaletteToEntry(RcTcacheEntry& entry, const 
 RcTcacheEntry TextureCacheBase::ReinterpretEntry(const RcTcacheEntry& existing_entry,
                                                  TextureFormat new_format)
 {
-  const AbstractPipeline* pipeline =
-      g_shader_cache->GetTextureReinterpretPipeline(existing_entry->format.texfmt, new_format);
+  // No-GS stereo path: a multi-layer destination framebuffer uses a multiview render
+  // pass, requiring the multiview pipeline variant (which also converts both layers).
+  const bool multiview =
+      g_shader_cache->UseMultiviewForEFBCopies() && existing_entry->GetNumLayers() > 1;
+  const AbstractPipeline* pipeline = g_shader_cache->GetTextureReinterpretPipeline(
+      existing_entry->format.texfmt, new_format, multiview);
   if (!pipeline)
   {
     ERROR_LOG_FMT(VIDEO, "Failed to obtain texture reinterpreting pipeline from format {} to {}",
@@ -1142,6 +1148,20 @@ u32 TextureCacheBase::GetBoundTextureLayers(u32 stage) const
       !m_bound_textures[stage]->texture)
     return 0;
   return m_bound_textures[stage]->texture->GetLayers();
+}
+
+bool TextureCacheBase::IsBoundTextureEfbCopy(u32 stage) const
+{
+  if (stage >= m_bound_textures.size() || !m_bound_textures[stage])
+    return false;
+  return m_bound_textures[stage]->IsEfbCopy();
+}
+
+u32 TextureCacheBase::GetBoundTextureAddress(u32 stage) const
+{
+  if (stage >= m_bound_textures.size() || !m_bound_textures[stage])
+    return 0;
+  return m_bound_textures[stage]->addr;
 }
 
 u32 TextureCacheBase::GetBoundTextureNativeWidth(u32 stage) const
@@ -2431,6 +2451,21 @@ void TextureCacheBase::CopyRenderTargetToTexture(
       !is_depth_copy &&
       (scaleByHalf || g_framebuffer_manager->GetEFBScale() != 1 || y_scale > 1.0f);
 
+  // QuestPrimeVR: QPVR_BLEND_TRACE also logs every copy creation, to correlate with the
+  // QPVR_BLEND draw-side lines (which copies exist vs. which ever get sampled).
+  {
+    static const bool s_qpvr_blend_trace = getenv("QPVR_BLEND_TRACE") != nullptr;
+    if (s_qpvr_blend_trace) [[unlikely]]
+    {
+      INFO_LOG_FMT(VIDEO,
+                   "QPVR_COPY dst={:08x} {}x{} fmt={} xfb={} depth={} src=({},{}-{},{}) ram={} "
+                   "vram={} half={}",
+                   dstAddr, tex_w, tex_h, static_cast<int>(baseFormat), is_xfb_copy, is_depth_copy,
+                   srcRect.left, srcRect.top, srcRect.right, srcRect.bottom, copy_to_ram,
+                   copy_to_vram, scaleByHalf);
+    }
+  }
+
   RcTcacheEntry entry;
   if (copy_to_vram)
   {
@@ -2479,6 +2514,42 @@ void TextureCacheBase::CopyRenderTargetToTexture(
         CopyEFBToCacheEntry(entry, is_depth_copy, srcRect, scaleByHalf, linear_filter, dstFormat,
                             isIntensity, gamma, clamp_top, clamp_bottom,
                             GetVRAMCopyFilterCoefficients(filter_coefficients));
+      }
+
+      // QuestPrimeVR: env-gated EFB-copy content dump — QPVR_DUMP_COPIES=<max count> saves
+      // color copies (RGBA, layer 0) to Dump/Textures for the black-backing hunt, but only
+      // while the trigger file /tmp/qpvr-dump-copies exists (arm it once gameplay is up —
+      // the synchronous saves are slow enough to stall boot otherwise).
+      // QPVR_DUMP_COPIES_SIZE="320x224" restricts to copies of that native size.
+      static const char* s_qpvr_dump_copies = getenv("QPVR_DUMP_COPIES");
+      static const char* s_qpvr_dump_size = getenv("QPVR_DUMP_COPIES_SIZE");
+      if (s_qpvr_dump_copies && !is_depth_copy &&
+          (!s_qpvr_dump_size || fmt::format("{}x{}", tex_w, tex_h) == s_qpvr_dump_size) &&
+          File::Exists("/tmp/qpvr-dump-copies")) [[unlikely]]
+      {
+        static int s_qpvr_copy_count = 0;
+        if (s_qpvr_copy_count < atoi(s_qpvr_dump_copies))
+        {
+          entry->texture->Save(fmt::format("{}qpvr_copy_{:05}_{}x{}_f{}_src{},{}-{},{}.png",
+                                           File::GetUserPath(D_DUMPTEXTURES_IDX),
+                                           s_qpvr_copy_count, tex_w, tex_h,
+                                           static_cast<int>(baseFormat), srcRect.left,
+                                           srcRect.top, srcRect.right, srcRect.bottom),
+                               0);
+          // Also dump the EFB source region itself (pre-copy): splits "draws never land in
+          // the EFB" from "copy machinery loses them".
+          const auto qpvr_efb_rect = g_framebuffer_manager->ConvertEFBRectangle(srcRect);
+          if (AbstractTexture* qpvr_efb_tex =
+                  g_framebuffer_manager->ResolveEFBColorTexture(qpvr_efb_rect))
+          {
+            qpvr_efb_tex->Save(fmt::format("{}qpvr_efb_{:05}_src{},{}-{},{}.png",
+                                           File::GetUserPath(D_DUMPTEXTURES_IDX),
+                                           s_qpvr_copy_count, srcRect.left, srcRect.top,
+                                           srcRect.right, srcRect.bottom),
+                               0);
+          }
+          s_qpvr_copy_count++;
+        }
       }
 
       if (is_xfb_copy && (g_ActiveConfig.bDumpXFBTarget || g_ActiveConfig.bGraphicMods))
@@ -2832,7 +2903,12 @@ TextureCacheBase::AllocateTexture(const TextureConfig& config)
   std::unique_ptr<AbstractFramebuffer> framebuffer;
   if (config.IsRenderTarget())
   {
-    framebuffer = g_gfx->CreateFramebuffer(texture.get(), nullptr);
+    // No-GS stereo path (VK_KHR_multiview): draws into 2-layer entry framebuffers
+    // (EFB/XFB copies) must run in a multiview render pass to write both eye layers.
+    const bool multiview = config.layers > 1 && config.samples == 1 && g_shader_cache &&
+                           g_shader_cache->UseMultiviewForEFBCopies();
+    framebuffer = multiview ? g_gfx->CreateMultiviewFramebuffer(texture.get(), nullptr) :
+                              g_gfx->CreateFramebuffer(texture.get(), nullptr);
     if (!framebuffer)
     {
       WARN_LOG_FMT(VIDEO, "Failed to allocate a {}x{}x{} framebuffer", config.width, config.height,

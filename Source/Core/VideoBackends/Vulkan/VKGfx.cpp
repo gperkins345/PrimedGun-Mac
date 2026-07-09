@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "Common/CommonTypes.h"
+#include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
 #include "Common/Timer.h"
@@ -98,6 +99,16 @@ VKGfx::CreateFramebuffer(AbstractTexture* color_attachment, AbstractTexture* dep
                                std::move(additional_color_attachments));
 }
 
+std::unique_ptr<AbstractFramebuffer>
+VKGfx::CreateMultiviewFramebuffer(AbstractTexture* color_attachment,
+                                  AbstractTexture* depth_attachment,
+                                  std::vector<AbstractTexture*> additional_color_attachments)
+{
+  return VKFramebuffer::CreateMultiview(static_cast<VKTexture*>(color_attachment),
+                                        static_cast<VKTexture*>(depth_attachment),
+                                        std::move(additional_color_attachments));
+}
+
 void VKGfx::SetPipeline(const AbstractPipeline* pipeline)
 {
   m_current_pipeline = pipeline;
@@ -109,17 +120,36 @@ void VKGfx::SetForcePixelShader(const AbstractShader* shader)
   if (!shader || !m_current_pipeline)
     return;
 
-  if (m_forced_pipeline_base != m_current_pipeline || m_forced_pipeline_shader != shader ||
-      !m_forced_pipeline)
+  const auto key = std::make_pair(m_current_pipeline, shader);
+  auto it = m_forced_pipelines.find(key);
+  if (it == m_forced_pipelines.end())
   {
     auto config = m_current_pipeline->m_config;
     config.pixel_shader = shader;
-    m_forced_pipeline = CreatePipeline(config);
-    m_forced_pipeline_base = m_current_pipeline;
-    m_forced_pipeline_shader = shader;
+    // Hunting-only path: force opaque blending so the highlight stays visible even on
+    // draws whose own blend state would eat it (e.g. modulate blends over a black dst).
+    config.blending_state = RenderState::GetNoBlendingBlendState();
+    // Also neutralize depth test and culling so the highlight shows even when the
+    // draw would otherwise z-fail or be back-face culled (QPVR_PINK_NOFIXED=1).
+    static const bool s_pink_no_fixedfunc = getenv("QPVR_PINK_NOFIXED") != nullptr;
+    if (s_pink_no_fixedfunc)
+    {
+      config.depth_state = RenderState::GetNoDepthTestingDepthState();
+      config.rasterization_state =
+          RenderState::GetNoCullRasterizationState(config.rasterization_state.primitive);
+    }
+    it = m_forced_pipelines.emplace(key, CreatePipeline(config)).first;
+    if (!it->second)
+      WARN_LOG_FMT(VIDEO, "SetForcePixelShader: forced pipeline failed to compile; "
+                          "drawing with the original pipeline");
   }
 
-  StateTracker::GetInstance()->SetPipeline(static_cast<const VKPipeline*>(m_forced_pipeline.get()));
+  // A failed compile leaves the draw on its original pipeline: MoltenVK dereferences
+  // whatever we bind at encode time, so binding null (or a destroyed pipeline) crashes.
+  if (!it->second)
+    return;
+
+  StateTracker::GetInstance()->SetPipeline(static_cast<const VKPipeline*>(it->second.get()));
 }
 
 void VKGfx::ClearRegion(const MathUtil::Rectangle<int>& target_rc, bool color_enable,

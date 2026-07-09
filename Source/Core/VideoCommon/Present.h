@@ -146,6 +146,15 @@ private:
   // Internal resolution multiplier scaled XFB size
   MathUtil::Rectangle<int> m_xfb_rect{0, 0, MAX_XFB_WIDTH, MAX_XFB_HEIGHT};
 
+  // QuestPrimeVR: persistent copy of the last real XFB. The VR loop re-presents
+  // every vsync even when the game idles (menus only redraw on change) or blanks
+  // the video interface (FetchXFB resets m_xfb_entry on fb_width==0) — presenting
+  // from the live cache entry made menu UI vanish after a single frame. Snapshot
+  // is refreshed on each real FetchXFB and presented in its stead.
+  std::unique_ptr<AbstractTexture> m_vr_xfb_snapshot;
+  MathUtil::Rectangle<int> m_vr_snapshot_rect{};
+  bool m_vr_snapshot_valid = false;
+
   // Tracking of XFB textures so we don't render duplicate frames.
   u64 m_last_xfb_id = std::numeric_limits<u64>::max();
 

@@ -4,8 +4,10 @@
 #pragma once
 
 #include <array>
+#include <map>
 #include <memory>
 #include <string_view>
+#include <utility>
 
 #include "Common/CommonTypes.h"
 #include "VideoBackends/Vulkan/Constants.h"
@@ -37,6 +39,9 @@ public:
   std::unique_ptr<AbstractFramebuffer>
   CreateFramebuffer(AbstractTexture* color_attachment, AbstractTexture* depth_attachment,
                     std::vector<AbstractTexture*> additional_color_attachments) override;
+  std::unique_ptr<AbstractFramebuffer> CreateMultiviewFramebuffer(
+      AbstractTexture* color_attachment, AbstractTexture* depth_attachment,
+      std::vector<AbstractTexture*> additional_color_attachments = {}) override;
 
   std::unique_ptr<AbstractShader>
   CreateShaderFromSource(ShaderStage stage, std::string_view source,
@@ -100,9 +105,12 @@ private:
   std::unique_ptr<SwapChain> m_swap_chain;
   float m_backbuffer_scale;
   const AbstractPipeline* m_current_pipeline = nullptr;
-  const AbstractPipeline* m_forced_pipeline_base = nullptr;
-  const AbstractShader* m_forced_pipeline_shader = nullptr;
-  std::unique_ptr<AbstractPipeline> m_forced_pipeline;
+  // Forced-PS (hunting/pink) pipelines are cached for the session and never destroyed
+  // mid-frame: MoltenVK encodes lazily at submit, so destroying a pipeline that an
+  // open command buffer already bound crashes at encode time.
+  std::map<std::pair<const AbstractPipeline*, const AbstractShader*>,
+           std::unique_ptr<AbstractPipeline>>
+      m_forced_pipelines;
 
   // Keep a copy of sampler states to avoid cache lookups every draw
   std::array<SamplerState, VideoCommon::MAX_PIXEL_SHADER_SAMPLERS> m_sampler_states = {};

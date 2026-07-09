@@ -62,8 +62,20 @@ GXPipelineUid ApplyDriverBugs(const GXPipelineUid& in)
 
   if (g_backend_info.bSupportsFramebufferFetch)
   {
+    // QuestPrimeVR: on macOS the hacked-MoltenVK framebuffer fetch reads ZERO inside shaders
+    // with forced early fragment tests (EarlyWithFBFetch), so blends that read the dst output
+    // raw source color (opaque black HUD boxes). Skip that conversion — the draw keeps real
+    // pipeline blending and plain ForcedEarly, matching stock Vulkan/MoltenVK behavior. Fetch
+    // still handles logic-op and no-dual-src blending, which work. QPVR_EARLY_FBFETCH=1
+    // restores the old conversion for A/B testing. Quest/Android is unaffected.
+#ifdef __APPLE__
+    static const bool allow_early_fbfetch = getenv("QPVR_EARLY_FBFETCH") != nullptr;
+#else
+    constexpr bool allow_early_fbfetch = true;
+#endif
     bool fbfetch_blend = false;
-    if ((DriverDetails::HasBug(DriverDetails::BUG_BROKEN_DISCARD_WITH_EARLY_Z) ||
+    if (allow_early_fbfetch &&
+        (DriverDetails::HasBug(DriverDetails::BUG_BROKEN_DISCARD_WITH_EARLY_Z) ||
          !g_backend_info.bSupportsEarlyZ) &&
         ps->ztest == EmulatedZ::ForcedEarly)
     {

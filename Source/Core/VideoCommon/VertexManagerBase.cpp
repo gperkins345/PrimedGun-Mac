@@ -3,13 +3,16 @@
 
 #include "VideoCommon/VertexManagerBase.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
@@ -580,6 +583,29 @@ MetroidProjectionMetrics BuildMetroidProjectionMetrics(const XFMemory& xf_memory
     metrics.znear = (1.0f + projection[4] * metrics.zfar) / projection[4];
   }
   return metrics;
+}
+
+// QuestPrimeVR: parse a comma-separated list of hex shader-uid hashes from an env var
+// (e.g. QPVR_PINK_PS=11b29574,ede0aac7) for headless draw identification.
+std::vector<u64> ParseQpvrHashListEnv(const char* env_name)
+{
+  std::vector<u64> hashes;
+  const char* value = getenv(env_name);
+  if (!value)
+    return hashes;
+  std::string s(value);
+  size_t pos = 0;
+  while (pos < s.size())
+  {
+    size_t comma = s.find(',', pos);
+    if (comma == std::string::npos)
+      comma = s.size();
+    const std::string token = s.substr(pos, comma - pos);
+    if (!token.empty())
+      hashes.push_back(strtoull(token.c_str(), nullptr, 16));
+    pos = comma + 1;
+  }
+  return hashes;
 }
 }  // namespace
 
@@ -1225,8 +1251,18 @@ void VertexManagerBase::Flush()
         const bool hunter_needs_families = hunter.NeedsShaderFamilySignatures();
         const bool hunter_needs_textures = hunter.NeedsTextureHashes();
         const bool hunter_needs_counters = hunter.NeedsOverrideDrawCounters();
+        // QuestPrimeVR: headless draw identification (no hunting UI needed) — force-pink or
+        // skip draws whose PS uid hash matches the env lists, to confirm a suspect draw's
+        // identity in-headset.
+        static const std::vector<u64> qpvr_pink_ps = ParseQpvrHashListEnv("QPVR_PINK_PS");
+        static const std::vector<u64> qpvr_skip_ps = ParseQpvrHashListEnv("QPVR_SKIP_PS");
+        // QPVR_BLEND_TRACE: log pipeline blend/depth state for every draw that samples an
+        // EFB copy — headless view of how HUD composites key the copies.
+        static const bool qpvr_blend_trace = getenv("QPVR_BLEND_TRACE") != nullptr;
+        const bool qpvr_draw_id_active = !qpvr_pink_ps.empty() || !qpvr_skip_ps.empty();
         if (primegun_cannon_probe_enabled || hunter_enabled || hunter_has_overrides ||
-            hunter_debug_logging || elements_runtime_active)
+            hunter_debug_logging || elements_runtime_active || qpvr_draw_id_active ||
+            qpvr_blend_trace)
         {
           const auto& vs = m_current_pipeline_config.vs_uid;
           const auto& ps = m_current_pipeline_config.ps_uid;
@@ -1293,6 +1329,114 @@ void VertexManagerBase::Flush()
             hunter.RegisterDrawCombination(vs_hash, ps_hash, gs_hash);
             hunter_skip = hunter.ShouldSkipDraw(vs_hash, ps_hash, gs_hash);
             shader_hunter_force_pink = hunter.ShouldHighlightSelectedDraw();
+          }
+
+          if (qpvr_draw_id_active) [[unlikely]]
+          {
+            if (std::find(qpvr_pink_ps.begin(), qpvr_pink_ps.end(), ps_hash) !=
+                qpvr_pink_ps.end())
+              shader_hunter_force_pink = true;
+            if (std::find(qpvr_skip_ps.begin(), qpvr_skip_ps.end(), ps_hash) !=
+                qpvr_skip_ps.end())
+              hunter_skip = true;
+          }
+
+          if (qpvr_blend_trace) [[unlikely]]
+          {
+            // On the first draw of each frame (after the game's end-of-frame clear), probe
+            // EFB depth+color inside the minimap-box rect vs. a control point, to test the
+            // stale-depth theory headlessly.
+            if (m_draw_counter == 0)
+            {
+              const float d_in = g_framebuffer_manager->PeekEFBDepth(510, 350);
+              const float d_out = g_framebuffer_manager->PeekEFBDepth(320, 240);
+              const u32 c_in = g_framebuffer_manager->PeekEFBColor(510, 350);
+              INFO_LOG_FMT(VIDEO,
+                           "QPVR_DEPTH frame-start: in-box d={:.6f} c={:08x} | control d={:.6f}",
+                           d_in, c_in, d_out);
+            }
+            // QPVR_PEEK_AT="10,122,126,127,200,298": before issuing each listed draw seq,
+            // peek EFB color+depth at the in-box probe point — pinpoints which draw
+            // blackens the minimap rect.
+            static const std::vector<u32> qpvr_peek_at = [] {
+              std::vector<u32> seqs;
+              if (const char* env = getenv("QPVR_PEEK_AT"))
+              {
+                for (const std::string& tok : SplitString(env, ','))
+                  if (!tok.empty())
+                    seqs.push_back(static_cast<u32>(strtoul(tok.c_str(), nullptr, 10)));
+              }
+              return seqs;
+            }();
+            if (!qpvr_peek_at.empty() &&
+                std::find(qpvr_peek_at.begin(), qpvr_peek_at.end(), m_draw_counter + 1) !=
+                    qpvr_peek_at.end()) [[unlikely]]
+            {
+              const u32 c_in = g_framebuffer_manager->PeekEFBColor(510, 350);
+              const float d_in = g_framebuffer_manager->PeekEFBDepth(510, 350);
+              const u32 c_out = g_framebuffer_manager->PeekEFBColor(399, 350);
+              const float d_out = g_framebuffer_manager->PeekEFBDepth(399, 350);
+              INFO_LOG_FMT(VIDEO,
+                           "QPVR_PEEK before-seq={} in-box c={:08x} d={:.6f} | out c={:08x} "
+                           "d={:.6f} scissor=({},{}-{},{})",
+                           m_draw_counter + 1, c_in, d_in, c_out, d_out,
+                           bpmem.scissorTL.x + 1 - 342, bpmem.scissorTL.y + 1 - 342,
+                           bpmem.scissorBR.x + 1 - 342, bpmem.scissorBR.y + 1 - 342);
+              // QPVR_POKE_MARK=1: stamp a magenta cross at the probe point so the dumped
+              // frame shows exactly where the peeks sample.
+              static const bool s_qpvr_poke_mark = getenv("QPVR_POKE_MARK") != nullptr;
+              if (s_qpvr_poke_mark)
+              {
+                for (int off = -3; off <= 3; off++)
+                {
+                  g_framebuffer_manager->PokeEFBColor(510 + off, 350, 0xFFFF00FF);
+                  g_framebuffer_manager->PokeEFBColor(510, 350 + off, 0xFFFF00FF);
+                }
+              }
+            }
+            // QPVR_BLEND_TRACE=2 logs every draw; =1 only draws sampling an EFB copy or
+            // a 128x128 texture (corner sub-buffer copies). Prime's HUD is perspective,
+            // so there is no cheap projection-based HUD filter.
+            static const bool qpvr_blend_trace_all =
+                qpvr_blend_trace && getenv("QPVR_BLEND_TRACE")[0] == '2';
+            const bool qpvr_ortho = xfmem.projection.type == ProjectionType::Orthographic;
+            std::string copy_stages;
+            for (u32 i = 0; i < 8; i++)
+            {
+              const bool is_efb = g_texture_cache->IsBoundTextureEfbCopy(i);
+              const u32 nw = g_texture_cache->GetBoundTextureNativeWidth(i);
+              const u32 nh = g_texture_cache->GetBoundTextureNativeHeight(i);
+              if (is_efb || (nw == 128 && nh == 128) || (qpvr_blend_trace_all && nw != 0))
+              {
+                copy_stages += fmt::format(
+                    " t{}=@{:08x}:{:016x}({}x{},L{},{})", i,
+                    g_texture_cache->GetBoundTextureAddress(i),
+                    g_texture_cache->GetBoundTextureHash(i), nw, nh,
+                    g_texture_cache->GetBoundTextureLayers(i), is_efb ? "E" : "-");
+              }
+            }
+            if (!copy_stages.empty() || qpvr_blend_trace_all)
+            {
+              const BlendingState& bs = m_current_pipeline_config.blending_state;
+              const DepthState& ds = m_current_pipeline_config.depth_state;
+              INFO_LOG_FMT(VIDEO,
+                           "QPVR_BLEND seq={} pipe={} pipehex={:08x} gxhex={:08x} proj={} "
+                           "ps={:08x} vs={:08x} blend={} dual={} "
+                           "srcC={} dstC={} srcA={} dstA={} sub={}{} mask={}{} logic={}({}) "
+                           "ztest={} zwrite={} vp=({:.0f},{:.0f} {:.0f}x{:.0f}){}",
+                           m_draw_counter + 1, static_cast<const void*>(m_current_pipeline_object),
+                           m_current_pipeline_object->m_config.blending_state.hex, bs.hex,
+                           qpvr_ortho ? "O" : "P", ps_hash, vs_hash, bs.blend_enable.Value(),
+                           bs.use_dual_src.Value(), static_cast<u32>(bs.src_factor.Value()),
+                           static_cast<u32>(bs.dst_factor.Value()),
+                           static_cast<u32>(bs.src_factor_alpha.Value()),
+                           static_cast<u32>(bs.dst_factor_alpha.Value()), bs.subtract.Value(),
+                           bs.subtract_alpha.Value(), bs.color_update.Value() ? "C" : "-",
+                           bs.alpha_update.Value() ? "A" : "-", bs.logic_op_enable.Value(),
+                           static_cast<u32>(bs.logic_mode.Value()), ds.test_enable.Value(),
+                           ds.update_enable.Value(), xfmem.viewport.xOrig, xfmem.viewport.yOrig,
+                           xfmem.viewport.wd, xfmem.viewport.ht, copy_stages);
+            }
           }
 
           std::optional<ElementsGroupManager::DrawRecord> element_draw;
@@ -1411,6 +1555,18 @@ void VertexManagerBase::Flush()
             if (xray_signature_fallback && handling == ShaderHunter::HandlingType::Skip)
             {
               handling = ShaderHunter::HandlingType::FullscreenMono;
+            }
+
+            // QuestPrimeVR: trace label -> applied handling (QPVR_DRAW_TRACE env), the
+            // link between the classifier verdicts and the VR presentation actually used.
+            {
+              static const bool s_trace = getenv("QPVR_DRAW_TRACE") != nullptr;
+              if (s_trace && element_draw) [[unlikely]]
+              {
+                INFO_LOG_FMT(VIDEO, "QPVR_HANDLE seq={} layer={} handling={} manual_layer={} depth={:.2f}",
+                             element_draw->draw_sequence, element_draw->profile_layer_name,
+                             HandlingToDebugName(handling), manual_layer, element_depth);
+              }
             }
 
             if (handling == ShaderHunter::HandlingType::Screen)
@@ -1543,6 +1699,59 @@ void VertexManagerBase::Flush()
             const bool z_update = bpmem.zmode.update_enable != 0;
             const int ortho_layer_counter = geometry_shader_manager.vr_ortho_draw_counter;
             const int ortho_layer_override = geometry_shader_manager.vr_ortho_layer_override;
+            // Derived blend state actually baked into the pipeline (accounts for EFB pixel
+            // format, dual-source support, logic-op approximation) — the flat-vs-VR diff
+            // target for the black-backing composite hunt.
+            const BlendingState& bs = m_current_pipeline_config.blending_state;
+            const std::string blend_desc = fmt::format(
+                "BS[en={} dsrc={} sf={} df={} sfa={} dfa={} sub={}{} lop={}:{} cu={} au={}] "
+                "dstA={}:{:02x} pixfmt={}",
+                bs.blend_enable.Value(), bs.use_dual_src.Value(),
+                static_cast<u32>(bs.src_factor.Value()), static_cast<u32>(bs.dst_factor.Value()),
+                static_cast<u32>(bs.src_factor_alpha.Value()),
+                static_cast<u32>(bs.dst_factor_alpha.Value()), bs.subtract.Value(),
+                bs.subtract_alpha.Value(), bs.logic_op_enable.Value(),
+                static_cast<u32>(bs.logic_mode.Value()), bs.color_update.Value(),
+                bs.alpha_update.Value(), bpmem.dstalpha.enable.Value(),
+                bpmem.dstalpha.alpha.Value(), static_cast<u32>(bpmem.zcontrol.pixel_format.Value()))
+                + fmt::format(" prim={} expand={} rprim={}",
+                    static_cast<int>(m_current_primitive_type),
+                    static_cast<int>(m_current_pipeline_config.vs_uid.GetUidData()->vs_expand),
+                    static_cast<int>(m_current_pipeline_config.rasterization_state.primitive.Value()))
+                + fmt::format(" fb={} efb_fb={}", fmt::ptr(g_gfx->GetCurrentFramebuffer()),
+                              fmt::ptr(g_framebuffer_manager->GetEFBFramebuffer()))
+                + (m_draw_counter < 8 ? [&] {
+                    // Raw CPU-side vertex positions for the first verts of this draw.
+                    const auto& vdecl =
+                        VertexLoaderManager::GetCurrentVertexFormat()->GetVertexDeclaration();
+                    const u32 nverts = m_index_generator.GetNumVerts();
+                    const NativeVertexFormat* cur_fmt = VertexLoaderManager::GetCurrentVertexFormat();
+                    const NativeVertexFormat* pipe_fmt = m_current_pipeline_config.vertex_format;
+                    std::string s = fmt::format(
+                        " nverts={} stride={} pipe_stride={} fmt_match={} POS[", nverts,
+                        vdecl.stride, pipe_fmt ? pipe_fmt->GetVertexDeclaration().stride : 0,
+                        cur_fmt == pipe_fmt);
+                    for (u32 v = 0; v < std::min<u32>(nverts, 3); v++)
+                    {
+                      float xyz[3];
+                      memcpy(xyz, m_base_buffer_pointer + v * vdecl.stride + vdecl.position.offset,
+                             sizeof(xyz));
+                      s += fmt::format("({:.3g},{:.3g},{:.3g})", xyz[0], xyz[1], xyz[2]);
+                    }
+                    return s + "]";
+                  }() : std::string{})
+                + (m_draw_counter < 8 ? [&] {
+                    const auto& c = vertex_shader_manager.constants;
+                    std::string s = " CPROJ[";
+                    for (int r = 0; r < 4; r++)
+                      s += fmt::format("{:.4g},{:.4g},{:.4g},{:.4g};", c.projection[r][0],
+                                       c.projection[r][1], c.projection[r][2], c.projection[r][3]);
+                    s += fmt::format("] XFRAW[{:.4g},{:.4g},{:.4g},{:.4g},{:.4g},{:.4g}]",
+                                     proj.rawProjection[0], proj.rawProjection[1],
+                                     proj.rawProjection[2], proj.rawProjection[3],
+                                     proj.rawProjection[4], proj.rawProjection[5]);
+                    return s;
+                  }() : std::string{});
             if (proj.type == ProjectionType::Orthographic)
             {
               const float* p = proj.rawProjection.data();
@@ -1556,11 +1765,12 @@ void VertexManagerBase::Flush()
                            "VR_DRAW #{}: ORTHO l={:.1f} r={:.1f} t={:.1f} b={:.1f} n={:.1f} "
                            "f={:.1f} | VP({:.0f},{:.0f} {:.0f}x{:.0f}) | SC({},{} {},{})"
                            " | VS={:08x} PS={:08x} GS={:08x} | idx={} col={} alpha={} zt={} "
-                           "z={} zf={} | layer_ctr={} layer_ovr={} | skip={}",
+                           "z={} zf={} | layer_ctr={} layer_ovr={} | skip={} | {}",
                            m_draw_counter, left, right, top, bottom, znear, zfar, vp.xOrig,
                            vp.yOrig, vp.wd, vp.ht, scTL.x, scTL.y, scBR.x, scBR.y, vs_hash,
                            ps_hash, gs_hash, nidx, color_update, alpha_update, z_test, z_update,
-                           bpmem.zmode.func, ortho_layer_counter, ortho_layer_override, hunter_skip);
+                           bpmem.zmode.func, ortho_layer_counter, ortho_layer_override, hunter_skip,
+                           blend_desc);
             }
             else
             {
@@ -1573,11 +1783,11 @@ void VertexManagerBase::Flush()
                            "VR_DRAW #{}: PERSP hfov={:.2f} vfov={:.2f} n={:.2f} f={:.2f}"
                            " | VP({:.0f},{:.0f} {:.0f}x{:.0f}) | SC({},{} {},{})"
                            " | VS={:08x} PS={:08x} GS={:08x} | idx={} col={} alpha={} zt={} "
-                           "z={} zf={} | layer_ctr={} layer_ovr={} | skip={}",
+                           "z={} zf={} | layer_ctr={} layer_ovr={} | skip={} | {}",
                            m_draw_counter, hfov, vfov, n, f, vp.xOrig, vp.yOrig, vp.wd, vp.ht,
                            scTL.x, scTL.y, scBR.x, scBR.y, vs_hash, ps_hash, gs_hash, nidx,
                            color_update, alpha_update, z_test, z_update, bpmem.zmode.func,
-                           ortho_layer_counter, ortho_layer_override, hunter_skip);
+                           ortho_layer_counter, ortho_layer_override, hunter_skip, blend_desc);
             }
           }
         }
@@ -1616,14 +1826,13 @@ void VertexManagerBase::Flush()
             // Simple PS that outputs solid magenta, like 3DMigoto's hunting mode.
             // No #version or #defines — the backend prepends its own SHADER_HEADER
             // (with #version 450, type aliases, etc.) before SPIRV compilation.
-            // Outputs both ocol0 and ocol1 (dual-source blending index 1) so shaders
-            // using SRC1_ALPHA blend modes still render visibly.
+            // Single output only: the forced pipeline uses no-blend state, and Metal
+            // (MoltenVK) rejects a dual-source ocol1 output on a non-dual-source
+            // pipeline, which nulls the forced pipeline and crashes at encode time.
             constexpr std::string_view pink_source =
-                "FRAGMENT_OUTPUT_LOCATION_INDEXED(0, 0) out float4 ocol0;\n"
-                "FRAGMENT_OUTPUT_LOCATION_INDEXED(0, 1) out float4 ocol1;\n"
+                "FRAGMENT_OUTPUT_LOCATION(0) out float4 ocol0;\n"
                 "void main() {\n"
                 "  ocol0 = float4(1.0, 0.0, 1.0, 1.0);\n"
-                "  ocol1 = float4(0.0, 0.0, 0.0, 1.0);\n"
                 "}\n";
             m_pink_pixel_shader = g_gfx->CreateShaderFromSource(
                 ShaderStage::Pixel, pink_source, nullptr, "Pink Highlight");
@@ -1994,8 +2203,141 @@ void VertexManagerBase::OnEFBCopyToRAM()
   g_gfx->Flush();
 }
 
+#ifdef __APPLE__
+// QuestPrimeVR: file-triggered Metal GPU frame capture for the black-box hunt.
+// Launch with MTL_CAPTURE_ENABLED=1 and QPVR_METAL_CAPTURE=<output.gputrace>, then
+// `touch /tmp/qpvr-metal-capture` once gameplay is up: the next full emulated frame is
+// captured to the output path (openable in Xcode). Uses the ObjC runtime directly so no
+// Metal framework link or .mm file is needed (MoltenVK already loads Metal).
+#include <dlfcn.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
+#include <CoreFoundation/CoreFoundation.h>
+
+namespace
+{
+template <typename Ret, typename... Args>
+Ret QPVRObjCCall(void* obj, const char* sel, Args... args)
+{
+  using Fn = Ret (*)(void*, SEL, Args...);
+  return reinterpret_cast<Fn>(objc_msgSend)(obj, sel_registerName(sel), args...);
+}
+
+bool QPVRStartMetalCapture(const char* out_path)
+{
+  using MTLCreateFn = void* (*)();
+  const auto create_device =
+      reinterpret_cast<MTLCreateFn>(dlsym(RTLD_DEFAULT, "MTLCreateSystemDefaultDevice"));
+  if (!create_device)
+    return false;
+  void* device = create_device();
+  void* mgr_class = objc_getClass("MTLCaptureManager");
+  void* desc_class = objc_getClass("MTLCaptureDescriptor");
+  if (!device || !mgr_class || !desc_class)
+    return false;
+  void* mgr = QPVRObjCCall<void*>(mgr_class, "sharedCaptureManager");
+  if (!mgr)
+    return false;
+  // 2 = MTLCaptureDestinationGPUTraceDocument (1 is DeveloperTools, needs Xcode attached)
+  if (!QPVRObjCCall<bool, long>(mgr, "supportsDestination:", 2))
+  {
+    WARN_LOG_FMT(VIDEO, "QPVR Metal capture: GPUTraceDocument destination unsupported — "
+                        "is MTL_CAPTURE_ENABLED=1 set?");
+    return false;
+  }
+  File::Delete(out_path);
+  void* desc = QPVRObjCCall<void*>(QPVRObjCCall<void*>(desc_class, "alloc"), "init");
+  QPVRObjCCall<void, void*>(desc, "setCaptureObject:", device);
+  QPVRObjCCall<void, long>(desc, "setDestination:", 2);
+  CFStringRef path_str = CFStringCreateWithCString(nullptr, out_path, kCFStringEncodingUTF8);
+  CFURLRef url = CFURLCreateWithFileSystemPath(nullptr, path_str, kCFURLPOSIXPathStyle, false);
+  QPVRObjCCall<void, const void*>(desc, "setOutputURL:", url);
+  void* error = nullptr;
+  const bool ok =
+      QPVRObjCCall<bool, void*, void**>(mgr, "startCaptureWithDescriptor:error:", desc, &error);
+  CFRelease(url);
+  CFRelease(path_str);
+  if (!ok && error)
+  {
+    void* desc_str = QPVRObjCCall<void*>(error, "localizedDescription");
+    char buf[512] = {};
+    CFStringGetCString(static_cast<CFStringRef>(desc_str), buf, sizeof(buf),
+                       kCFStringEncodingUTF8);
+    WARN_LOG_FMT(VIDEO, "QPVR Metal capture failed to start: {}", buf);
+  }
+  return ok;
+}
+
+void QPVRStopMetalCapture()
+{
+  void* mgr = QPVRObjCCall<void*>(objc_getClass("MTLCaptureManager"), "sharedCaptureManager");
+  if (mgr)
+    QPVRObjCCall<void>(mgr, "stopCapture");
+}
+
+void QPVRMetalCaptureTick()
+{
+  static const char* s_out_path = getenv("QPVR_METAL_CAPTURE");
+  static bool s_logged_arm_state = false;
+  if (!s_logged_arm_state)
+  {
+    s_logged_arm_state = true;
+    NOTICE_LOG_FMT(VIDEO, "QPVR Metal capture tick alive: out_path={} mtl_capture_enabled={}",
+                   s_out_path ? s_out_path : "(unset)",
+                   getenv("MTL_CAPTURE_ENABLED") ? getenv("MTL_CAPTURE_ENABLED") : "(unset)");
+  }
+  if (!s_out_path)
+    return;
+  // 0 = idle, >0 = presents remaining before stop
+  static int s_state = 0;
+  static constexpr const char* TRIGGER = "/tmp/qpvr-metal-capture";
+  if (s_state == 0)
+  {
+    if (File::Exists(TRIGGER))
+    {
+      File::Delete(TRIGGER);
+      if (QPVRStartMetalCapture(s_out_path))
+      {
+        NOTICE_LOG_FMT(VIDEO, "QPVR Metal capture STARTED -> {}", s_out_path);
+        s_state = 2;  // capture through the next two presents (>= one full emulated frame)
+      }
+    }
+  }
+  else if (--s_state == 0)
+  {
+    QPVRStopMetalCapture();
+    NOTICE_LOG_FMT(VIDEO, "QPVR Metal capture STOPPED -> {}", s_out_path);
+  }
+}
+}  // namespace
+#endif
+
 void VertexManagerBase::OnEndFrame()
 {
+#ifdef __APPLE__
+  QPVRMetalCaptureTick();
+#endif
+  // QuestPrimeVR diagnostic: QPVR_FLAT_EFB_CLEAR=1 clears EFB alpha+depth at frame end in
+  // non-OpenXR (flat) mode — the OpenXR path does this in Presenter::Present, which does
+  // not run per-frame in the headless batch repro. Tests whether flat-mode black HUD
+  // boxes are stale-depth artifacts (HUD writes near depth; next frame's world z-fails).
+  {
+    static const bool s_qpvr_flat_efb_clear = getenv("QPVR_FLAT_EFB_CLEAR") != nullptr;
+    if (s_qpvr_flat_efb_clear && g_ActiveConfig.stereo_mode != StereoMode::OpenXR &&
+        g_framebuffer_manager)
+    {
+      static u32 s_qpvr_flat_clear_count = 0;
+      if ((++s_qpvr_flat_clear_count % 300) == 1)
+      {
+        INFO_LOG_FMT(VIDEO, "QPVR flat frame-end EFB alpha+depth clear (n={})",
+                     s_qpvr_flat_clear_count);
+      }
+      g_gfx->SetFramebuffer(g_framebuffer_manager->GetEFBFramebuffer());
+      g_framebuffer_manager->ClearEFB(
+          MathUtil::Rectangle<int>(0, 0, EFB_WIDTH, EFB_HEIGHT), false, true, true, 0, 0xFFFFFF,
+          bpmem.zcontrol.pixel_format);
+    }
+  }
   auto& hunter = ShaderHunter::GetInstance();
   // Lazy-load shader overrides and hide object codes when game ID becomes available or changes
   const std::string game_id = SConfig::GetInstance().GetGameID();

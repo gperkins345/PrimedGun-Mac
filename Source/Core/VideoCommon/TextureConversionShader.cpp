@@ -1099,9 +1099,14 @@ std::string GenerateDecodingShader(TextureFormat format, std::optional<TLUTForma
   return ss.str();
 }
 
-std::string GeneratePaletteConversionShader(TLUTFormat palette_format, APIType api_type)
+std::string GeneratePaletteConversionShader(TLUTFormat palette_format, APIType api_type,
+                                            bool multiview)
 {
   std::ostringstream ss;
+
+  // No-GS stereo path: the multiview view index selects the source layer.
+  if (multiview)
+    ss << "#extension GL_EXT_multiview : require\n";
 
   ss << R"(
 int Convert3To8(int v)
@@ -1203,7 +1208,10 @@ float4 DecodePixel(int val)
   }
   ss << "FRAGMENT_OUTPUT_LOCATION(0) out float4 ocol0;\n";
   ss << "void main() {\n";
-  ss << "  float3 coords = v_tex0;\n";
+  if (multiview)
+    ss << "  float3 coords = float3(v_tex0.xy, float(gl_ViewIndex));\n";
+  else
+    ss << "  float3 coords = v_tex0;\n";
   ss << "  int src = int(round(texture(samp1, coords).r * multiplier));\n";
   if (api_type == APIType::Metal)
     ss << "  src = int(palette[uint(src)]);\n";

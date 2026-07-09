@@ -31,6 +31,12 @@
 
 #if defined(ANDROID)
 #include <android/log.h>
+#else
+// QuestPrimeVR: no-op shim so Android VR-init diagnostics compile on desktop (macOS/Linux).
+#define ANDROID_LOG_INFO 0
+#define ANDROID_LOG_WARN 0
+#define ANDROID_LOG_ERROR 0
+#define __android_log_print(...) ((void)0)
 #endif
 
 namespace Vulkan

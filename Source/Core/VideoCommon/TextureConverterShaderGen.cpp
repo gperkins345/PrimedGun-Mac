@@ -5,6 +5,7 @@
 
 #include "Common/CommonTypes.h"
 #include "VideoCommon/BPMemory.h"
+#include "VideoCommon/ShaderCache.h"
 #include "VideoCommon/TextureCacheBase.h"
 #include "VideoCommon/VideoCommon.h"
 #include "VideoCommon/VideoConfig.h"
@@ -48,6 +49,10 @@ TCShaderUid GetShaderUid(EFBCopyFormat dst_format, bool is_depth_copy, bool is_i
   uid_data->copy_filter_can_overflow = TextureCacheBase::CopyFilterCanOverflow(filter_coefficients);
   // If the gamma is needed, then include that too.
   uid_data->apply_gamma = gamma_rcp != 1.0f;
+  // No-GS stereo copies (MoltenVK): the draw runs in a multiview render pass, so the
+  // pixel shader must pick the source layer from gl_ViewIndex instead of a GS varying.
+  uid_data->vk_multiview_layer =
+      (g_shader_cache && g_shader_cache->UseMultiviewForEFBCopies()) ? 1 : 0;
 
   return out;
 }
@@ -98,15 +103,22 @@ ShaderCode GenerateVertexShader(APIType api_type)
 ShaderCode GeneratePixelShader(APIType api_type, const UidData* uid_data)
 {
   const bool mono_depth = uid_data->is_depth_copy && g_ActiveConfig.bStereoEFBMonoDepth;
+  const bool multiview_layer = uid_data->vk_multiview_layer != 0;
 
   ShaderCode out;
+  // Multiview render pass (no-GS stereo copy path): gl_ViewIndex is available in the
+  // fragment shader and selects the eye, replacing the GS-provided layer varying.
+  if (multiview_layer)
+    out.Write("#extension GL_EXT_multiview : require\n");
   WriteHeader(api_type, out);
 
+  const char* src_layer =
+      mono_depth ? "0.0" : (multiview_layer ? "float(gl_ViewIndex)" : "uv.z");
   out.Write("SAMPLER_BINDING(0) uniform sampler2DArray samp0;\n");
   out.Write("uint4 SampleEFB(float3 uv, float y_offset) {{\n"
             "  float4 tex_sample = texture(samp0, float3(uv.x, clamp(uv.y + (y_offset * "
             "pixel_height), clamp_tb.x, clamp_tb.y), {}));\n",
-            mono_depth ? "0.0" : "uv.z");
+            src_layer);
   if (uid_data->is_depth_copy)
   {
     if (!g_backend_info.bSupportsReversedDepthRange)

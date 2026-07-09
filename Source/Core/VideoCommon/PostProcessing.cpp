@@ -516,6 +516,14 @@ void PostProcessing::BlitFromTexture(const MathUtil::Rectangle<int>& dst,
   const bool copy_all_layers = src_layer < 0;
   src_layer = std::max(src_layer, 0);
 
+  // QuestPrimeVR: clamp to the source's available layers. On macOS/MoltenVK there are no geometry
+  // shaders, so without opcode replay the XFB is a single-layer (mono) texture. The OpenXR present
+  // path asks for source layer == eye index, so the right eye (layer 1) would sample a
+  // non-existent layer and render black ("only left eye"). Falling back to the last available
+  // layer makes both eyes show the same (mono) image instead of a black right eye.
+  if (!copy_all_layers && src_tex && src_layer >= static_cast<int>(src_tex->GetLayers()))
+    src_layer = static_cast<int>(src_tex->GetLayers()) - 1;
+
   MathUtil::Rectangle<int> src_rect = src;
   g_gfx->SetSamplerState(0, RenderState::GetLinearSamplerState());
   g_gfx->SetSamplerState(1, RenderState::GetPointSamplerState());

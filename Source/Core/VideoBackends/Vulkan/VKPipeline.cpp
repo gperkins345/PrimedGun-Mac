@@ -484,6 +484,30 @@ std::unique_ptr<VKPipeline> VKPipeline::Create(const AbstractPipelineConfig& con
     return VK_NULL_HANDLE;
   }
 
-  return std::make_unique<VKPipeline>(config, pipeline, pipeline_layout, config.usage);
+  auto obj = std::make_unique<VKPipeline>(config, pipeline, pipeline_layout, config.usage);
+  // QuestPrimeVR: QPVR_PIPE_TRACE logs every pipeline's ACTUAL VkPipelineColorBlendAttachmentState
+  // keyed by object pointer, so draw-time pipeline pointers can be matched to the real GPU
+  // blend factors (vs. the GX state logged at flush time).
+  {
+    static const bool s_qpvr_pipe_trace = getenv("QPVR_PIPE_TRACE") != nullptr;
+    if (s_qpvr_pipe_trace) [[unlikely]]
+    {
+      INFO_LOG_FMT(VIDEO,
+                   "QPVR_PIPE ptr={} usage={} blendEnable={} colorOp={} srcC={} dstC={} srcA={} "
+                   "dstA={} mask={:x} gxblend={:08x} depthTest={} depthWrite={} depthFunc={}",
+                   static_cast<void*>(obj.get()), static_cast<int>(config.usage),
+                   static_cast<int>(blend_attachment_state.blendEnable),
+                   static_cast<int>(blend_attachment_state.colorBlendOp),
+                   static_cast<int>(blend_attachment_state.srcColorBlendFactor),
+                   static_cast<int>(blend_attachment_state.dstColorBlendFactor),
+                   static_cast<int>(blend_attachment_state.srcAlphaBlendFactor),
+                   static_cast<int>(blend_attachment_state.dstAlphaBlendFactor),
+                   static_cast<u32>(blend_attachment_state.colorWriteMask),
+                   config.blending_state.hex, config.depth_state.test_enable.Value(),
+                   config.depth_state.update_enable.Value(),
+                   static_cast<int>(config.depth_state.func.Value()));
+    }
+  }
+  return obj;
 }
 }  // namespace Vulkan

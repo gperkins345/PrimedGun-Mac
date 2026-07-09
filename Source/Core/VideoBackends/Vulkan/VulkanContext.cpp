@@ -515,7 +515,11 @@ void VulkanContext::PopulateBackendInfoFeatures(BackendInfo* backend_info, VkPhy
 {
   backend_info->MaxTextureSize = info.maxImageDimension2D;
   backend_info->bUsesLowerLeftOrigin = false;
-  backend_info->bSupportsDualSourceBlend = info.dualSrcBlend;
+  // QuestPrimeVR diagnostic: QPVR_NO_DUAL_SRC=1 disables dual-source blending backend-wide
+  // (shaders regenerate with no_dual_src uids) to bisect MoltenVK dual-source behavior in
+  // the HUD composite draws (black-backing hunt).
+  backend_info->bSupportsDualSourceBlend =
+      info.dualSrcBlend && getenv("QPVR_NO_DUAL_SRC") == nullptr;
   backend_info->bSupportsGeometryShaders = info.geometryShader;
   backend_info->bSupportsGSInstancing = info.geometryShader;
   backend_info->bSupportsBBox = backend_info->bSupportsFragmentStoresAndAtomics =
@@ -553,8 +557,14 @@ void VulkanContext::PopulateBackendInfoFeatures(BackendInfo* backend_info, VkPhy
   bool is_moltenvk = info.driverID == VK_DRIVER_ID_MOLTENVK;
 
   // Only Apple family GPUs support framebuffer fetch.
-  // We currently use a hacked MoltenVK to implement this, so don't attempt outside of MVK
-  if (is_moltenvk && (vendor_id == 0x106B || device_name.find("Apple") != std::string::npos))
+  // We currently use a hacked MoltenVK to implement this, so don't attempt outside of MVK.
+  // Fetch is needed for exact logic-op emulation (Metal has no blend logic ops — without it
+  // the pause-map/scan-visor logic-op draws fall back to a broken blending approximation).
+  // The fetch DOES read zero in shaders with forced early fragment tests, so PipelineUtils
+  // skips the EarlyWithFBFetch conversion on macOS (see there). QPVR_NO_FBFETCH=1 disables
+  // fetch entirely for A/B testing.
+  if (is_moltenvk && (vendor_id == 0x106B || device_name.find("Apple") != std::string::npos) &&
+      getenv("QPVR_NO_FBFETCH") == nullptr)
   {
     backend_info->bSupportsFramebufferFetch = true;
   }
@@ -702,6 +712,16 @@ bool VulkanContext::SelectDeviceExtensions(bool enable_surface)
 
   AddExtension(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, false);
   AddExtension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME, false);
+
+#if defined(__APPLE__)
+  // QuestPrimeVR: enable VK_EXT_metal_objects so the OpenXR runtime (OXRSys) can export our
+  // Vulkan swapchain images as Metal textures (vkExportMetalObjectsEXT) for H.265 encoding and
+  // streaming to the headset. OXRSys does not reliably request this via
+  // xrGetVulkanDeviceExtensionsKHR (it comes through blank), so enable it here. Without it the
+  // runtime reports exportMetalObjects=no and streams blank frames (headset shows nothing).
+  if (AddExtension("VK_EXT_metal_objects", false))
+    INFO_LOG_FMT(VIDEO, "QuestPrimeVR: enabled VK_EXT_metal_objects for OpenXR Metal export.");
+#endif
 
   if (!DriverDetails::HasBug(DriverDetails::BUG_BROKEN_DEPTH_CLAMP_CONTROL))
   {

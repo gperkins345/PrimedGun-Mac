@@ -1387,6 +1387,21 @@ void DumpScanIndicatorCodeOnce(const Core::CPUThreadGuard& guard)
 
 void ApplyHelmetOpacityZero(const Core::CPUThreadGuard& guard, const RuntimeSettings& settings)
 {
+  // QuestPrimeVR diagnostic: QPVR_HELMET_ALPHA=<0-255> forces the game's helmet-alpha
+  // option to that value instead of the mod's zeroing, to bisect whether the black
+  // HUD-backdrop composites come from the game skipping its helmet/visor sub-buffer
+  // render when the option is zeroed (savestates carry the zeroed value, so
+  // QPVR_NO_PATCHES alone cannot undo it).
+  static const char* s_qpvr_helmet_alpha = getenv("QPVR_HELMET_ALPHA");
+  if (s_qpvr_helmet_alpha)
+  {
+    u32 game_state = 0;
+    if (!TryReadU32(guard, GP_GAME_STATE, &game_state) || game_state < 0x80000000u)
+      return;
+    TryWriteU32(guard, game_state + GAME_OPTIONS_HELMET_ALPHA_OFFSET,
+                static_cast<u32>(strtoul(s_qpvr_helmet_alpha, nullptr, 0)));
+    return;
+  }
   if (settings.visor_helmet_enabled)
     return;
 
@@ -5636,6 +5651,17 @@ void ResetNativeRuntime()
 RuntimeSettings GetRuntimeSettings()
 {
   std::lock_guard lock{s_settings_mutex};
+  // QuestPrimeVR diagnostic: QPVR_NO_PATCHES neutralizes ALL game-code writes the mod
+  // makes (builtin patches and the always-on helmet-opacity zeroing) to bisect whether
+  // the VR black-backing composites come from patched game-side HUD rendering.
+  static const bool s_qpvr_no_patches = getenv("QPVR_NO_PATCHES") != nullptr;
+  if (s_qpvr_no_patches)
+  {
+    RuntimeSettings neutered = s_settings;
+    neutered.builtin_patches_enabled = false;
+    neutered.visor_helmet_enabled = true;  // skip ApplyHelmetOpacityZero
+    return neutered;
+  }
   return s_settings;
 }
 

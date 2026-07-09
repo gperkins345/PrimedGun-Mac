@@ -46,6 +46,9 @@ std::string GenerateDecodingShader(TextureFormat format, std::optional<TLUTForma
                                    APIType api_type);
 
 // Returns the GLSL string containing the palette conversion shader for the specified format.
-std::string GeneratePaletteConversionShader(TLUTFormat palette_format, APIType api_type);
+// When multiview is set, the shader targets a VK_KHR_multiview render pass and samples
+// source layer gl_ViewIndex (no-geometry-shader stereo path).
+std::string GeneratePaletteConversionShader(TLUTFormat palette_format, APIType api_type,
+                                            bool multiview = false);
 
 }  // namespace TextureConversionShaderTiled

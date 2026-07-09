@@ -361,8 +361,14 @@ ShaderCode GenerateGeometryShaderCode(APIType api_type, const ShaderHostConfig& 
       out.Write(
           "\t\tfloat max_safe_step = 0.49 / max(layer_idx + 1.0, 1.0);\n");
       out.Write("\t\tlayer_step = min(layer_step, max_safe_step);\n");
-      out.Write(
-          "\t\tf.pos.z = f.pos.w * (0.5 - layer_idx * layer_step + ndc_z_clamped * 0.0001);\n");
+      // QuestPrimeVR: mirror layer depth on non-reversed-depth backends (parity with
+      // the VS multiview block; no-op on backends with reversed depth range).
+      if (host_config.backend_reversed_depth_range)
+        out.Write(
+            "\t\tf.pos.z = f.pos.w * (0.5 - layer_idx * layer_step + ndc_z_clamped * 0.0001);\n");
+      else
+        out.Write(
+            "\t\tf.pos.z = f.pos.w * (0.5 + layer_idx * layer_step - ndc_z_clamped * 0.0001);\n");
       if (!host_config.fast_depth_calc)
         out.Write("\t\tf.clipPos = f.pos;\n");
       if (!host_config.backend_clip_control)
@@ -423,9 +429,15 @@ ShaderCode GenerateGeometryShaderCode(APIType api_type, const ShaderHostConfig& 
       out.Write(
           "\t\tfloat max_safe_step = 0.49 / max(layer_idx + 1.0, 1.0);\n");
       out.Write("\t\tlayer_step = min(layer_step, max_safe_step);\n");
-      out.Write(
-          "\t\tf.pos.z = f.pos.w * (0.5 - layer_idx * layer_step + ndc_z_clamped * " I_VR_DEPTH
-          ".y);\n");
+      // QuestPrimeVR: mirror layer depth on non-reversed-depth backends (see VS block).
+      if (host_config.backend_reversed_depth_range)
+        out.Write(
+            "\t\tf.pos.z = f.pos.w * (0.5 - layer_idx * layer_step + ndc_z_clamped * " I_VR_DEPTH
+            ".y);\n");
+      else
+        out.Write(
+            "\t\tf.pos.z = f.pos.w * (0.5 + layer_idx * layer_step - ndc_z_clamped * " I_VR_DEPTH
+            ".y);\n");
       if (!host_config.backend_clip_control)
         out.Write("\t\tf.pos.z = f.pos.z * 2.0 - f.pos.w;\n");
       out.Write("\t\tf.pos.xy *= sign(" I_VR_PIXELCENTER ".xy * float2(1.0, -1.0));\n");

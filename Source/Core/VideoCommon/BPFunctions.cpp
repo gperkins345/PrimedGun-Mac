@@ -440,7 +440,9 @@ bool ClearScreen(FramebufferManager* frame_buffer_manager, const MathUtil::Recta
     }
 
     // VR Draw Debug: log EFB clears so we can see if cinematic bars are ClearEFB operations
-    if (ShaderHunter::GetInstance().IsDebugLogging()) [[unlikely]]
+    // (also under QPVR_BLEND_TRACE, to interleave clears with the draw/copy trace).
+    static const bool s_qpvr_blend_trace = getenv("QPVR_BLEND_TRACE") != nullptr;
+    if (ShaderHunter::GetInstance().IsDebugLogging() || s_qpvr_blend_trace) [[unlikely]]
     {
       INFO_LOG_FMT(VIDEO,
                    "VR_CLEAR: rect({},{} {}x{}) color={:08x} z={:06x} "

@@ -315,14 +315,19 @@ std::string GenerateTextureCopyVertexShader()
   return code.GetBuffer();
 }
 
-std::string GenerateTextureCopyPixelShader()
+std::string GenerateTextureCopyPixelShader(bool multiview)
 {
   ShaderCode code;
+  // No-GS stereo copies (VK_KHR_multiview): the view index selects the source layer
+  // instead of the (GS-provided) v_tex0.z, which is always 0 without a geometry shader.
+  if (multiview)
+    code.Write("#extension GL_EXT_multiview : require\n");
   EmitSamplerDeclarations(code, 0, 1, false);
   EmitPixelMainDeclaration(code, 1, 0);
   code.Write("{{\n"
              "  ocol0 = ");
-  EmitSampleTexture(code, 0, "v_tex0");
+  EmitSampleTexture(code, 0,
+                    multiview ? "float3(v_tex0.xy, float(gl_ViewIndex))" : "v_tex0");
   code.Write(";\n"
              "}}\n");
   return code.GetBuffer();
@@ -504,14 +509,26 @@ std::string GenerateFormatConversionShader(EFBReinterpretType convtype, u32 samp
   return code.GetBuffer();
 }
 
-std::string GenerateTextureReinterpretShader(TextureFormat from_format, TextureFormat to_format)
+std::string GenerateTextureReinterpretShader(TextureFormat from_format, TextureFormat to_format,
+                                             bool multiview)
 {
   ShaderCode code;
+  // No-GS stereo path: under VK_KHR_multiview the view index selects the source layer.
+  if (multiview)
+    code.Write("#extension GL_EXT_multiview : require\n");
   EmitSamplerDeclarations(code, 0, 1, false);
   EmitPixelMainDeclaration(code, 1, 0, "float4", "", true);
-  code.Write("{{\n"
-             "  int layer = int(v_tex0.z);\n"
-             "  int4 coords = int4(int2(frag_coord.xy), layer, 0);\n");
+  if (multiview)
+  {
+    code.Write("{{\n"
+               "  int layer = int(gl_ViewIndex);\n");
+  }
+  else
+  {
+    code.Write("{{\n"
+               "  int layer = int(v_tex0.z);\n");
+  }
+  code.Write("  int4 coords = int4(int2(frag_coord.xy), layer, 0);\n");
 
   // Convert to a 32-bit value encompassing all channels, filling the most significant bits with
   // zeroes.

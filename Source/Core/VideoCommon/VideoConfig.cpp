@@ -292,7 +292,10 @@ void VideoConfig::VerifyValidity()
   }
 #endif
 
-  if (stereo_mode != StereoMode::Off)
+  // QuestPrimeVR: exempt OpenXR VR from the geometry-shader requirement. On macOS (MoltenVK)
+  // there are no geometry shaders, but the OpenXR path doesn't rely on the GS-based stereo
+  // layer duplication the classic 3D modes use — disabling it here would kill VR on Mac.
+  if (stereo_mode != StereoMode::Off && stereo_mode != StereoMode::OpenXR)
   {
     if (!g_backend_info.bSupportsGeometryShaders)
     {

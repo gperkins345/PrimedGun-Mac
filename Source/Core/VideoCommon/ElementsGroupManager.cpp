@@ -1586,6 +1586,22 @@ void ElementsGroupManager::ClassifyProfileDraw(DrawRecord* draw,
   draw->profile_layer = selected_layer;
   draw->profile_layer_name = std::string(MetroidElementLayerToDisplayName(selected_layer));
 
+  // QuestPrimeVR: classifier trace (QPVR_DRAW_TRACE env) — logs every classification's
+  // inputs and verdict so the Mac's all-Unknown labeling can be diagnosed against the
+  // classifier's expected projection metrics.
+  {
+    static const bool s_trace = getenv("QPVR_DRAW_TRACE") != nullptr;
+    if (s_trace) [[unlikely]]
+    {
+      INFO_LOG_FMT(VIDEO,
+                   "QPVR_CLASSIFY seq={} persp={} proj_seq={} hfov={:.2f} vfov={:.2f} "
+                   "n={:.1f} f={:.1f} l={:.1f} r={:.1f} t={:.1f} b={:.1f} -> {}",
+                   draw->draw_sequence, metrics.perspective, metrics.projection_sequence,
+                   metrics.hfov, metrics.vfov, metrics.znear, metrics.zfar, metrics.left,
+                   metrics.right, metrics.top, metrics.bottom, draw->profile_layer_name);
+    }
+  }
+
   if (IsPrimeGunMapOrPauseLayer(selected_layer))
     ShaderHunter::GetInstance().RegisterExternalFlag("primedgun_map_or_pause");
 }

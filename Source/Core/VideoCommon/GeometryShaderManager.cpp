@@ -330,6 +330,12 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
 
             // Perspective flag consumed in the OpenXR GS path.
             constants.stereoparams[3] = 1.0f;
+
+            // QuestPrimeVR: world-position weight consumed by the VS multiview perspective branch
+            // (vp.w *= cstereo.z). MUST be 1.0 for every perspective VR draw, otherwise vp.w
+            // becomes 0 and the per-eye position/IPD/head offset baked into the projection rows'
+            // .w column is nulled, collapsing the world to rotation-only.
+            constants.stereoparams[2] = 1.0f;
           }
           else if (g_ActiveConfig.vr_virtual_screen)
           {

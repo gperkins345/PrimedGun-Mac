@@ -28,6 +28,9 @@ struct UidData
   u32 all_copy_filter_coefs_needed : 1;
   u32 copy_filter_can_overflow : 1;
   u32 apply_gamma : 1;
+  // No-geometry-shader stereo path (e.g. MoltenVK): the copy draw runs inside a
+  // VK_KHR_multiview render pass and the pixel shader samples EFB layer gl_ViewIndex.
+  u32 vk_multiview_layer : 1;
 };
 #pragma pack()
 

@@ -292,6 +292,8 @@ public:
   std::string GetBoundTextureName(u32 stage) const;
   // VR accessors for the texture bound at a stage.
   u32 GetBoundTextureLayers(u32 stage) const;
+  bool IsBoundTextureEfbCopy(u32 stage) const;
+  u32 GetBoundTextureAddress(u32 stage) const;
   u32 GetBoundTextureNativeWidth(u32 stage) const;
   u32 GetBoundTextureNativeHeight(u32 stage) const;
   void BeginMetroidPrime1ThermalSourceWindow(std::string_view reason);

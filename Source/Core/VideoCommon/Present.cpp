@@ -15,6 +15,7 @@
 
 #include "Present.h"
 #include "VideoCommon/AbstractGfx.h"
+#include "VideoCommon/BPMemory.h"
 #include "VideoCommon/FrameDumper.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/GeometryShaderManager.h"
@@ -160,6 +161,41 @@ bool Presenter::FetchXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_heigh
     m_last_xfb_id = m_xfb_entry->id;
 
     m_xfb_entry->AcquireContentLock();
+
+#ifdef ENABLE_VR
+    // QuestPrimeVR: snapshot the fetched XFB into our own texture (see Present.h).
+    if (g_ActiveConfig.stereo_mode == StereoMode::OpenXR && m_xfb_entry->texture)
+    {
+      AbstractTexture* src = m_xfb_entry->texture.get();
+      const TextureConfig& src_config = src->GetConfig();
+      if (!m_vr_xfb_snapshot || m_vr_xfb_snapshot->GetConfig() != src_config)
+      {
+        m_vr_xfb_snapshot = g_gfx->CreateTexture(src_config, "QPVR XFB snapshot");
+        m_vr_snapshot_valid = false;
+      }
+      if (m_vr_xfb_snapshot)
+      {
+        const MathUtil::Rectangle<int> full_rect{0, 0, static_cast<int>(src_config.width),
+                                                 static_cast<int>(src_config.height)};
+        for (u32 layer = 0; layer < src_config.layers; ++layer)
+        {
+          m_vr_xfb_snapshot->CopyRectangleFromTexture(src, full_rect, layer, 0, full_rect, layer,
+                                                      0);
+        }
+        m_vr_snapshot_rect = m_xfb_rect;
+        m_vr_snapshot_valid = true;
+      }
+    }
+
+    {
+      static const bool s_trace = getenv("QPVR_DRAW_TRACE") != nullptr;
+      if (s_trace) [[unlikely]]
+      {
+        INFO_LOG_FMT(VIDEO, "QPVR_XFB addr={:08x} w={} h={} id={}", xfb_addr, fb_width, fb_height,
+                     m_last_xfb_id);
+      }
+    }
+#endif
   }
   m_last_xfb_addr = xfb_addr;
   m_last_xfb_ticks = ticks;
@@ -846,7 +882,9 @@ void Presenter::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
 #ifdef ENABLE_VR
   else if (g_ActiveConfig.stereo_mode == StereoMode::OpenXR)
   {
-    constexpr bool kForceOpenXRLayer0ToBothEyes = false;  // diagnostic
+    // Diagnostic (env QPVR_FORCE_LAYER0): blit EFB layer 0 to both eyes — pairs with
+    // UseVulkanMultiview=False for a mono-VR run that exercises no multiview passes.
+    static const bool kForceOpenXRLayer0ToBothEyes = getenv("QPVR_FORCE_LAYER0") != nullptr;
     static bool s_first_openxr_render = true;
     if (s_first_openxr_render)
     {
@@ -876,7 +914,8 @@ void Presenter::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
       bool rendered_layered = false;
 
       if (sc->SupportsLayeredRendering() &&
-          m_post_processor->CanBlitFromTextureLayeredMultiview())
+          m_post_processor->CanBlitFromTextureLayeredMultiview() &&
+          !kForceOpenXRLayer0ToBothEyes)
       {
         AbstractFramebuffer* layered_fb = sc->AcquireLayeredFramebuffer();
         if (layered_fb)
@@ -934,7 +973,7 @@ void Presenter::Present(PresentInfo* present_info)
 {
   m_present_count++;
 
-  if (g_gfx->IsHeadless() || (!m_onscreen_ui && !m_xfb_entry))
+  if (g_gfx->IsHeadless() || (!m_onscreen_ui && !m_xfb_entry && !m_vr_snapshot_valid))
     return;
 
   if (!g_gfx->SupportsUtilityDrawing())
@@ -1008,14 +1047,29 @@ void Presenter::Present(PresentInfo* present_info)
   const bool backbuffer_bound = g_gfx->BindBackbuffer({{0.0f, 0.0f, 0.0f, 1.0f}});
 
   // Render the XFB to the screen.
-  if (backbuffer_bound && m_xfb_entry)
+  AbstractTexture* present_texture = m_xfb_entry ? m_xfb_entry->texture.get() : nullptr;
+  MathUtil::Rectangle<int> present_source_rc = m_xfb_rect;
+#ifdef ENABLE_VR
+  // QuestPrimeVR: present from the persistent snapshot instead of the live cache
+  // entry. The cache is free to recycle/invalidate the entry when the game idles
+  // (menus redraw only on change) and FetchXFB drops the entry entirely on VI
+  // blanking — both made menu UI vanish after a single frame while the VR loop
+  // kept re-presenting every vsync.
+  if (g_ActiveConfig.stereo_mode == StereoMode::OpenXR && m_vr_snapshot_valid &&
+      m_vr_xfb_snapshot)
+  {
+    present_texture = m_vr_xfb_snapshot.get();
+    present_source_rc = m_vr_snapshot_rect;
+  }
+#endif
+  if (backbuffer_bound && present_texture)
   {
     // Adjust the source rectangle instead of using an oversized viewport to render the XFB.
     auto render_target_rc = GetTargetRectangle();
-    auto render_source_rc = m_xfb_rect;
+    auto render_source_rc = present_source_rc;
     AdjustRectanglesToFitBounds(&render_target_rc, &render_source_rc, m_backbuffer_width,
                                 m_backbuffer_height);
-    RenderXFBToScreen(render_target_rc, m_xfb_entry->texture.get(), render_source_rc);
+    RenderXFBToScreen(render_target_rc, present_texture, render_source_rc);
   }
 
   if (m_onscreen_ui)
@@ -1081,13 +1135,54 @@ void Presenter::Present(PresentInfo* present_info)
     // redraw) retain stale data from previous frames, causing visible trails.
     // The "Don't Clear Screen" option disables this for games that rely on the
     // EFB retaining data between frames (e.g. to fake 60fps from 30fps rendering).
-    if (!g_ActiveConfig.vr_dont_clear_screen && g_framebuffer_manager)
+    static const bool s_qpvr_no_efb_clear = getenv("QPVR_NO_EFB_CLEAR") != nullptr;
+    if (!s_qpvr_no_efb_clear && !g_ActiveConfig.vr_dont_clear_screen && g_framebuffer_manager)
     {
-      g_gfx->SetAndClearFramebuffer(g_framebuffer_manager->GetEFBFramebuffer(),
-                                    {0.f, 0.f, 0.f, 0.f}, 0.f);
+      // QuestPrimeVR: clear the EFB ALPHA and DEPTH here, but preserve COLOR.
+      // The original full clear wiped once-drawn 2D content the game never
+      // redraws (boot logo, pause/save menus: dirty-flag rendering that relies
+      // on EFB persistence, as on real hardware) — that's the color part, so
+      // color must persist. But alpha and depth need their per-frame baseline:
+      // stale depth makes world geometry z-fail where last frame's VR HUD
+      // layers sat (unwritten black holes that semi-transparent HUD glass then
+      // blends over -> black boxes), and stale alpha breaks dst-alpha
+      // compositing the same way.
+      static u32 s_qpvr_efb_clear_count = 0;
+      if ((++s_qpvr_efb_clear_count % 300) == 1)
+      {
+        INFO_LOG_FMT(VIDEO, "QPVR post-present EFB alpha+depth clear, color preserved (n={})",
+                     s_qpvr_efb_clear_count);
+      }
+      g_gfx->SetFramebuffer(g_framebuffer_manager->GetEFBFramebuffer());
+      g_framebuffer_manager->ClearEFB(
+          MathUtil::Rectangle<int>(0, 0, EFB_WIDTH, EFB_HEIGHT), false, true, true, 0, 0xFFFFFF,
+          bpmem.zcontrol.pixel_format);
     }
   }
 #endif
+
+  // QuestPrimeVR diagnostic: QPVR_FLAT_EFB_CLEAR=1 applies the same post-present
+  // alpha+depth clear in NON-OpenXR (flat) mode. In flat, the OpenXR-gated clear above
+  // never runs, so depth written by the game's HUD (e.g. the minimap window quad,
+  // zwrite=1) survives into the next frame and z-kills world geometry inside that rect
+  // -> sharp black boxes. This tests that theory without touching VR behavior.
+  {
+    static const bool s_qpvr_flat_efb_clear = getenv("QPVR_FLAT_EFB_CLEAR") != nullptr;
+    if (s_qpvr_flat_efb_clear && g_ActiveConfig.stereo_mode != StereoMode::OpenXR &&
+        g_framebuffer_manager)
+    {
+      static u32 s_qpvr_flat_clear_count = 0;
+      if ((++s_qpvr_flat_clear_count % 300) == 1)
+      {
+        INFO_LOG_FMT(VIDEO, "QPVR flat post-present EFB alpha+depth clear (n={})",
+                     s_qpvr_flat_clear_count);
+      }
+      g_gfx->SetFramebuffer(g_framebuffer_manager->GetEFBFramebuffer());
+      g_framebuffer_manager->ClearEFB(
+          MathUtil::Rectangle<int>(0, 0, EFB_WIDTH, EFB_HEIGHT), false, true, true, 0, 0xFFFFFF,
+          bpmem.zcontrol.pixel_format);
+    }
+  }
 
   if (m_xfb_entry)
   {

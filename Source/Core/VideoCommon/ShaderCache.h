@@ -106,9 +106,16 @@ public:
   // Palette texture conversion pipelines
   const AbstractPipeline* GetPaletteConversionPipeline(TLUTFormat format, bool layered = false);
 
-  // Texture reinterpret pipelines
+  // Texture reinterpret pipelines. multiview selects the VK_KHR_multiview variant used
+  // for multi-layer destinations on the no-geometry-shader stereo path.
   const AbstractPipeline* GetTextureReinterpretPipeline(TextureFormat from_format,
-                                                        TextureFormat to_format);
+                                                        TextureFormat to_format,
+                                                        bool multiview = false);
+
+  // No-geometry-shader stereo (e.g. Vulkan on MoltenVK): EFB copy-to-VRAM draws (and other
+  // draws into 2-layer texture-cache entries) write both eye layers via a VK_KHR_multiview
+  // render pass instead of a gl_Layer-writing passthrough geometry shader.
+  bool UseMultiviewForEFBCopies() const;
 
   // Texture decoding compute shaders
   const AbstractShader* GetTextureDecodingShader(TextureFormat format,
@@ -204,6 +211,7 @@ private:
   std::unique_ptr<AbstractShader> m_texcoord_geometry_shader;
   std::unique_ptr<AbstractShader> m_color_geometry_shader;
   std::unique_ptr<AbstractShader> m_texture_copy_pixel_shader;
+  std::unique_ptr<AbstractShader> m_texture_copy_multiview_pixel_shader;
   std::unique_ptr<AbstractShader> m_color_pixel_shader;
 
   // GX Shader Caches
@@ -250,6 +258,9 @@ private:
   // Texture reinterpreting pipeline
   std::map<std::pair<TextureFormat, TextureFormat>, std::unique_ptr<AbstractPipeline>>
       m_texture_reinterpret_pipelines;
+  // Multiview variants (no-GS stereo path, multi-layer destinations)
+  std::map<std::pair<TextureFormat, TextureFormat>, std::unique_ptr<AbstractPipeline>>
+      m_texture_reinterpret_multiview_pipelines;
 
   // Texture decoding shaders
   std::map<std::pair<u32, u32>, std::unique_ptr<AbstractShader>> m_texture_decoding_shaders;

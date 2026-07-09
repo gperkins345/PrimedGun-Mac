@@ -16,7 +16,7 @@
 
 namespace UberShader
 {
-static constexpr u32 UBER_PIXEL_SHADER_CODE_VERSION = 1;
+static constexpr u32 UBER_PIXEL_SHADER_CODE_VERSION = 2;
 
 PixelShaderUid GetPixelShaderUid()
 {
@@ -573,7 +573,19 @@ ShaderCode GenPixelShader(APIType api_type, const ShaderHostConfig& host_config,
     out.Write(")\n\n");
   }
 
-  if (early_depth && host_config.backend_early_z)
+  // QuestPrimeVR: the hacked-MoltenVK framebuffer fetch reads ZERO inside shaders with forced
+  // early fragment tests (same bug as the specialized-shader EarlyWithFBFetch skip in
+  // PipelineUtils.cpp). Mac uber shaders always blend/logic-op through the fetch, so forcing
+  // early-Z here blends every warmup draw against black. Skip it — depth still tests and writes
+  // normally, only the early-fragment-tests promise is dropped. QPVR_UBER_EARLYZ=1 restores the
+  // old behavior for A/B. Quest/Android is unaffected.
+#ifdef __APPLE__
+  static const bool s_qpvr_uber_early_z = getenv("QPVR_UBER_EARLYZ") != nullptr;
+  const bool uber_early_z_allowed = !use_framebuffer_fetch || s_qpvr_uber_early_z;
+#else
+  constexpr bool uber_early_z_allowed = true;
+#endif
+  if (early_depth && host_config.backend_early_z && uber_early_z_allowed)
     out.Write("FORCE_EARLY_Z;\n");
 
   out.Write("void main()\n{{\n");

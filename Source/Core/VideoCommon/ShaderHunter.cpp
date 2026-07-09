@@ -1110,6 +1110,14 @@ void AppendPrimedGunBuiltinShaderOverrides(std::vector<ShaderHunter::ShaderOverr
   if (overrides == nullptr || game_id != "GM8E01")
     return;
 
+  // QuestPrimeVR diagnostic: QPVR_NO_BUILTIN_OVERRIDES disables the hard-coded
+  // scan-mask/menu-picker skip overrides (active in ALL modes, including flat)
+  // to bisect the black-backing composites.
+  static const bool s_qpvr_no_builtin_overrides =
+      getenv("QPVR_NO_BUILTIN_OVERRIDES") != nullptr;
+  if (s_qpvr_no_builtin_overrides)
+    return;
+
   ShaderHunter::ShaderOverride scan_mask{};
   scan_mask.name = "PrimedGun Scan Mask Element Zero";
   scan_mask.hash = 0x00000000e270bbdbULL;
@@ -1715,7 +1723,11 @@ void ShaderHunter::SetDebugLogging(bool enabled)
 
 bool ShaderHunter::IsDebugLogging() const
 {
-  return m_debug_logging;
+  // QuestPrimeVR: allow enabling the per-draw VR_DRAW trace headlessly (the only
+  // other toggle is a Qt debugger checkbox). Used to capture ortho-layer numbering
+  // across frames while diagnosing the 2D menu flicker.
+  static const bool env_trace = getenv("QPVR_DRAW_TRACE") != nullptr;
+  return m_debug_logging || env_trace;
 }
 
 void ShaderHunter::DebugLogUnmatched(u64 vs_hash, u64 ps_hash, u64 gs_hash) const

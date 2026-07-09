@@ -14,7 +14,7 @@ namespace FramebufferShaderGen
 std::string GenerateScreenQuadVertexShader();
 std::string GeneratePassthroughGeometryShader(u32 num_tex, u32 num_colors);
 std::string GenerateTextureCopyVertexShader();
-std::string GenerateTextureCopyPixelShader();
+std::string GenerateTextureCopyPixelShader(bool multiview = false);
 std::string GenerateResolveColorPixelShader(u32 samples);
 std::string GenerateResolveDepthPixelShader(u32 samples);
 std::string GenerateClearVertexShader();
@@ -22,7 +22,8 @@ std::string GenerateEFBPokeVertexShader();
 std::string GenerateColorPixelShader();
 std::string GenerateFormatConversionShader(EFBReinterpretType convtype, u32 samples,
                                            bool multiview = false);
-std::string GenerateTextureReinterpretShader(TextureFormat from_format, TextureFormat to_format);
+std::string GenerateTextureReinterpretShader(TextureFormat from_format, TextureFormat to_format,
+                                             bool multiview = false);
 std::string GenerateEFBRestorePixelShader();
 std::string GenerateImGuiVertexShader();
 std::string GenerateImGuiPixelShader(bool linear_space_output = false);

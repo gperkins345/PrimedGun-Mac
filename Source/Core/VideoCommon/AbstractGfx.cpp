@@ -26,6 +26,16 @@ bool AbstractGfx::IsHeadless() const
   return true;
 }
 
+std::unique_ptr<AbstractFramebuffer>
+AbstractGfx::CreateMultiviewFramebuffer(AbstractTexture* color_attachment,
+                                        AbstractTexture* depth_attachment,
+                                        std::vector<AbstractTexture*> additional_color_attachments)
+{
+  // Default: no multiview support, create a regular framebuffer.
+  return CreateFramebuffer(color_attachment, depth_attachment,
+                           std::move(additional_color_attachments));
+}
+
 void AbstractGfx::BeginUtilityDrawing()
 {
   g_vertex_manager->Flush();

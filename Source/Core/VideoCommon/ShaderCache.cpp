@@ -404,6 +404,7 @@ void ShaderCache::ClearCaches()
   m_texcoord_geometry_shader.reset();
   m_color_geometry_shader.reset();
   m_texture_copy_pixel_shader.reset();
+  m_texture_copy_multiview_pixel_shader.reset();
   m_color_pixel_shader.reset();
 
   m_efb_copy_to_vram_pipelines.clear();
@@ -415,6 +416,7 @@ void ShaderCache::ClearCaches()
   for (auto& pipeline : m_layered_palette_conversion_pipelines)
     pipeline.reset();
   m_texture_reinterpret_pipelines.clear();
+  m_texture_reinterpret_multiview_pipelines.clear();
   m_texture_decoding_shaders.clear();
 
   SETSTAT(g_stats.num_pixel_shaders_created, 0);
@@ -629,12 +631,26 @@ const AbstractShader* ShaderCache::CreateGeometryShader(const GeometryShaderUid&
 
 bool ShaderCache::NeedsGeometryShader(const GeometryShaderUid& uid) const
 {
+  // QuestPrimeVR: under the multiview VR path the vertex shader does the per-eye projection, so no
+  // geometry shader is needed (and MoltenVK has none). Match dolphinXR's working behavior.
+  if (m_host_config.vk_multiview)
+    return false;
   return m_host_config.backend_geometry_shaders && !uid.GetUidData()->IsPassthrough();
 }
 
 bool ShaderCache::UseGeometryShaderForEFBCopies() const
 {
   return m_host_config.backend_geometry_shaders && m_host_config.stereo;
+}
+
+bool ShaderCache::UseMultiviewForEFBCopies() const
+{
+  // No geometry shaders at all (e.g. Vulkan on MoltenVK): a copy draw can only ever write
+  // layer 0 of its 2-layer destination. When VK_KHR_multiview stereo is active, replicate
+  // the copy draw to both eye layers with a multiview render pass (view mask 0b11) and let
+  // the pixel shader pick the source layer from gl_ViewIndex.
+  return m_host_config.stereo && !m_host_config.backend_geometry_shaders &&
+         m_host_config.vk_multiview;
 }
 
 AbstractPipelineConfig ShaderCache::GetGXPipelineConfig(
@@ -718,7 +734,19 @@ static GXUberPipelineUid ApplyDriverBugs(const GXUberPipelineUid& in)
     out.blending_state.ApproximateLogicOpWithBlending();
   }
 
-  if (g_backend_info.bSupportsFramebufferFetch)
+  // QuestPrimeVR: Mac ubers MUST use fetch-blend. ClearUnusedPixelShaderUidBits forces
+  // no_dual_src=1 whenever fetch is in the host config, so Mac uber pixel shaders never emit a
+  // real ocol1 output — keeping real pipeline blending here creates pipelines whose dual-source
+  // blend states Metal rejects ("does not write to render target color(0), index(1)"), and the
+  // draws vanish (VR flicker during shader warmup). The actual fetch bug (reads zero under
+  // forced early-Z) is fixed in UberShaderPixel.cpp by not forcing early-Z in Mac uber shaders.
+  // QPVR_UBER_REALBLEND=1 restores the (broken) real-blending path for A/B.
+#ifdef __APPLE__
+  static const bool allow_uber_fbfetch_blend = getenv("QPVR_UBER_REALBLEND") == nullptr;
+#else
+  constexpr bool allow_uber_fbfetch_blend = true;
+#endif
+  if (g_backend_info.bSupportsFramebufferFetch && allow_uber_fbfetch_blend)
   {
     // Always blend in shader
     out.blending_state.hex = 0;
@@ -1332,6 +1360,11 @@ ShaderCache::GetEFBCopyToVRAMPipeline(const TextureConversionShaderGen::TCShader
   config.depth_state = RenderState::GetNoDepthTestingDepthState();
   config.blending_state = RenderState::GetNoBlendingBlendState();
   config.framebuffer_state = RenderState::GetRGBA8FramebufferState();
+  // No-GS stereo path: the destination entry framebuffer uses a multiview render pass
+  // (view mask 0b11), so the pipeline must be built against a multiview-compatible pass.
+  // The pixel shader for this uid samples source layer gl_ViewIndex (vk_multiview_layer).
+  if (UseMultiviewForEFBCopies())
+    config.framebuffer_state.multiview = 1;
   config.usage = AbstractPipelineUsage::Utility;
   auto iiter = m_efb_copy_to_vram_pipelines.emplace(uid, g_gfx->CreatePipeline(config));
   return iiter.first->second.get();
@@ -1401,6 +1434,15 @@ bool ShaderCache::CompileSharedPipelines()
   if (!m_texture_copy_pixel_shader || !m_color_pixel_shader)
     return false;
 
+  if (UseMultiviewForEFBCopies())
+  {
+    m_texture_copy_multiview_pixel_shader = g_gfx->CreateShaderFromSource(
+        ShaderStage::Pixel, FramebufferShaderGen::GenerateTextureCopyPixelShader(true), nullptr,
+        "Multiview texture copy pixel shader");
+    if (!m_texture_copy_multiview_pixel_shader)
+      return false;
+  }
+
   AbstractPipelineConfig config;
   config.vertex_format = nullptr;
   config.vertex_shader = m_texture_copy_vertex_shader.get();
@@ -1421,6 +1463,19 @@ bool ShaderCache::CompileSharedPipelines()
     m_rgba8_stereo_copy_pipeline = g_gfx->CreatePipeline(config);
     if (!m_rgba8_stereo_copy_pipeline)
       return false;
+  }
+  else if (UseMultiviewForEFBCopies())
+  {
+    // No-GS stereo: the "stereo" copy pipeline targets the multiview render pass used by
+    // 2-layer texture-cache entry framebuffers, with the PS sampling layer gl_ViewIndex.
+    config.geometry_shader = nullptr;
+    config.pixel_shader = m_texture_copy_multiview_pixel_shader.get();
+    config.framebuffer_state.multiview = 1;
+    m_rgba8_stereo_copy_pipeline = g_gfx->CreatePipeline(config);
+    if (!m_rgba8_stereo_copy_pipeline)
+      return false;
+    config.pixel_shader = m_texture_copy_pixel_shader.get();
+    config.framebuffer_state.multiview = 0;
   }
 
   if (m_host_config.backend_palette_conversion)
@@ -1451,6 +1506,25 @@ bool ShaderCache::CompileSharedPipelines()
           return false;
         config.geometry_shader = nullptr;
       }
+      else if (UseMultiviewForEFBCopies())
+      {
+        // No-GS stereo: layered palette conversion targets the multiview render pass of
+        // 2-layer entry framebuffers; the PS samples source layer gl_ViewIndex.
+        auto multiview_shader = g_gfx->CreateShaderFromSource(
+            ShaderStage::Pixel,
+            TextureConversionShaderTiled::GeneratePaletteConversionShader(format, m_api_type,
+                                                                          true),
+            nullptr, fmt::format("Multiview palette conversion pixel shader: {}", format));
+        if (!multiview_shader)
+          return false;
+
+        config.pixel_shader = multiview_shader.get();
+        config.framebuffer_state.multiview = 1;
+        m_layered_palette_conversion_pipelines[i] = g_gfx->CreatePipeline(config);
+        if (!m_layered_palette_conversion_pipelines[i])
+          return false;
+        config.framebuffer_state.multiview = 0;
+      }
     }
   }
 
@@ -1466,22 +1540,26 @@ const AbstractPipeline* ShaderCache::GetPaletteConversionPipeline(TLUTFormat for
 }
 
 const AbstractPipeline* ShaderCache::GetTextureReinterpretPipeline(TextureFormat from_format,
-                                                                   TextureFormat to_format)
+                                                                   TextureFormat to_format,
+                                                                   bool multiview)
 {
   const auto key = std::make_pair(from_format, to_format);
-  const auto [iter, inserted] = m_texture_reinterpret_pipelines.emplace(key, nullptr);
+  auto& pipeline_map =
+      multiview ? m_texture_reinterpret_multiview_pipelines : m_texture_reinterpret_pipelines;
+  const auto [iter, inserted] = pipeline_map.emplace(key, nullptr);
 
   if (!inserted)
     return iter->second.get();
 
   std::string shader_source =
-      FramebufferShaderGen::GenerateTextureReinterpretShader(from_format, to_format);
+      FramebufferShaderGen::GenerateTextureReinterpretShader(from_format, to_format, multiview);
   if (shader_source.empty())
     return nullptr;
 
   std::unique_ptr<AbstractShader> shader = g_gfx->CreateShaderFromSource(
       ShaderStage::Pixel, shader_source, nullptr,
-      fmt::format("Texture reinterpret pixel shader: {} to {}", from_format, to_format));
+      fmt::format("Texture reinterpret pixel shader: {} to {}{}", from_format, to_format,
+                  multiview ? " (multiview)" : ""));
   if (!shader)
     return nullptr;
 
@@ -1494,6 +1572,8 @@ const AbstractPipeline* ShaderCache::GetTextureReinterpretPipeline(TextureFormat
   config.depth_state = RenderState::GetNoDepthTestingDepthState();
   config.blending_state = RenderState::GetNoBlendingBlendState();
   config.framebuffer_state = RenderState::GetRGBA8FramebufferState();
+  if (multiview)
+    config.framebuffer_state.multiview = 1;
   config.usage = AbstractPipelineUsage::Utility;
   iter->second = g_gfx->CreatePipeline(config);
   return iter->second.get();

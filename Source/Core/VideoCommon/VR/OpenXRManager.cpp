@@ -892,6 +892,23 @@ bool OpenXRManager::CreateReferenceSpace()
   XrReferenceSpaceCreateInfo space_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
   space_info.poseInReferenceSpace = {{0.f, 0.f, 0.f, 1.f}, {0.f, 0.f, 0.f}};
 
+#if defined(__APPLE__)
+  // QuestPrimeVR (macOS/OXRSys): match dolphinXR, whose head tracking is proven working against
+  // this runtime. dolphinXR always uses LOCAL space (origin at the initial head position) and
+  // derives the home position from the first actually-located eye midpoints (the !m_home_set
+  // blocks below), instead of forcing STAGE with a fixed home of (0, 1.2, 0). OXRSys reports eye
+  // poses that don't respect the STAGE floor-origin convention, so the fixed home bakes a large
+  // constant head offset into every projection. Android/Quest (STAGE) behavior is unchanged.
+  space_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+  XR_CHECK(xrCreateReferenceSpace(m_session, &space_info, &m_reference_space));
+  m_reference_space_is_stage = false;
+  m_home_set = false;
+  m_home_position = {0.0f, 0.0f, 0.0f};
+  INFO_LOG_FMT(OPENXR, "OpenXR: Using local reference space on macOS; home will be derived from "
+                       "the first located eye positions.");
+  return true;
+#endif
+
   // Prefer stage space so PrimedGun starts from the runtime's play-space origin instead of the
   // first HMD pose seen during boot.
   space_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
@@ -1082,6 +1099,16 @@ bool OpenXRManager::LocateViews()
 
   if (m_recenter_requested.exchange(false, std::memory_order_acq_rel) && view_count >= 2)
   {
+#if defined(__APPLE__)
+    // QuestPrimeVR (macOS/OXRSys): match dolphinXR — recenter re-derives the FULL home position
+    // from the current eye midpoint (LOCAL reference space), not just the height.
+    m_home_position.x = 0.5f * (m_eye_views[0].pose.position.x + m_eye_views[1].pose.position.x);
+    m_home_position.y = 0.5f * (m_eye_views[0].pose.position.y + m_eye_views[1].pose.position.y);
+    m_home_position.z = 0.5f * (m_eye_views[0].pose.position.z + m_eye_views[1].pose.position.z);
+    m_home_set = true;
+    INFO_LOG_FMT(OPENXR, "OpenXR: Recentered home position to ({:.4f},{:.4f},{:.4f})",
+                 m_home_position.x, m_home_position.y, m_home_position.z);
+#else
     const float center_x = 0.5f * (m_eye_views[0].pose.position.x + m_eye_views[1].pose.position.x);
     const float center_z = 0.5f * (m_eye_views[0].pose.position.z + m_eye_views[1].pose.position.z);
     const float old_x = m_home_set ? m_home_position.x : (m_reference_space_is_stage ? 0.0f : center_x);
@@ -1092,6 +1119,7 @@ bool OpenXRManager::LocateViews()
     m_home_set = true;
     INFO_LOG_FMT(OPENXR, "OpenXR: Recentered home height only to ({:.4f},{:.4f},{:.4f})",
                  m_home_position.x, m_home_position.y, m_home_position.z);
+#endif
   }
 
   static uint64_t s_locate_log_counter = 0;
