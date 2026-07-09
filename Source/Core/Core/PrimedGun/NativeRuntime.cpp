@@ -5873,7 +5873,10 @@ bool ApplyScanIndicatorPointerPatch(const Core::CPUThreadGuard& guard)
   const u32 trace_lo = SCAN_RETICLE_TRACE_SCRATCH & 0xffffu;
   const u32 return_addr = patch.address + 4u;
 
-  patch.applied = InstallBranchAfterCaveWrite(
+  // NOTE: the return value feeds the caller's "wrote something" aggregate, which triggers a JIT
+  // icache invalidation — it MUST be "did we write", NOT "is the hook installed". Returning
+  // installed-state here once caused an icache flush EVERY FRAME (game dropped to ~11fps).
+  const bool wrote_install = InstallBranchAfterCaveWrite(
       guard, patch.address, patch.cave,
       {{0x00u, 0x3D800000u | trace_hi},
        {0x04u, 0x618C0000u | trace_lo},
@@ -5882,11 +5885,14 @@ bool ApplyScanIndicatorPointerPatch(const Core::CPUThreadGuard& guard)
        {0x10u, 0x900C0024u},
        {0x14u, patch.original},
        {0x18u, PpcBranch(patch.cave + 0x18u, return_addr)}});
-  if (!patch.applied)
+  if (wrote_install)
   {
-    // InstallBranchAfterCaveWrite returns false both for "nothing to do" (hook + cave already
-    // installed and intact) and for real write failures — verify which, so patch_status stays
-    // truthful (this bookkeeping gap made a healthy hook look permanently broken).
+    patch.applied = true;
+  }
+  else
+  {
+    // False means either "already installed and intact" (benign, every frame) or a real write
+    // failure — verify which, so the patch_status telemetry stays truthful.
     u32 verify = 0;
     patch.applied = TryReadU32(guard, patch.address, &verify) && verify == branch;
   }
@@ -5894,7 +5900,7 @@ bool ApplyScanIndicatorPointerPatch(const Core::CPUThreadGuard& guard)
     log_once("APPLIED", patch.address, patch.original);
   else
     log_once("install-cave-write-FAILED", patch.cave, patch.original);
-  return patch.applied;
+  return wrote_install;
 }
 
 bool ApplyScanReticleTracePatch(const Core::CPUThreadGuard& guard)
