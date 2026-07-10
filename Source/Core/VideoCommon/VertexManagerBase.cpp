@@ -3073,28 +3073,26 @@ void VertexManagerBase::RenderDrawCall(
   geometry_shader_manager.SetConstants(primitive_type);
   // Post-SetConstants stereo state: this is the value the GPU actually draws with
   // (the QPVR_ZSTATE line earlier in Flush reads the PREVIOUS draw's value).
+  // Change-triggered so it stays light enough not to distort frame timing: one line per
+  // transform-group boundary (~6/frame) instead of one per draw (~3200/frame on the map).
   {
-    static const bool s_qpvr_blend_trace2 = [] {
-      const char* env = getenv("QPVR_BLEND_TRACE");
-      return env && env[0] == '2';
-    }();
-    if (s_qpvr_blend_trace2) [[unlikely]]
+    static const bool s_qpvr_sp3_trace = getenv("QPVR_BLEND_TRACE") != nullptr;
+    if (s_qpvr_sp3_trace) [[unlikely]]
     {
-      INFO_LOG_FMT(VIDEO, "QPVR_SP3 seq={} sp3={:.2f} vrscreen=({:.3f},{:.3f},{:.3f},{:.1f}) "
-                          "hp=({:.4f},{:.4f},{:.4f},{:.4f}) dp=({:.5f},{:.5f},{:.4f},{:.3f})",
-                   m_draw_counter + 1, geometry_shader_manager.constants.stereoparams[3],
-                   geometry_shader_manager.constants.vr_screen[0],
-                   geometry_shader_manager.constants.vr_screen[1],
-                   geometry_shader_manager.constants.vr_screen[2],
-                   geometry_shader_manager.constants.vr_screen[3],
-                   geometry_shader_manager.constants.head_locked_params[0],
-                   geometry_shader_manager.constants.head_locked_params[1],
-                   geometry_shader_manager.constants.head_locked_params[2],
-                   geometry_shader_manager.constants.head_locked_params[3],
-                   geometry_shader_manager.constants.depth_params[0],
-                   geometry_shader_manager.constants.depth_params[1],
-                   geometry_shader_manager.constants.depth_params[2],
-                   geometry_shader_manager.constants.depth_params[3]);
+      const auto& c = geometry_shader_manager.constants;
+      static std::array<float, 4> s_last = {1e30f, 0, 0, 0};
+      const std::array<float, 4> now = {c.stereoparams[3], c.vr_screen[2],
+                                        c.head_locked_params[1], c.depth_params[3]};
+      if (now != s_last)
+      {
+        s_last = now;
+        INFO_LOG_FMT(VIDEO, "QPVR_SP3 seq={} sp3={:.2f} vrscreen=({:.3f},{:.3f},{:.3f},{:.1f}) "
+                            "hp=({:.4f},{:.4f},{:.4f},{:.4f}) dp=({:.5f},{:.5f},{:.4f},{:.3f})",
+                     m_draw_counter + 1, c.stereoparams[3], c.vr_screen[0], c.vr_screen[1],
+                     c.vr_screen[2], c.vr_screen[3], c.head_locked_params[0],
+                     c.head_locked_params[1], c.head_locked_params[2], c.head_locked_params[3],
+                     c.depth_params[0], c.depth_params[1], c.depth_params[2], c.depth_params[3]);
+      }
     }
   }
   pixel_shader_manager.SetConstants();

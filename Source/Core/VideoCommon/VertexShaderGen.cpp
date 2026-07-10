@@ -16,7 +16,7 @@
 
 // QuestPrimeVR: bump this whenever the generated vertex-shader GLSL (esp. the multiview VR block)
 // changes, so the on-disk specialized-shader cache is invalidated and shaders regenerate.
-static constexpr u32 VERTEX_SHADER_CODE_VERSION = 12;
+static constexpr u32 VERTEX_SHADER_CODE_VERSION = 13;
 
 VertexShaderUid GetVertexShaderUid()
 {
@@ -803,6 +803,9 @@ ShaderCode GenerateVertexShaderCode(APIType api_type, const ShaderHostConfig& ho
       (api_type == APIType::OpenGL || api_type == APIType::Vulkan))
   {
     out.Write("\tbool vr_pos_replaced = false;\n");
+    // Near-plane clip distance for head-locked perspective HUD (3D hologram) geometry —
+    // 1.0 = keep (no clipping) for every other branch.
+    out.Write("\tfloat vr_clip_dist = 1.0;\n");
     out.Write("\t{{\n");
     out.Write("\tuint eye = gl_ViewIndex;\n");
     out.Write("\tbool right_eye = eye != 0u;\n");
@@ -840,13 +843,34 @@ ShaderCode GenerateVertexShaderCode(APIType api_type, const ShaderHostConfig& ho
     out.Write("\t\t\tvertex_output.position.y * " I_HEAD_PARAMS ".z + " I_VR_SCREEN ".y,\n");
     out.Write("\t\t\tvertex_output.position.z * " I_HEAD_PARAMS ".w + " I_VR_SCREEN ".z,\n");
     out.Write("\t\t\t1.0);\n");
-    out.Write("\t\thudPos.z = min(hudPos.z, -0.1 * max(" I_VR_DEPTH ".w, 0.001));\n");
-    out.Write("\t\tfloat4 row0 = right_eye ? " I_HEAD_PROJ "[2] : " I_HEAD_PROJ "[0];\n");
-    out.Write("\t\tfloat4 row1 = right_eye ? " I_HEAD_PROJ "[3] : " I_HEAD_PROJ "[1];\n");
-    out.Write("\t\to.pos.x = dot(row0, hudPos);\n");
-    out.Write("\t\to.pos.y = dot(row1, hudPos);\n");
-    out.Write("\t\to.pos.w = max(-hudPos.z, 0.001);\n");
-    out.Write("\t\to.pos.z = hud_game_ndc_z * o.pos.w;\n");
+    if (host_config.backend_depth_clamp)
+    {
+      // QuestPrimeVR: hologram content nearer than the head-space near margin must be
+      // CLIPPED, not position-clamped. The GS-era min() clamp flattens crossing vertices
+      // onto the near plane; the subsequent divide by a tiny |w| then stretches their
+      // triangles across the screen, and the map's idle animation moving vertices back
+      // and forth across the threshold makes the whole near mesh strobe (pause map close
+      // rooms when zoomed). Keep the EXACT homogeneous position (w may go <= 0 for
+      // behind-the-head vertices — clipping interpolates correctly in clip space) and cut
+      // via gl_ClipDistance at the same margin instead.
+      out.Write("\t\tvr_clip_dist = -hudPos.z - 0.1 * max(" I_VR_DEPTH ".w, 0.001);\n");
+      out.Write("\t\tfloat4 row0 = right_eye ? " I_HEAD_PROJ "[2] : " I_HEAD_PROJ "[0];\n");
+      out.Write("\t\tfloat4 row1 = right_eye ? " I_HEAD_PROJ "[3] : " I_HEAD_PROJ "[1];\n");
+      out.Write("\t\to.pos.x = dot(row0, hudPos);\n");
+      out.Write("\t\to.pos.y = dot(row1, hudPos);\n");
+      out.Write("\t\to.pos.w = -hudPos.z;\n");
+      out.Write("\t\to.pos.z = hud_game_ndc_z * o.pos.w;\n");
+    }
+    else
+    {
+      out.Write("\t\thudPos.z = min(hudPos.z, -0.1 * max(" I_VR_DEPTH ".w, 0.001));\n");
+      out.Write("\t\tfloat4 row0 = right_eye ? " I_HEAD_PROJ "[2] : " I_HEAD_PROJ "[0];\n");
+      out.Write("\t\tfloat4 row1 = right_eye ? " I_HEAD_PROJ "[3] : " I_HEAD_PROJ "[1];\n");
+      out.Write("\t\to.pos.x = dot(row0, hudPos);\n");
+      out.Write("\t\to.pos.y = dot(row1, hudPos);\n");
+      out.Write("\t\to.pos.w = max(-hudPos.z, 0.001);\n");
+      out.Write("\t\to.pos.z = hud_game_ndc_z * o.pos.w;\n");
+    }
     if (!host_config.backend_clip_control)
       out.Write("\t\to.pos.z = o.pos.z * 2.0 - o.pos.w;\n");
     out.Write("\t\to.pos.xy *= sign(" I_VR_PIXELCENTER ".xy * float2(1.0, -1.0));\n");
@@ -995,7 +1019,7 @@ ShaderCode GenerateVertexShaderCode(APIType api_type, const ShaderHostConfig& ho
         (api_type == APIType::OpenGL || api_type == APIType::Vulkan))
     {
       out.Write("if (vr_pos_replaced) {{\n"
-                "  clipDist0 = 1.0;\n"
+                "  clipDist0 = vr_clip_dist;\n"
                 "  clipDist1 = 1.0;\n"
                 "}}\n");
     }
