@@ -205,9 +205,16 @@ void AssignVSOutputMembers(ShaderCode& object, std::string_view a, std::string_v
 void GenerateLineOffset(ShaderCode& object, std::string_view indent0, std::string_view indent1,
                         std::string_view pos_a, std::string_view pos_b, std::string_view sign);
 
-void GenerateVSLineExpansion(ShaderCode& object, std::string_view indent, u32 texgens);
+// defer_position_apply (QuestPrimeVR): instead of offsetting o.pos.xy in place, store the
+// expansion offset in a caller-declared `float2 vs_expand_offset` so it can be applied AFTER
+// the multiview VR block replaces o.pos — matching the GS order on Quest (VR projection
+// first, line/point offset second). Applying before lets the VR branches overwrite o.pos.xy
+// from the unexpanded vertex, collapsing lines/points to zero width (invisible map wireframe).
+void GenerateVSLineExpansion(ShaderCode& object, std::string_view indent, u32 texgens,
+                             bool defer_position_apply = false);
 
-void GenerateVSPointExpansion(ShaderCode& object, std::string_view indent, u32 texgens);
+void GenerateVSPointExpansion(ShaderCode& object, std::string_view indent, u32 texgens,
+                              bool defer_position_apply = false);
 
 // We use the flag "centroid" to fix some MSAA rendering bugs. With MSAA, the
 // pixel shader will be executed for each pixel which has at least one passed sample.

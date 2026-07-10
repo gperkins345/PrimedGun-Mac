@@ -568,6 +568,15 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
           }
           else
           {
+            static const bool s_qpvr_trace = getenv("QPVR_BLEND_TRACE") != nullptr;
+            if (s_qpvr_trace) [[unlikely]]
+            {
+              INFO_LOG_FMT(VIDEO,
+                           "QPVR_HUD_DEMOTE: perspective-HUD transform invalid, demoting to "
+                           "-2.0 (ref_z={:.4f} shared_z={:.4f} self_center={} outlier={})",
+                           reference_view_z, shared_reference_z, self_center_layer,
+                           depth_outlier);
+            }
             constants.stereoparams[3] = -2.0f;
           }
         }

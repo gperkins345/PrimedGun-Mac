@@ -850,12 +850,16 @@ void LogMetroidPrime1XRayDraw(u32 draw_counter,
       const auto& sig = draw->signature;
       NOTICE_LOG_FMT(VIDEO,
                      "QPVR_DRAW PS={:08x} layer='{}' handling={} proj={} zt={} zupd={} "
-                     "VP({}x{}) ortho(l={} r={} t={} b={}) blend(c={},a={}) (draw #{})",
+                     "VP({}x{}) ortho(l={} r={} t={} b={}) blend(c={},a={}) "
+                     "zrange={:.0f} farz={:.0f} uvdr={} revd={} zfunc={} (draw #{})",
                      ps_hash, draw->profile_layer_name, HandlingToDebugName(handling),
                      sig.perspective ? "persp" : "ortho", sig.ztest, sig.zupdate,
                      sig.viewport_width, sig.viewport_height, sig.ortho_left_x100,
                      sig.ortho_right_x100, sig.ortho_top_x100, sig.ortho_bottom_x100,
-                     sig.blend_color_update, sig.blend_alpha_update, draw_counter);
+                     sig.blend_color_update, sig.blend_alpha_update, xfmem.viewport.zRange,
+                     xfmem.viewport.farZ, VertexShaderManager::UseVertexDepthRange(),
+                     g_backend_info.bSupportsReversedDepthRange,
+                     static_cast<u32>(bpmem.zmode.func.Value()), draw_counter);
     }
   }
 
@@ -1900,6 +1904,17 @@ void VertexManagerBase::Flush()
                            static_cast<u32>(bs.logic_mode.Value()), ds.test_enable.Value(),
                            ds.update_enable.Value(), xfmem.viewport.xOrig, xfmem.viewport.yOrig,
                            xfmem.viewport.wd, xfmem.viewport.ht, copy_stages);
+              // Depth-convention companion line: GX compare func, VR branch selector
+              // (stereoparams.w), game depth range, and whether the vertex-depth-range
+              // path is active — everything needed to reconstruct the backend depth
+              // value a draw writes.
+              INFO_LOG_FMT(VIDEO,
+                           "QPVR_ZSTATE seq={} ps={:08x} zfunc={} sp3={:.2f} zrange={:.0f} "
+                           "farz={:.0f} uvdr={}",
+                           m_draw_counter + 1, ps_hash, static_cast<u32>(ds.func.Value()),
+                           geometry_shader_manager.constants.stereoparams[3],
+                           xfmem.viewport.zRange, xfmem.viewport.farZ,
+                           VertexShaderManager::UseVertexDepthRange());
             }
           }
 
@@ -3056,6 +3071,32 @@ void VertexManagerBase::RenderDrawCall(
 
   // Now we can upload uniforms, as nothing else will override them.
   geometry_shader_manager.SetConstants(primitive_type);
+  // Post-SetConstants stereo state: this is the value the GPU actually draws with
+  // (the QPVR_ZSTATE line earlier in Flush reads the PREVIOUS draw's value).
+  {
+    static const bool s_qpvr_blend_trace2 = [] {
+      const char* env = getenv("QPVR_BLEND_TRACE");
+      return env && env[0] == '2';
+    }();
+    if (s_qpvr_blend_trace2) [[unlikely]]
+    {
+      INFO_LOG_FMT(VIDEO, "QPVR_SP3 seq={} sp3={:.2f} vrscreen=({:.3f},{:.3f},{:.3f},{:.1f}) "
+                          "hp=({:.4f},{:.4f},{:.4f},{:.4f}) dp=({:.5f},{:.5f},{:.4f},{:.3f})",
+                   m_draw_counter + 1, geometry_shader_manager.constants.stereoparams[3],
+                   geometry_shader_manager.constants.vr_screen[0],
+                   geometry_shader_manager.constants.vr_screen[1],
+                   geometry_shader_manager.constants.vr_screen[2],
+                   geometry_shader_manager.constants.vr_screen[3],
+                   geometry_shader_manager.constants.head_locked_params[0],
+                   geometry_shader_manager.constants.head_locked_params[1],
+                   geometry_shader_manager.constants.head_locked_params[2],
+                   geometry_shader_manager.constants.head_locked_params[3],
+                   geometry_shader_manager.constants.depth_params[0],
+                   geometry_shader_manager.constants.depth_params[1],
+                   geometry_shader_manager.constants.depth_params[2],
+                   geometry_shader_manager.constants.depth_params[3]);
+    }
+  }
   pixel_shader_manager.SetConstants();
   if (!custom_pixel_shader_uniforms.empty() &&
       pixel_shader_manager.custom_constants.data() != custom_pixel_shader_uniforms.data())

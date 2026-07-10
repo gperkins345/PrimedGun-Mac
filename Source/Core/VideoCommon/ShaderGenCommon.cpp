@@ -352,7 +352,8 @@ void GenerateLineOffset(ShaderCode& object, std::string_view indent0, std::strin
                fmt::arg("pos_a", pos_a), fmt::arg("pos_b", pos_b), fmt::arg("sign", sign));
 }
 
-void GenerateVSLineExpansion(ShaderCode& object, std::string_view indent, u32 texgens)
+void GenerateVSLineExpansion(ShaderCode& object, std::string_view indent, u32 texgens,
+                             bool defer_position_apply)
 {
   std::string indent1 = std::string(indent) + "  ";
   object.Write("{0}other_pos = float4(dot(" I_PROJECTION "[0], other_pos), dot(" I_PROJECTION
@@ -362,9 +363,20 @@ void GenerateVSLineExpansion(ShaderCode& object, std::string_view indent, u32 te
                "{0}float expand_sign = is_right ? 1.0f : -1.0f;\n",
                indent);
   GenerateLineOffset(object, indent, indent1, "o.pos", "other_pos", "expand_sign * ");
-  object.Write("\n"
-               "{}o.pos.xy += offset * o.pos.w;\n",
-               indent);
+  if (defer_position_apply)
+  {
+    // Quest GS parity: the line offset is applied to the VR-projected position, scaled by the
+    // NEW w — store the (sign-baked) offset and let the caller apply it after the VR block.
+    object.Write("\n"
+                 "{}vs_expand_offset = offset;\n",
+                 indent);
+  }
+  else
+  {
+    object.Write("\n"
+                 "{}o.pos.xy += offset * o.pos.w;\n",
+                 indent);
+  }
   if (texgens > 0)
   {
     object.Write("{}if ((" I_TEXOFFSET "[2] != 0) && is_right) {{\n", indent);
@@ -378,13 +390,23 @@ void GenerateVSLineExpansion(ShaderCode& object, std::string_view indent, u32 te
   }
 }
 
-void GenerateVSPointExpansion(ShaderCode& object, std::string_view indent, u32 texgens)
+void GenerateVSPointExpansion(ShaderCode& object, std::string_view indent, u32 texgens,
+                              bool defer_position_apply)
 {
   object.Write(
       "{0}float2 expand_sign = float2(is_right ? 1.0f : -1.0f, is_bottom ? -1.0f : 1.0f);\n"
-      "{0}float2 offset = expand_sign * " I_LINEPTPARAMS ".ww / " I_LINEPTPARAMS ".xy;\n"
-      "{0}o.pos.xy += offset * o.pos.w;\n",
+      "{0}float2 offset = expand_sign * " I_LINEPTPARAMS ".ww / " I_LINEPTPARAMS ".xy;\n",
       indent);
+  if (defer_position_apply)
+  {
+    // Quest GS parity: the GS bakes the pre-VR w into the point offset (computed from
+    // center.pos.w before the VR projection) and adds it unscaled to the projected corners.
+    object.Write("{0}vs_expand_offset = offset * o.pos.w;\n", indent);
+  }
+  else
+  {
+    object.Write("{0}o.pos.xy += offset * o.pos.w;\n", indent);
+  }
   if (texgens > 0)
   {
     object.Write("{0}if (" I_TEXOFFSET "[3] != 0) {{\n"

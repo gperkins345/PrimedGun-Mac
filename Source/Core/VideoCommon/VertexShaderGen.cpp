@@ -16,7 +16,7 @@
 
 // QuestPrimeVR: bump this whenever the generated vertex-shader GLSL (esp. the multiview VR block)
 // changes, so the on-disk specialized-shader cache is invalidated and shaders regenerate.
-static constexpr u32 VERTEX_SHADER_CODE_VERSION = 11;
+static constexpr u32 VERTEX_SHADER_CODE_VERSION = 12;
 
 VertexShaderUid GetVertexShaderUid()
 {
@@ -740,6 +740,17 @@ ShaderCode GenerateVertexShaderCode(APIType api_type, const ShaderHostConfig& ho
     out.Write("\to.viewPos = vertex_output.position;\n");
   }
 
+  // QuestPrimeVR: under the multiview VR path the VR block below REPLACES o.pos from the
+  // unexpanded vertex position, which would silently discard any line/point expansion applied
+  // here (zero-width lines — Prime's map wireframe vanished this way). Match the Quest GS
+  // order instead: compute the expansion offset now, apply it to the final position after the
+  // VR block (see vs_expand_offset application below).
+  const bool vr_multiview_vs =
+      host_config.vr_stereo && host_config.vk_multiview &&
+      (api_type == APIType::OpenGL || api_type == APIType::Vulkan);
+  if (vr_multiview_vs && uid_data->vs_expand != VSExpand::None)
+    out.Write("float2 vs_expand_offset = float2(0.0, 0.0);\n");
+
   if (uid_data->vs_expand == VSExpand::Line)
   {
     out.Write("bool is_bottom = (gl_VertexID & 2) != 0;\n");
@@ -771,7 +782,7 @@ ShaderCode GenerateVertexShaderCode(APIType api_type, const ShaderHostConfig& ho
 
     // Variable needed by GenerateVSLineExpansion
     out.Write("bool is_right = (gl_VertexID & 1) != 0;\n");
-    GenerateVSLineExpansion(out, "", uid_data->numTexGens);
+    GenerateVSLineExpansion(out, "", uid_data->numTexGens, vr_multiview_vs);
   }
   else if (uid_data->vs_expand == VSExpand::Point)
   {
@@ -779,7 +790,7 @@ ShaderCode GenerateVertexShaderCode(APIType api_type, const ShaderHostConfig& ho
     out.Write("bool is_bottom = (gl_VertexID & 2) != 0;\n");
     out.Write("bool is_right = (gl_VertexID & 1) != 0;\n");
     out.Write("// Point expansion\n");
-    GenerateVSPointExpansion(out, "", uid_data->numTexGens);
+    GenerateVSPointExpansion(out, "", uid_data->numTexGens, vr_multiview_vs);
   }
 
   // QuestPrimeVR: VK_KHR_multiview VR path — replace the projected o.pos with a per-eye HMD
@@ -1047,6 +1058,15 @@ ShaderCode GenerateVertexShaderCode(APIType api_type, const ShaderHostConfig& ho
 
   if (guard_with_vr)
     out.Write("}}\n");
+
+  // QuestPrimeVR: apply the deferred line/point expansion to the FINAL position — after the
+  // VR block possibly replaced o.pos and after the standard fixups for fall-through draws.
+  // This matches the Quest GS, which projects each vertex first and offsets the copies after:
+  // lines scale the offset by the post-projection w, points baked the pre-projection w in.
+  if (guard_with_vr && uid_data->vs_expand == VSExpand::Line)
+    out.Write("o.pos.xy += vs_expand_offset * o.pos.w;\n");
+  else if (guard_with_vr && uid_data->vs_expand == VSExpand::Point)
+    out.Write("o.pos.xy += vs_expand_offset;\n");
 
   if (vertex_rounding && !host_config.vr_stereo)
   {
