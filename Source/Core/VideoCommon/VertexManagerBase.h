@@ -249,6 +249,12 @@ private:
   u32 m_last_efb_copy_draw_counter = 0;
   bool m_metroid_prime1_combat_context_seen = false;
   bool m_metroid_prime1_menu_context_seen = false;
+  // QuestPrimeVR menu-map depth workaround scene latch: the Z-map screen is positively
+  // identified by its thousands of VS-line-expanded hologram wireframe draws (no other scene
+  // has any); latched at end-of-frame so menus (Inventory Samus, item models, Options
+  // outlines) can never match mid-frame the way the context accumulators can.
+  u32 m_qpvr_map_wireframe_draws = 0;
+  bool m_qpvr_map_scene_active = false;
   bool m_metroid_prime1_thermal_context_active = false;
   bool m_metroid_prime1_thermal_context_seen = false;
   bool m_unflushed_efb_copy = false;

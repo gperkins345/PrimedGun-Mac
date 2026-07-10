@@ -2369,13 +2369,25 @@ void VertexManagerBase::Flush()
             // QPVR_NO_MAP_DEPTH_FIX=1 disables for A/B.
             static const bool s_qpvr_no_map_depth_fix =
                 getenv("QPVR_NO_MAP_DEPTH_FIX") != nullptr;
-            if (!s_qpvr_no_map_depth_fix && element_draw &&
+            const bool qpvr_headlocked_hologram_draw =
+                !s_qpvr_no_map_depth_fix && element_draw &&
                 IsMetroidPrime1Profile(element_draw->profile_id) &&
-                !m_metroid_prime1_combat_context_seen && !m_metroid_prime1_menu_context_seen &&
                 handling == ShaderHunter::HandlingType::HeadLocked &&
                 metroid_hydra_hud.perspective_hud && element_draw->signature.perspective &&
                 g_framebuffer_manager &&
-                g_framebuffer_manager->GetEFBFramebufferState().multiview != 0)
+                g_framebuffer_manager->GetEFBFramebufferState().multiview != 0;
+            // Feed the end-of-frame scene latch: only the Z-map screen draws VS-line-expanded
+            // hologram wireframes (thousands of them). Menus (Inventory/Options/LogBook) have
+            // none, so they can never latch — unlike the mid-frame context accumulators, which
+            // leaked the treatment onto draws issued before the menu context was recognized
+            // (half-depth-sorted Samus, and hash-collision skips eating the item models and
+            // the Options outlines).
+            if (qpvr_headlocked_hologram_draw &&
+                m_current_pipeline_config.rasterization_state.primitive == PrimitiveType::Lines)
+            {
+              m_qpvr_map_wireframe_draws++;
+            }
+            if (qpvr_headlocked_hologram_draw && m_qpvr_map_scene_active)
             {
               // Helmet cowl: body (b5058f48, 778b6b35) + its indicator chips (48db1b1b).
               if (ps_hash == 0xb5058f48 || ps_hash == 0x778b6b35 || ps_hash == 0x48db1b1b)
@@ -3075,7 +3087,10 @@ void VertexManagerBase::OnEndFrame()
     static const bool s_qpvr_trace = getenv("QPVR_BLEND_TRACE") != nullptr;
     if (s_qpvr_trace) [[unlikely]]
     {
-      INFO_LOG_FMT(VIDEO, "QPVR_FRAME idx={} draws={}", s_qpvr_frame_index, m_draw_counter);
+      INFO_LOG_FMT(VIDEO, "QPVR_FRAME idx={} draws={} mapwf={} mapactive={} menu={} combat={}",
+                   s_qpvr_frame_index, m_draw_counter, m_qpvr_map_wireframe_draws,
+                   m_qpvr_map_scene_active, m_metroid_prime1_menu_context_seen,
+                   m_metroid_prime1_combat_context_seen);
       // Head/eye projection rows as of frame end — the VR-runtime-fed uniforms the per-draw
       // traces do NOT cover; alternating values here mean the XR pose/projection is unstable.
       const auto& gc = Core::System::GetInstance().GetGeometryShaderManager().constants;
@@ -3090,6 +3105,15 @@ void VertexManagerBase::OnEndFrame()
     }
     s_qpvr_frame_index++;
   }
+#ifdef __APPLE__
+  // QuestPrimeVR: latch the map-scene flag for next frame — a healthy sample of wireframe
+  // line draws with no combat/menu context this frame means the Z-map screen is up. One
+  // transition frame on entry/exit runs with the stale latch; visually negligible.
+  m_qpvr_map_scene_active = m_qpvr_map_wireframe_draws > 32 &&
+                            !m_metroid_prime1_combat_context_seen &&
+                            !m_metroid_prime1_menu_context_seen;
+  m_qpvr_map_wireframe_draws = 0;
+#endif
   auto& system = Core::System::GetInstance();
   system.GetGeometryShaderManager().vr_ortho_draw_counter = 0;
   m_draw_counter = 0;
