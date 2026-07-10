@@ -901,17 +901,44 @@ void Presenter::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
                    kForceOpenXRLayer0ToBothEyes);
       s_first_openxr_render = false;
     }
-    // Mirror view on the desktop window (side-by-side, left eye | right eye).
-    // This is purely for debugging/monitoring — the HMD receives full-resolution images below.
+    // Mirror view on the desktop window — the HMD receives full-resolution images below.
+    // Default: RIGHT eye only, aspect-correct within the window (clean for screen recording).
+    // QPVR_MIRROR=sbs restores the side-by-side debug view; QPVR_MIRROR=left mirrors the
+    // left eye instead.
+    static const char* s_mirror_env = getenv("QPVR_MIRROR");
+    static const std::string s_mirror_mode = s_mirror_env ? s_mirror_env : "right";
     if (cinematic_screen_active)
     {
       m_post_processor->BlitFromTexture(target_rc, source_rc, source_texture, 0);
     }
-    else
+    else if (s_mirror_mode == "sbs")
     {
       const auto [left_rc, right_rc] = ConvertStereoRectangle(target_rc);
       m_post_processor->BlitFromTexture(left_rc, source_rc, source_texture, 0);
       m_post_processor->BlitFromTexture(right_rc, source_rc, source_texture, 1);
+    }
+    else
+    {
+      const int mirror_layer = (s_mirror_mode == "left") ? 0 : 1;
+      // Fit the (portrait) eye image into the window preserving its aspect ratio.
+      MathUtil::Rectangle<int> mirror_rc = target_rc;
+      const float src_aspect =
+          static_cast<float>(source_rc.GetWidth()) / static_cast<float>(source_rc.GetHeight());
+      const float dst_aspect =
+          static_cast<float>(target_rc.GetWidth()) / static_cast<float>(target_rc.GetHeight());
+      if (dst_aspect > src_aspect)
+      {
+        const int w = static_cast<int>(target_rc.GetHeight() * src_aspect);
+        const int x = target_rc.left + (target_rc.GetWidth() - w) / 2;
+        mirror_rc = MathUtil::Rectangle<int>(x, target_rc.top, x + w, target_rc.bottom);
+      }
+      else if (dst_aspect < src_aspect)
+      {
+        const int h = static_cast<int>(target_rc.GetWidth() / src_aspect);
+        const int y = target_rc.top + (target_rc.GetHeight() - h) / 2;
+        mirror_rc = MathUtil::Rectangle<int>(target_rc.left, y, target_rc.right, y + h);
+      }
+      m_post_processor->BlitFromTexture(mirror_rc, source_rc, source_texture, mirror_layer);
     }
 
     // Blit each eye layer into its dedicated OpenXR swapchain image.
