@@ -3107,11 +3107,13 @@ void VertexManagerBase::OnEndFrame()
   }
 #ifdef __APPLE__
   // QuestPrimeVR: latch the map-scene flag for next frame — a healthy sample of wireframe
-  // line draws with no combat/menu context this frame means the Z-map screen is up. One
-  // transition frame on entry/exit runs with the stale latch; visually negligible.
-  m_qpvr_map_scene_active = m_qpvr_map_wireframe_draws > 32 &&
-                            !m_metroid_prime1_combat_context_seen &&
-                            !m_metroid_prime1_menu_context_seen;
+  // line draws on the perspective-HUD path means the Z-map screen is up (menus have ZERO;
+  // measured). Deliberately NOT gated on the menu-context flag: map-screen elements can
+  // classify as Map*/MapLegend (menu-context layers) depending on map state, which silently
+  // blocked the latch and brought the flicker back. The combat flag stays as the gameplay
+  // guard. One transition frame on entry/exit runs with the stale latch; negligible.
+  m_qpvr_map_scene_active =
+      m_qpvr_map_wireframe_draws > 32 && !m_metroid_prime1_combat_context_seen;
   m_qpvr_map_wireframe_draws = 0;
 #endif
   auto& system = Core::System::GetInstance();
