@@ -25,6 +25,7 @@ std::string GenerateFormatConversionShader(EFBReinterpretType convtype, u32 samp
 std::string GenerateTextureReinterpretShader(TextureFormat from_format, TextureFormat to_format,
                                              bool multiview = false);
 std::string GenerateEFBRestorePixelShader();
+std::string GenerateMultiviewDepthRepaintPixelShader();
 std::string GenerateImGuiVertexShader();
 std::string GenerateImGuiPixelShader(bool linear_space_output = false);
 

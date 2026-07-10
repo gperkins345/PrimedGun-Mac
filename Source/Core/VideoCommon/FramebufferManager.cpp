@@ -703,6 +703,43 @@ bool FramebufferManager::CompileReadbackPipelines()
   return true;
 }
 
+AbstractPipeline* FramebufferManager::GetMultiviewDepthRepaintPipeline()
+{
+  if (m_multiview_depth_repaint_pipeline || m_multiview_depth_repaint_failed)
+    return m_multiview_depth_repaint_pipeline.get();
+
+  // Only meaningful for a multiview EFB; treat as unavailable otherwise.
+  if (GetEFBFramebufferState().multiview == 0)
+  {
+    m_multiview_depth_repaint_failed = true;
+    return nullptr;
+  }
+
+  auto repaint_shader = g_gfx->CreateShaderFromSource(
+      ShaderStage::Pixel, FramebufferShaderGen::GenerateMultiviewDepthRepaintPixelShader(),
+      nullptr, "Multiview depth repaint pixel shader");
+  if (!repaint_shader)
+  {
+    m_multiview_depth_repaint_failed = true;
+    return nullptr;
+  }
+
+  AbstractPipelineConfig config = {};
+  config.vertex_shader = g_shader_cache->GetScreenQuadVertexShader();
+  config.pixel_shader = repaint_shader.get();
+  config.rasterization_state = RenderState::GetNoCullRasterizationState(PrimitiveType::Triangles);
+  config.depth_state = RenderState::GetAlwaysWriteDepthState();
+  config.blending_state = RenderState::GetNoBlendingBlendState();
+  config.blending_state.color_update = false;
+  config.blending_state.alpha_update = false;
+  config.framebuffer_state = GetEFBFramebufferState();
+  config.framebuffer_state.per_sample_shading = false;
+  config.usage = AbstractPipelineUsage::Utility;
+  m_multiview_depth_repaint_pipeline = g_gfx->CreatePipeline(config);
+  m_multiview_depth_repaint_failed = !m_multiview_depth_repaint_pipeline;
+  return m_multiview_depth_repaint_pipeline.get();
+}
+
 void FramebufferManager::DestroyReadbackPipelines()
 {
   m_efb_depth_resolve_pipeline.reset();

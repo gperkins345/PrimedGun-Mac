@@ -70,6 +70,11 @@ public:
   bool IsEFBStereo() const { return m_efb_color_texture->GetLayers() > 1; }
   FramebufferState GetEFBFramebufferState() const;
 
+  // QuestPrimeVR: pipeline that repaints the multiview EFB depth attachment from a snapshot
+  // texture (Apple depth shield). Returns nullptr when unavailable (non-multiview EFB or
+  // creation failure).
+  AbstractPipeline* GetMultiviewDepthRepaintPipeline();
+
   // EFB coordinate conversion functions
   // Use this to convert a whole native EFB rect to backbuffer coordinates
   MathUtil::Rectangle<int> ConvertEFBRectangle(const MathUtil::Rectangle<int>& rc) const;
@@ -212,6 +217,11 @@ protected:
 
   // Pipeline for restoring the contents of the EFB from a save state
   std::unique_ptr<AbstractPipeline> m_efb_restore_pipeline;
+
+  // QuestPrimeVR: fullscreen depth-repaint pipeline for the Apple multiview depth shield
+  // (created lazily; see GetMultiviewDepthRepaintPipeline).
+  std::unique_ptr<AbstractPipeline> m_multiview_depth_repaint_pipeline;
+  bool m_multiview_depth_repaint_failed = false;
 
   // Format conversion shaders
   std::array<std::unique_ptr<AbstractPipeline>, 6> m_format_conversion_pipelines;

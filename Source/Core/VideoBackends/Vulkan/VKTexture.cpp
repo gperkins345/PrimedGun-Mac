@@ -1171,9 +1171,11 @@ CreateFramebufferInternal(VKTexture* color_attachment, VKTexture* depth_attachme
     return nullptr;
   }
 
-  return std::make_unique<VKFramebuffer>(
+  auto framebuffer = std::make_unique<VKFramebuffer>(
       color_attachment, depth_attachment, std::move(additional_color_attachments), width, height,
       layers, samples, fb, load_render_pass, discard_render_pass, clear_render_pass);
+  framebuffer->SetMultiview(use_multiview);
+  return framebuffer;
 }
 
 std::unique_ptr<VKFramebuffer>

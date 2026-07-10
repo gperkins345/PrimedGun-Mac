@@ -77,7 +77,27 @@ public:
   // Returns true if the specified rectangle is inside the current render area (used for clears).
   bool IsWithinRenderArea(s32 x, s32 y, u32 width, u32 height) const;
 
+  // QuestPrimeVR depth shield: callers that modify the depth attachment without going through
+  // Bind() (e.g. vkCmdClearAttachments) must invalidate the depth snapshot.
+  void MarkMultiviewDepthDirty() { m_depth_dirty = true; }
+
 private:
+  // QuestPrimeVR "depth shield" (EXPERIMENTAL, opt-in via QPVR_DEPTH_SHIELD=1): on MoltenVK
+  // the multiview EFB depth attachment intermittently loses content around mid-frame render
+  // pass interruptions (Apple driver defect: even in-segment draw-written depth can vanish;
+  // the transfer path reads correctly). Snapshot depth at pass end (transfer), repaint it as
+  // the first draw of each resumed pass (fragment-depth write). Reduces worst-case corruption
+  // ~80%->~10-30% per interruption under stress, but in clean conditions the extra traffic
+  // shifts which state wins the race — default OFF until the interaction is understood.
+  void SaveMultiviewDepth();
+  void RestoreMultiviewDepth();
+  bool PrepareMultiviewDepthRepaint();
+  void ExecuteMultiviewDepthRepaint();
+  std::unique_ptr<VKTexture> m_depth_shadow;
+  VKTexture* m_depth_shadow_source = nullptr;
+  bool m_depth_shadow_valid = false;
+  bool m_depth_dirty = true;
+
   // Number of descriptor sets for game draws.
   enum
   {

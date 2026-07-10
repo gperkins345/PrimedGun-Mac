@@ -661,6 +661,24 @@ std::string GenerateTextureReinterpretShader(TextureFormat from_format, TextureF
   return code.GetBuffer();
 }
 
+std::string GenerateMultiviewDepthRepaintPixelShader()
+{
+  // QuestPrimeVR: repaints the multiview EFB depth attachment from a snapshot texture inside
+  // a resumed render pass (Apple depth-shield - see Vulkan StateTracker). Per-eye: the view
+  // index selects the snapshot layer. Color output is declared but masked off by the pipeline.
+  ShaderCode code;
+  code.Write("#extension GL_EXT_multiview : require\n");
+  EmitSamplerDeclarations(code, 0, 1, false);
+  EmitPixelMainDeclaration(code, 1, 0, "float4", "");
+  code.Write("{{\n"
+             "  ocol0 = float4(0.0, 0.0, 0.0, 0.0);\n"
+             "  gl_FragDepth = ");
+  EmitSampleTexture(code, 0, "float3(v_tex0.xy, float(gl_ViewIndex))");
+  code.Write(".r;\n"
+             "}}\n");
+  return code.GetBuffer();
+}
+
 std::string GenerateEFBRestorePixelShader()
 {
   ShaderCode code;

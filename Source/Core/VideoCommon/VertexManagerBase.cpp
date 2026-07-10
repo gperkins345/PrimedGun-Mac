@@ -817,6 +817,28 @@ bool IsMetroidPrime1XRayHUDDraw(const std::optional<ElementsGroupManager::DrawRe
          draw->profile_layer == MetroidElementLayer::XRayHUD;
 }
 
+// QuestPrimeVR: frame-index gate for the heavy per-draw traces (QPVR_BLEND_TRACE et al).
+// QPVR_TRACE_FROM=<frame> [QPVR_TRACE_TO=<frame>] bound the frames logged so a long scripted
+// run stays a few hundred MB instead of gigabytes; without QPVR_TRACE_FROM the gate is open.
+// The index ticks in OnEndFrame and is logged per frame as QPVR_FRAME when tracing.
+static u32 s_qpvr_frame_index = 0;
+static bool QpvrTraceFrameActive()
+{
+  static const long s_from = [] {
+    const char* e = getenv("QPVR_TRACE_FROM");
+    return e ? atol(e) : -1L;
+  }();
+  static const long s_to = [] {
+    const char* e = getenv("QPVR_TRACE_TO");
+    return e ? atol(e) : -1L;
+  }();
+  if (s_from < 0)
+    return true;
+  if (static_cast<long>(s_qpvr_frame_index) < s_from)
+    return false;
+  return s_to < 0 || static_cast<long>(s_qpvr_frame_index) <= s_to;
+}
+
 bool ShouldLogMetroidPrime1XRayDraw(const std::optional<ElementsGroupManager::DrawRecord>& draw)
 {
   if (!draw)
@@ -921,6 +943,26 @@ void LogPrimedGunElementHandling(u32 draw_counter,
                                   u64 gs_hash, const std::array<u64, 8>& texture_hashes,
                                   int forced_texture_layer, float stereo_override)
 {
+  // QuestPrimeVR: QPVR_PG_LOG=2 logs EVERY draw's classified layer + handling (no dedup)
+  // within the QPVR_TRACE_FROM/TO window, plus the game's posnormal ref-z, so per-frame
+  // classification or game-transform flips can be diffed between adjacent frames.
+  static const char* s_qpvr_pg_log = getenv("QPVR_PG_LOG");
+  if (s_qpvr_pg_log && s_qpvr_pg_log[0] == '2' && QpvrTraceFrameActive()) [[unlikely]]
+  {
+    const auto& pnm =
+        Core::System::GetInstance().GetVertexShaderManager().constants.posnormalmatrix;
+    INFO_LOG_FMT(VIDEO,
+                 "QPVR_CLS seq={} ps={:08x} layer='{}' handling={} ovr={:.2f} "
+                 "refm=({:.5f},{:.5f},{:.5f},{:.5f},{:.5f},{:.5f})",
+                 draw_counter + 1, static_cast<u32>(ps_hash),
+                 draw ? draw->profile_layer_name : std::string("none"),
+                 HandlingToDebugName(handling),
+                 std::isnan(stereo_override) ? 999.0f : stereo_override,
+                 static_cast<float>(pnm[0][0]), static_cast<float>(pnm[0][3]),
+                 static_cast<float>(pnm[1][1]), static_cast<float>(pnm[1][3]),
+                 static_cast<float>(pnm[2][2]), static_cast<float>(pnm[2][3]));
+  }
+
   if (!ENABLE_PRIMEDGUN_VIDEO_DEBUG_LOGGING)
     return;
 
@@ -1809,7 +1851,7 @@ void VertexManagerBase::Flush()
               hunter_skip = true;
           }
 
-          if (qpvr_blend_trace) [[unlikely]]
+          if (qpvr_blend_trace && QpvrTraceFrameActive()) [[unlikely]]
           {
             // On the first draw of each frame (after the game's end-of-frame clear), probe
             // EFB depth+color inside the minimap-box rect vs. a control point, to test the
@@ -2987,6 +3029,27 @@ void VertexManagerBase::OnEndFrame()
   ElementsGroupManager::GetInstance().OnFrameEnd();
   TextureElementManager::GetInstance().OnFrameEnd();
   HideObjectEngine::Engine::GetInstance().OnFrameEnd();
+  // QuestPrimeVR: frame boundary marker for the frame-gated traces — lets a log segment be
+  // matched to a dumped frame and gives the draw count per frame at one line per frame.
+  {
+    static const bool s_qpvr_trace = getenv("QPVR_BLEND_TRACE") != nullptr;
+    if (s_qpvr_trace) [[unlikely]]
+    {
+      INFO_LOG_FMT(VIDEO, "QPVR_FRAME idx={} draws={}", s_qpvr_frame_index, m_draw_counter);
+      // Head/eye projection rows as of frame end — the VR-runtime-fed uniforms the per-draw
+      // traces do NOT cover; alternating values here mean the XR pose/projection is unstable.
+      const auto& gc = Core::System::GetInstance().GetGeometryShaderManager().constants;
+      INFO_LOG_FMT(VIDEO,
+                   "QPVR_XRMAT hp0=({:.5f},{:.5f},{:.5f},{:.5f}) hp1=({:.5f},{:.5f},{:.5f},{:.5f}) "
+                   "ep0=({:.5f},{:.5f},{:.5f},{:.5f}) ez0=({:.5f},{:.5f},{:.5f},{:.5f})",
+                   gc.head_projection[0][0], gc.head_projection[0][1], gc.head_projection[0][2],
+                   gc.head_projection[0][3], gc.head_projection[1][0], gc.head_projection[1][1],
+                   gc.head_projection[1][2], gc.head_projection[1][3], gc.eye_projection[0][0],
+                   gc.eye_projection[0][1], gc.eye_projection[0][2], gc.eye_projection[0][3],
+                   gc.eye_z_row[0][0], gc.eye_z_row[0][1], gc.eye_z_row[0][2], gc.eye_z_row[0][3]);
+    }
+    s_qpvr_frame_index++;
+  }
   auto& system = Core::System::GetInstance();
   system.GetGeometryShaderManager().vr_ortho_draw_counter = 0;
   m_draw_counter = 0;
@@ -3077,7 +3140,7 @@ void VertexManagerBase::RenderDrawCall(
   // transform-group boundary (~6/frame) instead of one per draw (~3200/frame on the map).
   {
     static const bool s_qpvr_sp3_trace = getenv("QPVR_BLEND_TRACE") != nullptr;
-    if (s_qpvr_sp3_trace) [[unlikely]]
+    if (s_qpvr_sp3_trace && QpvrTraceFrameActive()) [[unlikely]]
     {
       const auto& c = geometry_shader_manager.constants;
       static std::array<float, 4> s_last = {1e30f, 0, 0, 0};

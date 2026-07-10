@@ -147,6 +147,10 @@ public:
   VkRenderPass GetDiscardRenderPass() const { return m_discard_render_pass; }
   VkRenderPass GetClearRenderPass() const { return m_clear_render_pass; }
 
+  // QuestPrimeVR: true when this framebuffer uses a VK_KHR_multiview render pass (VR EFB).
+  bool IsMultiview() const { return m_multiview; }
+  void SetMultiview(bool multiview) { m_multiview = multiview; }
+
   void Unbind();
   void TransitionForRender();
   void PrepareForRenderPass();
@@ -170,6 +174,7 @@ protected:
   VkRenderPass m_load_render_pass;
   VkRenderPass m_discard_render_pass;
   VkRenderPass m_clear_render_pass;
+  bool m_multiview = false;
 };
 
 }  // namespace Vulkan

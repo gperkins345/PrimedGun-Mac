@@ -250,6 +250,7 @@ void VKGfx::ClearRegion(const MathUtil::Rectangle<int>& target_rc, bool color_en
       vkCmdClearAttachments(g_command_buffer_mgr->GetCurrentCommandBuffer(),
                             static_cast<uint32_t>(clear_attachments.size()),
                             clear_attachments.data(), 1, &vk_rect);
+      StateTracker::GetInstance()->MarkMultiviewDepthDirty();
     }
   }
 

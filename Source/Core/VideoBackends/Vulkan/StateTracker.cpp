@@ -13,6 +13,8 @@
 #include "VideoBackends/Vulkan/VKTexture.h"
 #include "VideoBackends/Vulkan/VulkanContext.h"
 #include "VideoCommon/Constants.h"
+#include "VideoCommon/FramebufferManager.h"
+#include "VideoCommon/RenderState.h"
 
 namespace Vulkan
 {
@@ -285,6 +287,12 @@ void StateTracker::BeginRenderPass()
   if (InRenderPass())
     return;
 
+  // QuestPrimeVR depth shield: repaint the depth attachment from the snapshot as the first
+  // draw of the resumed pass — the attachment LOAD itself is unreliable on this path (it
+  // intermittently yields zeros regardless of what canonical memory holds), so no segment
+  // may depend on it. The snapshot transition must be recorded outside the pass.
+  const bool repaint_depth = PrepareMultiviewDepthRepaint();
+
   m_current_render_pass = m_framebuffer->GetLoadRenderPass();
   m_framebuffer_render_area = m_framebuffer->GetRect();
   m_framebuffer->PrepareForRenderPass();
@@ -299,12 +307,19 @@ void StateTracker::BeginRenderPass()
 
   vkCmdBeginRenderPass(g_command_buffer_mgr->GetCurrentCommandBuffer(), &begin_info,
                        VK_SUBPASS_CONTENTS_INLINE);
+
+  if (repaint_depth)
+    ExecuteMultiviewDepthRepaint();
 }
 
 void StateTracker::BeginDiscardRenderPass()
 {
   if (InRenderPass())
     return;
+
+  // Contents are being discarded — drop any depth snapshot rather than restoring it.
+  m_depth_shadow_valid = false;
+  m_depth_dirty = true;
 
   m_current_render_pass = m_framebuffer->GetDiscardRenderPass();
   m_framebuffer_render_area = m_framebuffer->GetRect();
@@ -328,12 +343,188 @@ void StateTracker::EndRenderPass()
 
   vkCmdEndRenderPass(g_command_buffer_mgr->GetCurrentCommandBuffer());
   m_current_render_pass = VK_NULL_HANDLE;
+
+  SaveMultiviewDepth();
+}
+
+// QuestPrimeVR depth shield — see StateTracker.h. Verified on the map-screen repro: the
+// multiview EFB depth attachment intermittently loads a STALE version (the previous clear)
+// when the render pass is resumed after a mid-frame interruption, while transfer reads of
+// the same texture always see the stored value. MoltenVK's Metal load/store actions were
+// confirmed correct (Load/Store every pass), the texture is hazard-tracked, Metal API
+// validation is clean, and neither explicit Vulkan barriers, subpass dependencies, nor
+// blit-encoder content re-optimization help — so route the depth contents around the
+// broken attachment store->load path via the transfer path instead.
+void StateTracker::SaveMultiviewDepth()
+{
+#ifdef __APPLE__
+  // OPT-IN (QPVR_DEPTH_SHIELD=1): in clean conditions the shield's own copies/repaints shift
+  // which depth state wins the race without eliminating the underlying loss — the steady state
+  // inverted to the broken one in testing. Kept for experimentation only.
+  static const bool s_shield_on = getenv("QPVR_DEPTH_SHIELD") != nullptr;
+  if (!s_shield_on || !m_framebuffer || !m_framebuffer->IsMultiview())
+    return;
+  VKTexture* depth = static_cast<VKTexture*>(m_framebuffer->GetDepthAttachment());
+  if (!depth)
+    return;
+  if (!m_depth_dirty && m_depth_shadow_valid && m_depth_shadow_source == depth)
+    return;
+
+  if (!m_depth_shadow || m_depth_shadow->GetWidth() != depth->GetWidth() ||
+      m_depth_shadow->GetHeight() != depth->GetHeight() ||
+      m_depth_shadow->GetLayers() != depth->GetLayers() ||
+      m_depth_shadow->GetFormat() != depth->GetFormat())
+  {
+    const TextureConfig cfg(depth->GetWidth(), depth->GetHeight(), 1, depth->GetLayers(), 1,
+                            depth->GetFormat(), 0, AbstractTextureType::Texture_2DArray);
+    m_depth_shadow = VKTexture::Create(cfg, "QPVR multiview depth shadow");
+    m_depth_shadow_valid = false;
+    if (!m_depth_shadow)
+      return;
+  }
+
+  static const bool s_shield_log = getenv("QPVR_SHIELD_LOG") != nullptr;
+  if (s_shield_log) [[unlikely]]
+  {
+    static u32 s_save_count = 0;
+    if ((++s_save_count % 100) == 1)
+      INFO_LOG_FMT(VIDEO, "QPVR_SHIELD save n={}", s_save_count);
+  }
+  VkCommandBuffer cb = g_command_buffer_mgr->GetCurrentCommandBuffer();
+  depth->TransitionToLayout(cb, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  m_depth_shadow->TransitionToLayout(cb, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+  const VkImageAspectFlags aspect = VKTexture::GetImageAspectForFormat(depth->GetFormat());
+  const VkImageCopy copy = {{aspect, 0, 0, depth->GetLayers()},
+                            {0, 0, 0},
+                            {aspect, 0, 0, depth->GetLayers()},
+                            {0, 0, 0},
+                            {depth->GetWidth(), depth->GetHeight(), 1}};
+  vkCmdCopyImage(cb, depth->GetImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                 m_depth_shadow->GetImage(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+  m_depth_shadow_valid = true;
+  m_depth_shadow_source = depth;
+  m_depth_dirty = false;
+  // Attachment layouts are restored by PrepareForRenderPass() at the next pass begin.
+#endif
+}
+
+bool StateTracker::PrepareMultiviewDepthRepaint()
+{
+#ifdef __APPLE__
+  if (!m_depth_shadow_valid || !m_framebuffer || !m_framebuffer->IsMultiview() ||
+      !g_framebuffer_manager)
+  {
+    return false;
+  }
+  VKTexture* depth = static_cast<VKTexture*>(m_framebuffer->GetDepthAttachment());
+  if (!depth || depth != m_depth_shadow_source)
+    return false;
+  // The repaint draw binds the utility pipeline layout — its uniform buffer binding must be
+  // valid (any prior utility draw sets it; bail out in the pathological first-use case).
+  if (m_bindings.utility_ubo_binding.buffer == VK_NULL_HANDLE)
+    return false;
+  if (!g_framebuffer_manager->GetMultiviewDepthRepaintPipeline())
+    return false;
+  // Sampled by the repaint draw — must be in the shader-read layout before the pass begins.
+  m_depth_shadow->TransitionToLayout(g_command_buffer_mgr->GetCurrentCommandBuffer(),
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  return true;
+#else
+  return false;
+#endif
+}
+
+void StateTracker::ExecuteMultiviewDepthRepaint()
+{
+#ifdef __APPLE__
+  const VKPipeline* repaint_pipeline =
+      static_cast<const VKPipeline*>(g_framebuffer_manager->GetMultiviewDepthRepaintPipeline());
+
+  // Save the state the repaint draw clobbers; the setters re-flag whatever differs on
+  // restore, and the outer Bind() re-records those after this returns.
+  const VKPipeline* saved_pipeline = m_pipeline;
+  const VkViewport saved_viewport = m_viewport;
+  const VkRect2D saved_scissor = m_scissor;
+  const VkImageView saved_view = m_bindings.samplers[0].imageView;
+  const VkSampler saved_sampler = m_bindings.samplers[0].sampler;
+
+  SetPipeline(repaint_pipeline);
+  SetTexture(0, m_depth_shadow->GetView());
+  SetSampler(0, g_object_cache->GetSampler(RenderState::GetPointSamplerState()));
+  const VkRect2D fb_rect = m_framebuffer->GetRect();
+  const VkViewport vp = {static_cast<float>(fb_rect.offset.x),
+                         static_cast<float>(fb_rect.offset.y),
+                         static_cast<float>(fb_rect.extent.width),
+                         static_cast<float>(fb_rect.extent.height),
+                         0.0f,
+                         1.0f};
+  SetViewport(vp);
+  SetScissor(fb_rect);
+  if (Bind())
+    vkCmdDraw(g_command_buffer_mgr->GetCurrentCommandBuffer(), 3, 1, 0, 0);
+
+  SetPipeline(saved_pipeline);
+  SetViewport(saved_viewport);
+  SetScissor(saved_scissor);
+  SetTexture(0, saved_view);
+  SetSampler(0, saved_sampler);
+  // The outer (game) Bind() records its descriptor sets BEFORE beginning the pass, so the
+  // repaint's utility binds clobbered them — re-record with the restored pipeline.
+  if (m_pipeline)
+    UpdateDescriptorSet();
+
+  // The depth attachment now equals the snapshot again.
+  m_depth_dirty = false;
+
+  static const bool s_shield_log = getenv("QPVR_SHIELD_LOG") != nullptr;
+  if (s_shield_log) [[unlikely]]
+  {
+    static u32 s_repaint_count = 0;
+    if ((++s_repaint_count % 100) == 1)
+      INFO_LOG_FMT(VIDEO, "QPVR_SHIELD repaint n={}", s_repaint_count);
+  }
+#endif
+}
+
+void StateTracker::RestoreMultiviewDepth()
+{
+#ifdef __APPLE__
+  if (!m_depth_shadow_valid || !m_framebuffer || !m_framebuffer->IsMultiview())
+    return;
+  VKTexture* depth = static_cast<VKTexture*>(m_framebuffer->GetDepthAttachment());
+  if (!depth || depth != m_depth_shadow_source)
+    return;
+
+  static const bool s_shield_log = getenv("QPVR_SHIELD_LOG") != nullptr;
+  if (s_shield_log) [[unlikely]]
+  {
+    static u32 s_restore_count = 0;
+    if ((++s_restore_count % 100) == 1)
+      INFO_LOG_FMT(VIDEO, "QPVR_SHIELD restore n={}", s_restore_count);
+  }
+  VkCommandBuffer cb = g_command_buffer_mgr->GetCurrentCommandBuffer();
+  m_depth_shadow->TransitionToLayout(cb, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  depth->TransitionToLayout(cb, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+  const VkImageAspectFlags aspect = VKTexture::GetImageAspectForFormat(depth->GetFormat());
+  const VkImageCopy copy = {{aspect, 0, 0, depth->GetLayers()},
+                            {0, 0, 0},
+                            {aspect, 0, 0, depth->GetLayers()},
+                            {0, 0, 0},
+                            {depth->GetWidth(), depth->GetHeight(), 1}};
+  vkCmdCopyImage(cb, m_depth_shadow->GetImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                 depth->GetImage(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+#endif
 }
 
 void StateTracker::BeginClearRenderPass(const VkRect2D& area, const VkClearValue* clear_values,
                                         u32 num_clear_values)
 {
   ASSERT(!InRenderPass());
+
+  // A clear pass overwrites (part of) the depth; content outside the clear area must still
+  // be the real content, so restore first, and treat the depth as dirty afterwards.
+  RestoreMultiviewDepth();
+  m_depth_dirty = true;
 
   m_current_render_pass = m_framebuffer->GetClearRenderPass();
   m_framebuffer_render_area = area;
@@ -410,6 +601,13 @@ bool StateTracker::Bind()
 
   m_dirty_flags &=
       ~(DIRTY_FLAG_INDEX_BUFFER | DIRTY_FLAG_PIPELINE | DIRTY_FLAG_VIEWPORT | DIRTY_FLAG_SCISSOR);
+
+#ifdef __APPLE__
+  // QuestPrimeVR depth shield: a draw is about to be issued — the shielded depth may change.
+  if (m_framebuffer && m_framebuffer->IsMultiview())
+    m_depth_dirty = true;
+#endif
+
   return true;
 }
 
