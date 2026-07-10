@@ -2352,6 +2352,46 @@ void VertexManagerBase::Flush()
             LogMetroidPrime1XRayDraw(m_draw_counter, element_draw, handling, vs_hash, ps_hash,
                                      gs_hash, forced_texture_layer, xray_signature_fallback,
                                      d3d_xray_hud_tex0_layer_fallback);
+
+#ifdef __APPLE__
+            // QuestPrimeVR menu-map depth-independence workaround (see qpvr-depth-wipe notes):
+            // on the Mac multiview path the EFB depth attachment intermittently loses its
+            // contents around mid-frame render pass interruptions (Apple driver defect — the
+            // map hologram's own interference-effect EFB copy triggers it every few frames).
+            // The Z-menu map is the one scene whose look hangs on a single early depth write
+            // (the bg plate masks the wireframes and z-rejects the helmet cowl), so a lost
+            // depth buffer flips the whole scene: map vanishes, cowl fills the view. Make the
+            // scene depth-independent instead: skip the cowl draws and run the hologram stack
+            // with an always-pass depth test (the wireframes are additive zwrite=0, so the
+            // plate mask is cosmetic-only). Scoped to Prime1 frames with NEITHER combat nor
+            // menu context — only the map screen matches: gameplay sets combat via World/Gun
+            // draws, Inventory sets menu via the Samus model, and both keep real depth.
+            // QPVR_NO_MAP_DEPTH_FIX=1 disables for A/B.
+            static const bool s_qpvr_no_map_depth_fix =
+                getenv("QPVR_NO_MAP_DEPTH_FIX") != nullptr;
+            if (!s_qpvr_no_map_depth_fix && element_draw &&
+                IsMetroidPrime1Profile(element_draw->profile_id) &&
+                !m_metroid_prime1_combat_context_seen && !m_metroid_prime1_menu_context_seen &&
+                handling == ShaderHunter::HandlingType::HeadLocked &&
+                metroid_hydra_hud.perspective_hud && element_draw->signature.perspective &&
+                g_framebuffer_manager &&
+                g_framebuffer_manager->GetEFBFramebufferState().multiview != 0)
+            {
+              // Helmet cowl: body (b5058f48, 778b6b35) + its indicator chips (48db1b1b).
+              if (ps_hash == 0xb5058f48 || ps_hash == 0x778b6b35 || ps_hash == 0x48db1b1b)
+              {
+                elements_skip = true;
+              }
+              else if (m_current_pipeline_config.depth_state.test_enable &&
+                       m_current_pipeline_config.depth_state.func != CompareMode::Always)
+              {
+                m_current_pipeline_config.depth_state.func = CompareMode::Always;
+                m_current_uber_pipeline_config.depth_state.func = CompareMode::Always;
+                m_pipeline_config_changed = true;
+                UpdatePipelineObject();
+              }
+            }
+#endif
           }
 
           // ClearEFB is an independent flag, checked regardless of handling type.
