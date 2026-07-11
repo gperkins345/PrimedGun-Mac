@@ -1878,12 +1878,23 @@ RayCandidateMetrics ResolveActorRayMetrics(const Core::CPUThreadGuard& guard, u3
   return best;
 }
 
-bool ScanTargetAabbUsableForAim(const ActorAabb& box, const RuntimeSettings& settings)
+bool ScanAabbUsableForAim(const ActorAabb& box, const RuntimeSettings& settings,
+                          float min_extent, float max_extent_cap)
 {
-  // Some scan actors use large trigger volumes, so scan aim only trusts object-sized bounds.
+  // Some scan actors use large trigger volumes, so scan aim only trusts bounded object shapes.
   const float targeting_radius = ClampFinite(settings.gun_targeting_radius, 4.0f, 0.1f, 50.0f);
-  const float max_extent = std::clamp(targeting_radius * 2.0f, 6.0f, 10.0f);
+  const float max_extent = std::clamp(targeting_radius * 2.0f, min_extent, max_extent_cap);
   return AabbMaxExtent(box) <= max_extent;
+}
+
+bool ScanRenderAabbUsableForAim(const ActorAabb& box, const RuntimeSettings& settings)
+{
+  return ScanAabbUsableForAim(box, settings, 8.0f, 22.0f);
+}
+
+bool ScanPhysicsAabbUsableForAim(const ActorAabb& box, const RuntimeSettings& settings)
+{
+  return ScanAabbUsableForAim(box, settings, 6.0f, 10.0f);
 }
 
 RayCandidateMetrics ResolveScanActorRayMetrics(const Core::CPUThreadGuard& guard, u32 obj,
@@ -1905,14 +1916,14 @@ RayCandidateMetrics ResolveScanActorRayMetrics(const Core::CPUThreadGuard& guard
   }
 
   ActorAabb box = {};
-  if (ReadActorRenderAabb(guard, obj, &box) && ScanTargetAabbUsableForAim(box, settings) &&
+  if (ReadActorRenderAabb(guard, obj, &box) && ScanRenderAabbUsableForAim(box, settings) &&
       RayMetricsForAabb(ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, box, max_along, &metrics) &&
       PreferRayMetrics(metrics, best))
   {
     best = metrics;
   }
 
-  if (ReadActorPhysicsAabb(guard, obj, &box) && ScanTargetAabbUsableForAim(box, settings) &&
+  if (ReadActorPhysicsAabb(guard, obj, &box) && ScanPhysicsAabbUsableForAim(box, settings) &&
       RayMetricsForAabb(ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, box, max_along, &metrics) &&
       PreferRayMetrics(metrics, best))
   {
@@ -1926,9 +1937,9 @@ float ScanTargetAimConePerp(const RuntimeSettings& settings, const RayCandidateM
 {
   const float targeting_radius = ClampFinite(settings.gun_targeting_radius, 4.0f, 0.1f, 50.0f);
   const float base_perp = std::clamp(targeting_radius * 0.45f, 0.75f, 2.0f);
-  const float distance_slack = std::clamp(metrics.along, 0.0f, 60.0f) * 0.10f;
-  const float bounds_slack = std::min(metrics.radius, 1.0f) * 0.25f;
-  const float max_perp = std::clamp(targeting_radius * 1.50f, 2.0f, 8.0f);
+  const float distance_slack = std::clamp(metrics.along - 3.0f, 0.0f, 60.0f) * 0.18f;
+  const float bounds_slack = std::min(metrics.radius, 3.0f) * 0.35f;
+  const float max_perp = std::clamp(targeting_radius * 2.75f, 3.0f, 14.0f);
   return std::min(base_perp + distance_slack + bounds_slack, max_perp);
 }
 
