@@ -1681,6 +1681,7 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
 
   m_state_slot =
       std::clamp(Settings::Instance().GetStateSlot(), 1, static_cast<int>(State::NUM_STATES));
+  PrimedGun::SetVrStateSlot(m_state_slot);
 
   m_render_widget_geometry = settings.value(QStringLiteral("renderwidget/geometry")).toByteArray();
 
@@ -2455,6 +2456,16 @@ void MainWindow::ConnectStack()
       PrimedGun::MarkVrSettingsSaved();
     }
 
+    PrimedGun::SetVrStateSlot(m_state_slot);
+    if (const int selected_slot = PrimedGun::ConsumeVrStateSlotSelectRequest(); selected_slot > 0)
+      m_menu_bar->SetStateSlot(selected_slot);
+
+    if (PrimedGun::ConsumeVrStateLoadNewestRequest())
+      StateLoadNewest();
+
+    if (PrimedGun::ConsumeVrStateSaveOldestRequest())
+      StateSaveOldest();
+
     if (PrimedGun::ConsumeVrStateLoadRequest())
       StateLoadSlot();
 
@@ -2639,6 +2650,35 @@ void MainWindow::ConnectStack()
   std::vector<StateSlotMenuRow> state_slot_menu_rows;
   state_slot_menu_rows.reserve(State::NUM_STATES);
   const int state_slot_count = static_cast<int>(State::NUM_STATES);
+
+  auto* quick_action = new QWidgetAction(select_state_slot_menu);
+  auto* quick_row = new QWidget(select_state_slot_menu);
+  auto* quick_row_layout = new QHBoxLayout(quick_row);
+  quick_row_layout->setContentsMargins(8, 6, 8, 4);
+  quick_row_layout->setSpacing(6);
+  auto* quick_load_newest = new QPushButton(tr("Quick Load Newest Slot"), quick_row);
+  auto* save_oldest = new QPushButton(tr("Save to Oldest Slot"), quick_row);
+  quick_load_newest->setFlat(true);
+  save_oldest->setFlat(true);
+  quick_load_newest->setStyleSheet(game_button_style);
+  save_oldest->setStyleSheet(game_button_style);
+  quick_load_newest->setMinimumWidth(176);
+  save_oldest->setMinimumWidth(176);
+  quick_row_layout->addWidget(quick_load_newest);
+  quick_row_layout->addWidget(save_oldest);
+  quick_action->setDefaultWidget(quick_row);
+  select_state_slot_menu->addAction(quick_action);
+  select_state_slot_menu->addSeparator();
+
+  connect(quick_load_newest, &QPushButton::clicked, this, [this, select_state_slot_menu] {
+    StateLoadNewest();
+    select_state_slot_menu->close();
+  });
+  connect(save_oldest, &QPushButton::clicked, this, [this, select_state_slot_menu] {
+    StateSaveOldest();
+    select_state_slot_menu->close();
+  });
+
   for (int slot = 1; slot <= state_slot_count; ++slot)
   {
     auto* action = new QWidgetAction(select_state_slot_menu);
@@ -4753,6 +4793,31 @@ void MainWindow::StateSaveSlot()
   State::Save(m_system, m_state_slot);
 }
 
+void MainWindow::StateLoadNewest()
+{
+  State::WaitForPendingSaves();
+
+  int newest_slot = 0;
+  u64 newest_time = 0;
+  for (int slot = 1; slot <= static_cast<int>(State::NUM_STATES); ++slot)
+  {
+    const u64 timestamp = State::GetUnixTimeOfSlot(slot);
+    if (timestamp > newest_time)
+    {
+      newest_time = timestamp;
+      newest_slot = slot;
+    }
+  }
+
+  if (newest_slot == 0)
+  {
+    Core::DisplayMessage("State doesn't exist", 2000);
+    return;
+  }
+
+  State::Load(m_system, newest_slot);
+}
+
 void MainWindow::StateLoadSlotAt(int slot)
 {
   State::Load(m_system, slot);
@@ -4785,8 +4850,10 @@ void MainWindow::StateSaveOldest()
 
 void MainWindow::SetStateSlot(int slot)
 {
+  slot = std::clamp(slot, 1, static_cast<int>(State::NUM_STATES));
   Settings::Instance().SetStateSlot(slot);
   m_state_slot = slot;
+  PrimedGun::SetVrStateSlot(slot);
 
   Core::DisplayMessage(fmt::format("Selected slot {} - {}", m_state_slot,
                                    State::GetInfoStringOfSlot(m_state_slot, false)),

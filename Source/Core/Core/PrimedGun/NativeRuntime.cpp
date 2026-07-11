@@ -231,6 +231,12 @@ constexpr float VR_MENU_STATE_ROW_GAP_Y = 18.0f;
 constexpr u64 VR_MENU_STATE_CONFIRM_FRAMES = 360;
 constexpr u64 VR_MENU_RESET_CONFIRM_FRAMES = 360;
 constexpr u64 VR_MENU_LONG_PRESS_FRAMES = 60;
+constexpr u32 VR_MENU_STATE_SLOT_COUNT = 10;
+constexpr u32 VR_MENU_STATE_ACTION_LOAD = 1;
+constexpr u32 VR_MENU_STATE_ACTION_SAVE = 2;
+constexpr u32 VR_MENU_STATE_ACTION_LOAD_NEWEST = 3;
+constexpr u32 VR_MENU_STATE_ACTION_SAVE_OLDEST = 4;
+constexpr u32 VR_MENU_STATE_ACTION_ROW_COUNT = 4;
 constexpr u32 VR_MENU_RESET_ALL_ACTION = 1;
 constexpr u32 VR_MENU_RESET_TARGETING_ACTION = 2;
 constexpr u32 VR_MENU_RESET_CALIBRATION_ACTION = 3;
@@ -389,6 +395,11 @@ u64 s_vr_cannon_texture_notice_until_frame = 0;
 bool s_vr_settings_save_requested = false;
 std::atomic_bool s_vr_state_load_requested{false};
 std::atomic_bool s_vr_state_save_requested{false};
+std::atomic_bool s_vr_state_load_newest_requested{false};
+std::atomic_bool s_vr_state_save_oldest_requested{false};
+std::atomic_int s_vr_state_slot_select_requested{0};
+std::atomic_int s_vr_state_slot_from_ui{0};
+u32 s_vr_state_slot = 1;
 u32 s_vr_state_confirm_action = 0;
 u64 s_vr_state_confirm_until_frame = 0;
 u32 s_vr_reset_confirm_action = 0;
@@ -4394,7 +4405,7 @@ u32 VrMenuItemCountForTab(u32 tab)
   case VR_MENU_CANNON_TAB:
     return 6;
   case VR_MENU_STATE_TAB:
-    return 2;
+    return VR_MENU_STATE_ACTION_ROW_COUNT + VR_MENU_STATE_SLOT_COUNT;
   default:
     return 0;
   }
@@ -4403,7 +4414,7 @@ u32 VrMenuItemCountForTab(u32 tab)
 float VrMenuRowCenterY(u32 tab, u32 index)
 {
   float y = VR_MENU_ROW_TEXT_Y + static_cast<float>(index) * VR_MENU_ROW_STEP_Y;
-  if (tab == VR_MENU_STATE_TAB && index >= 1)
+  if (tab == VR_MENU_STATE_TAB && index >= VR_MENU_STATE_ACTION_ROW_COUNT)
     y += VR_MENU_STATE_ROW_GAP_Y;
   return y;
 }
@@ -4424,6 +4435,12 @@ int VrMenuRowFromTextureY(u32 tab, float texture_y, u32 item_count)
   return best_index;
 }
 
+u32 ClampVrStateSlot(int slot)
+{
+  return static_cast<u32>(
+      std::clamp(slot, 1, static_cast<int>(VR_MENU_STATE_SLOT_COUNT)));
+}
+
 void ClearVrStateConfirmation()
 {
   if (s_vr_state_confirm_action == 0)
@@ -4431,6 +4448,21 @@ void ClearVrStateConfirmation()
 
   s_vr_state_confirm_action = 0;
   s_vr_state_confirm_until_frame = 0;
+  ++s_vr_menu_generation;
+}
+
+void ApplyPendingVrStateSlotFromUi()
+{
+  const int requested_slot = s_vr_state_slot_from_ui.exchange(0, std::memory_order_acq_rel);
+  if (requested_slot <= 0)
+    return;
+
+  const u32 slot = ClampVrStateSlot(requested_slot);
+  if (s_vr_state_slot == slot)
+    return;
+
+  s_vr_state_slot = slot;
+  ClearVrStateConfirmation();
   ++s_vr_menu_generation;
 }
 
@@ -5062,19 +5094,34 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
 
   if (s_vr_menu_tab == VR_MENU_STATE_TAB)
   {
-    const u32 requested_action = s_vr_menu_selected_index == 0 ? 1u :
-                                 s_vr_menu_selected_index == 1 ? 2u :
-                                                                 0u;
-    if (requested_action == 0)
+    if (s_vr_menu_selected_index >= VR_MENU_STATE_ACTION_ROW_COUNT)
+    {
+      const u32 slot = s_vr_menu_selected_index - VR_MENU_STATE_ACTION_ROW_COUNT + 1;
+      if (slot >= 1 && slot <= VR_MENU_STATE_SLOT_COUNT)
+      {
+        s_vr_state_slot = slot;
+        s_vr_state_slot_select_requested.store(static_cast<int>(slot), std::memory_order_release);
+        ClearVrStateConfirmation();
+      }
+      return;
+    }
+
+    const u32 requested_action = s_vr_menu_selected_index + 1;
+    if (requested_action < VR_MENU_STATE_ACTION_LOAD ||
+        requested_action > VR_MENU_STATE_ACTION_SAVE_OLDEST)
       return;
 
     RefreshVrStateConfirmation();
     if (s_vr_state_confirm_action == requested_action)
     {
-      if (requested_action == 1)
+      if (requested_action == VR_MENU_STATE_ACTION_LOAD)
         s_vr_state_load_requested.store(true, std::memory_order_release);
-      else
+      else if (requested_action == VR_MENU_STATE_ACTION_SAVE)
         s_vr_state_save_requested.store(true, std::memory_order_release);
+      else if (requested_action == VR_MENU_STATE_ACTION_LOAD_NEWEST)
+        s_vr_state_load_newest_requested.store(true, std::memory_order_release);
+      else if (requested_action == VR_MENU_STATE_ACTION_SAVE_OLDEST)
+        s_vr_state_save_oldest_requested.store(true, std::memory_order_release);
       s_vr_state_confirm_action = 0;
       s_vr_state_confirm_until_frame = 0;
     }
@@ -5114,6 +5161,7 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.control_page = s_vr_menu_control_page;
   overlay.cannon_texture_slot = s_vr_cannon_texture_slot;
   overlay.cannon_texture_notice = s_frame_counter < s_vr_cannon_texture_notice_until_frame;
+  overlay.state_slot = s_vr_state_slot;
   overlay.state_confirm_action = s_vr_state_confirm_action;
   overlay.reset_confirm_action = s_vr_reset_confirm_action;
   overlay.weapon_panel_visible = settings.vr_overlays_enabled && previous.weapon_panel_visible;
@@ -5174,6 +5222,8 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
 void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettings* settings,
                   bool prompt_visible)
 {
+  ApplyPendingVrStateSlotFromUi();
+
   if (!settings->vr_overlays_enabled)
   {
     if (s_vr_menu_visible)
@@ -7004,6 +7054,13 @@ void ResetNativeRuntime()
   s_vr_menu_long_press_start_frame = 0;
   s_vr_menu_long_press_consumed = false;
   s_vr_cannon_texture_notice_until_frame = 0;
+  s_vr_state_load_requested.store(false, std::memory_order_release);
+  s_vr_state_save_requested.store(false, std::memory_order_release);
+  s_vr_state_load_newest_requested.store(false, std::memory_order_release);
+  s_vr_state_save_oldest_requested.store(false, std::memory_order_release);
+  s_vr_state_slot_select_requested.store(0, std::memory_order_release);
+  s_vr_state_slot_from_ui.store(0, std::memory_order_release);
+  s_vr_state_slot = 1;
   s_vr_state_confirm_action = 0;
   s_vr_state_confirm_until_frame = 0;
   s_vr_reset_confirm_action = 0;
@@ -7161,6 +7218,11 @@ void ApplySamusArmPreset()
   s_settings.rot_offset_z = -90.0f;
 }
 
+void SetVrStateSlot(int slot)
+{
+  s_vr_state_slot_from_ui.store(static_cast<int>(ClampVrStateSlot(slot)), std::memory_order_release);
+}
+
 bool ConsumeVrSettingsSaveRequest()
 {
   std::lock_guard lock{s_settings_mutex};
@@ -7176,6 +7238,11 @@ void MarkVrSettingsSaved()
   ++s_vr_menu_generation;
 }
 
+int ConsumeVrStateSlotSelectRequest()
+{
+  return s_vr_state_slot_select_requested.exchange(0, std::memory_order_acq_rel);
+}
+
 bool ConsumeVrStateLoadRequest()
 {
   return s_vr_state_load_requested.exchange(false, std::memory_order_acq_rel);
@@ -7184,5 +7251,15 @@ bool ConsumeVrStateLoadRequest()
 bool ConsumeVrStateSaveRequest()
 {
   return s_vr_state_save_requested.exchange(false, std::memory_order_acq_rel);
+}
+
+bool ConsumeVrStateLoadNewestRequest()
+{
+  return s_vr_state_load_newest_requested.exchange(false, std::memory_order_acq_rel);
+}
+
+bool ConsumeVrStateSaveOldestRequest()
+{
+  return s_vr_state_save_oldest_requested.exchange(false, std::memory_order_acq_rel);
 }
 }  // namespace PrimedGun

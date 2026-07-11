@@ -264,6 +264,12 @@ constexpr uint32_t RESET_TARGETING_ACTION = 2;
 constexpr uint32_t RESET_CALIBRATION_ACTION = 3;
 constexpr uint32_t RESET_CONTROLLER_ACTION = 4;
 constexpr uint32_t RESET_MOVEMENT_ACTION = 5;
+constexpr uint32_t STATE_LOAD_ACTION = 1;
+constexpr uint32_t STATE_SAVE_ACTION = 2;
+constexpr uint32_t STATE_LOAD_NEWEST_ACTION = 3;
+constexpr uint32_t STATE_SAVE_OLDEST_ACTION = 4;
+constexpr uint32_t STATE_ACTION_ROW_COUNT = 4;
+constexpr uint32_t STATE_SLOT_COUNT = 10;
 
 inline std::string ConfirmText(const Common::VR::PrimedGunVrOverlayState& s, uint32_t action)
 {
@@ -333,7 +339,7 @@ inline std::string RumbleHandModeText(int mode)
 inline int MenuRowTextY(const Common::VR::PrimedGunVrOverlayState& s, int index)
 {
   int y = 146 + index * 22;
-  if (s.tab == VR_MENU_STATE_TAB && index >= 1)
+  if (s.tab == VR_MENU_STATE_TAB && index >= static_cast<int>(STATE_ACTION_ROW_COUNT))
     y += 18;
   return y;
 }
@@ -427,8 +433,31 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
             {"SLOT 4", slot_status(4)}, {"CUSTOM", slot_status(5)}};
   }
   case VR_MENU_STATE_TAB:
-    return {{"LOAD STATE", s.state_confirm_action == 1 ? "ARE YOU SURE?" : "PRESS"},
-            {"SAVE STATE", s.state_confirm_action == 2 ? "ARE YOU SURE?" : "PRESS"}};
+  {
+    std::vector<MenuRow> rows;
+    const std::string selected_slot = "SLOT " + std::to_string(s.state_slot);
+    rows.push_back({"LOAD STATE",
+                    s.state_confirm_action == STATE_LOAD_ACTION ? "ARE YOU SURE?" :
+                                                                  selected_slot});
+    rows.push_back({"SAVE STATE",
+                    s.state_confirm_action == STATE_SAVE_ACTION ? "ARE YOU SURE?" :
+                                                                  selected_slot});
+    rows.push_back({"LOAD NEWEST",
+                    s.state_confirm_action == STATE_LOAD_NEWEST_ACTION ? "ARE YOU SURE?" :
+                                                                         "PRESS"});
+    rows.push_back({"SAVE OLDEST",
+                    s.state_confirm_action == STATE_SAVE_OLDEST_ACTION ? "ARE YOU SURE?" :
+                                                                         "PRESS"});
+    constexpr std::array<const char*, STATE_SLOT_COUNT> slot_labels = {
+        "SLOT 1", "SLOT 2", "SLOT 3", "SLOT 4", "SLOT 5",
+        "SLOT 6", "SLOT 7", "SLOT 8", "SLOT 9", "SLOT 10"};
+    for (uint32_t slot = 1; slot <= STATE_SLOT_COUNT; ++slot)
+    {
+      rows.push_back({slot_labels[static_cast<size_t>(slot - 1)],
+                      s.state_slot == slot ? "SELECTED" : "SELECT"});
+    }
+    return rows;
+  }
   default:
     return {};
   }

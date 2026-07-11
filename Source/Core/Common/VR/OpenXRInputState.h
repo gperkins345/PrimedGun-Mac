@@ -87,6 +87,7 @@ struct PrimedGunVrOverlayState
   uint32_t control_page = 0;
   uint32_t cannon_texture_slot = 0;
   bool cannon_texture_notice = false;
+  uint32_t state_slot = 1;
   uint32_t state_confirm_action = 0;
   uint32_t reset_confirm_action = 0;
   uint32_t weapon_selected_index = 0;
