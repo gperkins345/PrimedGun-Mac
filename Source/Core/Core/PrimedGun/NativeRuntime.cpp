@@ -6920,7 +6920,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
       (!default_controls_active && s_frame_counter < s_gameplay_input_hold_until_frame);
   UpdatePitchZeroHookEnabled(guard, scan_active);
   const bool orbit_lock_active =
-      gameplay_input_active && !scan_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager) &&
+      gameplay_input_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager) &&
       PlayerHasOrbitControlTarget(guard, ADDRESS.state_manager, player);
   s_gameplay_input_active.store(gameplay_input_active, std::memory_order_relaxed);
   s_orbit_lock_active.store(orbit_lock_active, std::memory_order_relaxed);
