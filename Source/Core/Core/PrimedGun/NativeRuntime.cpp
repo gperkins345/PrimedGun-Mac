@@ -1878,6 +1878,83 @@ RayCandidateMetrics ResolveActorRayMetrics(const Core::CPUThreadGuard& guard, u3
   return best;
 }
 
+bool ScanTargetAabbUsableForAim(const ActorAabb& box, const RuntimeSettings& settings)
+{
+  // Some scan actors use large trigger volumes, so scan aim only trusts object-sized bounds.
+  const float targeting_radius = ClampFinite(settings.gun_targeting_radius, 4.0f, 0.1f, 50.0f);
+  const float max_extent = std::clamp(targeting_radius * 2.0f, 6.0f, 10.0f);
+  return AabbMaxExtent(box) <= max_extent;
+}
+
+RayCandidateMetrics ResolveScanActorRayMetrics(const Core::CPUThreadGuard& guard, u32 obj,
+                                               float ray_x, float ray_y, float ray_z, float dir_x,
+                                               float dir_y, float dir_z, float max_along,
+                                               const RuntimeSettings& settings)
+{
+  RayCandidateMetrics best = {};
+  float ox = 0.0f;
+  float oy = 0.0f;
+  float oz = 0.0f;
+  RayCandidateMetrics metrics = {};
+  if (ReadTransformTranslation(guard, obj + ADDRESS.transform_offset, &ox, &oy, &oz) &&
+      RayMetricsForPoint(ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, ox, oy, oz, max_along,
+                         &metrics) &&
+      PreferRayMetrics(metrics, best))
+  {
+    best = metrics;
+  }
+
+  ActorAabb box = {};
+  if (ReadActorRenderAabb(guard, obj, &box) && ScanTargetAabbUsableForAim(box, settings) &&
+      RayMetricsForAabb(ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, box, max_along, &metrics) &&
+      PreferRayMetrics(metrics, best))
+  {
+    best = metrics;
+  }
+
+  if (ReadActorPhysicsAabb(guard, obj, &box) && ScanTargetAabbUsableForAim(box, settings) &&
+      RayMetricsForAabb(ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, box, max_along, &metrics) &&
+      PreferRayMetrics(metrics, best))
+  {
+    best = metrics;
+  }
+
+  return best;
+}
+
+float ScanTargetAimConePerp(const RuntimeSettings& settings, const RayCandidateMetrics& metrics)
+{
+  const float targeting_radius = ClampFinite(settings.gun_targeting_radius, 4.0f, 0.1f, 50.0f);
+  const float base_perp = std::clamp(targeting_radius * 0.45f, 0.75f, 2.0f);
+  const float distance_slack = std::clamp(metrics.along, 0.0f, 60.0f) * 0.10f;
+  const float bounds_slack = std::min(metrics.radius, 1.0f) * 0.25f;
+  const float max_perp = std::clamp(targeting_radius * 1.50f, 2.0f, 8.0f);
+  return std::min(base_perp + distance_slack + bounds_slack, max_perp);
+}
+
+float ScanVisualAimConePerp(const RuntimeSettings& settings, const RayCandidateMetrics& metrics)
+{
+  const float targeting_radius = ClampFinite(settings.gun_targeting_radius, 4.0f, 0.1f, 50.0f);
+  const float base_perp = std::clamp(targeting_radius * 3.0f, 3.0f, 14.0f);
+  const float distance_slack = std::clamp(metrics.along, 0.0f, 80.0f) * 0.55f;
+  const float bounds_slack = std::min(metrics.radius, 2.0f) * 0.35f;
+  const float max_perp = std::clamp(targeting_radius * 8.0f, 18.0f, 36.0f);
+  return std::min(base_perp + distance_slack + bounds_slack, max_perp);
+}
+
+float ScoreScanTarget(const RayCandidateMetrics& metrics, float aim_cone_perp)
+{
+  const float cone_fraction = metrics.perp / std::max(aim_cone_perp, 0.001f);
+  const float radius_penalty = std::min(metrics.radius, 1.0f) * 0.02f;
+  return cone_fraction * 2.0f + metrics.perp * 0.20f + metrics.along * 0.003f + radius_penalty;
+}
+
+float ScoreScanVisualTarget(const RayCandidateMetrics& metrics, float aim_cone_perp)
+{
+  const float cone_fraction = metrics.perp / std::max(aim_cone_perp, 0.001f);
+  return cone_fraction + metrics.along * 0.001f + std::min(metrics.radius, 1.0f) * 0.02f;
+}
+
 bool LooksLikeTransformMatrix(const Core::CPUThreadGuard& guard, u32 transform)
 {
   float m[12] = {};
@@ -2306,39 +2383,40 @@ bool SeedScanIndicatorTargetsFromHmd(const Core::CPUThreadGuard& guard, u32 stat
     RayCandidateMetrics metrics = {};
     float score = std::numeric_limits<float>::infinity();
   };
-  std::array<Candidate, 8> best{};
-  const auto insert_candidate = [&](u16 uid, u32 obj, const RayCandidateMetrics& metrics,
-                                    float score) {
-    size_t slot = best.size();
+  std::array<Candidate, 16> visual_best{};
+  std::array<Candidate, 8> target_best{};
+  const auto insert_candidate = [](auto& candidates, u16 uid, u32 obj,
+                                   const RayCandidateMetrics& metrics, float score) {
+    size_t slot = candidates.size();
     float worst = -1.0f;
-    for (size_t i = 0; i < best.size(); ++i)
+    for (size_t i = 0; i < candidates.size(); ++i)
     {
-      if (best[i].uid == uid)
+      if (candidates[i].uid == uid)
         return;
-      if (best[i].uid == 0xffffu)
+      if (candidates[i].uid == 0xffffu)
       {
         slot = i;
         break;
       }
-      if (best[i].score > worst)
+      if (candidates[i].score > worst)
       {
-        worst = best[i].score;
+        worst = candidates[i].score;
         slot = i;
       }
     }
 
-    if (slot >= best.size() || (best[slot].uid != 0xffffu && score >= best[slot].score))
+    if (slot >= candidates.size() ||
+        (candidates[slot].uid != 0xffffu && score >= candidates[slot].score))
       return;
 
-    best[slot].uid = uid;
-    best[slot].obj = obj;
-    best[slot].metrics = metrics;
-    best[slot].score = score;
+    candidates[slot].uid = uid;
+    candidates[slot].obj = obj;
+    candidates[slot].metrics = metrics;
+    candidates[slot].score = score;
   };
 
   const u16 player_uid = static_cast<u16>(player_uid_word >> 16);
   const float max_along = std::clamp(settings.gun_targeting_distance, 15.0f, 100.0f);
-  const float base_perp = std::max(settings.gun_targeting_radius * 3.0f, 3.0f);
 
   for (u32 i = 0; i < 1024u; ++i)
   {
@@ -2370,26 +2448,31 @@ bool SeedScanIndicatorTargetsFromHmd(const Core::CPUThreadGuard& guard, u32 stat
     }
 
     const RayCandidateMetrics metrics =
-        ResolveActorRayMetrics(guard, obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, max_along,
-                               true);
+        ResolveScanActorRayMetrics(guard, obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z,
+                                   max_along, settings);
     if (!metrics.valid)
       continue;
 
-    const float hmd_view_perp = base_perp + metrics.along * 0.55f + metrics.radius * 0.35f;
-    if (metrics.perp > hmd_view_perp)
-      continue;
+    const float visual_perp = ScanVisualAimConePerp(settings, metrics);
+    if (metrics.perp <= visual_perp)
+      insert_candidate(visual_best, uid, obj, metrics, ScoreScanVisualTarget(metrics, visual_perp));
 
-    const float cone_fraction = metrics.perp / std::max(hmd_view_perp, 0.001f);
-    const float score = cone_fraction * 1.5f + metrics.along * 0.002f - metrics.radius * 0.01f;
-    insert_candidate(uid, obj, metrics, score);
+    const float target_perp = ScanTargetAimConePerp(settings, metrics);
+    if (metrics.perp <= target_perp)
+      insert_candidate(target_best, uid, obj, metrics, ScoreScanTarget(metrics, target_perp));
+  }
+
+  for (const Candidate& candidate : visual_best)
+  {
+    if (candidate.uid != 0xffffu)
+      EnsureUidInScanVisorTargets(guard, visor, candidate.uid);
   }
 
   const Candidate* selected = nullptr;
-  for (const Candidate& candidate : best)
+  for (const Candidate& candidate : target_best)
   {
     if (candidate.uid != 0xffffu)
     {
-      EnsureUidInScanVisorTargets(guard, visor, candidate.uid);
       if (selected == nullptr || candidate.score < selected->score)
         selected = &candidate;
     }
@@ -2397,6 +2480,8 @@ bool SeedScanIndicatorTargetsFromHmd(const Core::CPUThreadGuard& guard, u32 stat
 
   if (selected == nullptr || pick == nullptr)
     return selected != nullptr;
+
+  EnsureUidInScanVisorTargets(guard, visor, selected->uid);
 
   pick->uid = selected->uid;
   pick->obj = selected->obj;
@@ -2448,9 +2533,7 @@ bool PickScanTargetFromHmd(const Core::CPUThreadGuard& guard, u32 state_manager,
   if (!GunAimDirectionFromMatrix(hmd, &dir_x, &dir_y, &dir_z))
     return false;
 
-  constexpr float scan_pick_radius_multiplier = 3.0f;
   const float max_along = settings.gun_targeting_distance;
-  const float max_perp = settings.gun_targeting_radius * scan_pick_radius_multiplier;
   bool found = false;
 
   for (const ScanTargetCandidate& candidate : candidates)
@@ -2459,14 +2542,16 @@ bool PickScanTargetFromHmd(const Core::CPUThreadGuard& guard, u32 state_manager,
       continue;
 
     const RayCandidateMetrics metrics =
-        ResolveActorRayMetrics(guard, candidate.obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z,
-                               max_along, true);
-    if (!metrics.valid || metrics.perp > max_perp)
+        ResolveScanActorRayMetrics(guard, candidate.obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z,
+                                   max_along, settings);
+    if (!metrics.valid)
       continue;
 
-    const float cone_fraction = metrics.perp / std::max(max_perp, 0.001f);
-    const float score = cone_fraction * 1.50f + metrics.perp * 0.35f +
-                        metrics.along * 0.003f - metrics.radius * 0.015f;
+    const float hmd_view_perp = ScanTargetAimConePerp(settings, metrics);
+    if (metrics.perp > hmd_view_perp)
+      continue;
+
+    const float score = ScoreScanTarget(metrics, hmd_view_perp);
     if (!found || score < pick->score)
     {
       found = true;
