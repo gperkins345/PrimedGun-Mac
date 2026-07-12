@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "Common/CommonPaths.h"
+#include "Common/Assembler/GekkoAssembler.h"
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
@@ -149,6 +150,7 @@ constexpr u32 CANNON_EXPECTED_GUN_SCRATCH = SCRATCH_BASE + 0x038u;
 constexpr u32 MODEL_OFFSET_WORLD_SCRATCH = SCRATCH_BASE + 0x040u;
 constexpr u32 ADJUSTED_GUN_POS_SCRATCH = SCRATCH_BASE + 0x050u;
 constexpr u32 AUDIO_LISTENER_CAVE = SCRATCH_BASE + 0x080u;
+constexpr u32 SPRINGBALL_CAVE = SCRATCH_BASE + 0x110u;
 constexpr u32 GUN_TARGET_SCRATCH = SCRATCH_BASE + 0x400u;
 constexpr u32 RETICLE_BILLBOARD_SCRATCH = SCRATCH_BASE + 0x500u;
 constexpr u32 SCAN_RETICLE_TRACE_SCRATCH = SCRATCH_BASE + 0x540u;
@@ -160,6 +162,7 @@ constexpr u32 DPAD_DISABLE_ORIGINAL_FLAGS_SCRATCH = SCRATCH_BASE + 0x68Cu;
 constexpr u32 GAMEFLOW_MENU_SCRATCH = SCRATCH_BASE + 0x690u;
 constexpr u32 MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH = SCRATCH_BASE + 0x694u;
 constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH = SCRATCH_BASE + 0x698u;
+constexpr u32 SPRINGBALL_TRIGGER_SCRATCH = SCRATCH_BASE + 0x69Cu;
 constexpr u32 AUDIO_LISTENER_SCRATCH = SCRATCH_BASE + 0x700u;
 constexpr u32 DPAD_DISABLE_OWNER_MAGIC = 0x50474450u;  // PGDP
 
@@ -199,6 +202,10 @@ constexpr u32 AUDIO_LISTENER_LEGACY_HIGH_CAVE = 0x817F8000u;
 constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ADDRESS = 0x8000E71Cu;
 constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ORIGINAL = 0x801E0304u;
 constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_SKIP_ADDRESS = 0x8000E9C4u;
+constexpr u32 SPRINGBALL_HOOK_ADDRESS = 0x800F8D28u;
+constexpr u32 SPRINGBALL_HOOK_ORIGINAL = 0x9421FFE0u;
+constexpr u32 SPRINGBALL_HAS_POWERUP = 0x80091AC0u;
+constexpr u32 SPRINGBALL_BOMB_JUMP = 0x802853ECu;
 constexpr u32 PPC_BLR = 0x4E800020u;
 constexpr u32 LOAD_ZERO_TO_F1 = 0xC02280B0u;
 constexpr u32 LOAD_ZERO_TO_F31 = 0xC3E280B0u;
@@ -6717,6 +6724,161 @@ void UpdateMorphballCameraLevelHookEnabled(const Core::CPUThreadGuard& guard, bo
   TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, enabled ? 1u : 0u);
 }
 
+bool ApplySpringBallPatch(const Core::CPUThreadGuard& guard)
+{
+  static const auto assembled = Common::GekkoAssembler::Assemble(
+      fmt::format(R"(
+.defvar HookStart, 0x{:x}
+.defvar HookBuffer, 0x{:x}
+.defvar SpringballInputAddr, 0x{:x}
+
+.locate HookStart
+b _hook_start
+
+.locate HookBuffer
+.defvar var_back_chain, 48
+.defvar var_saved_lr, 44
+.defvar var_morphball, 8
+.defvar var_finalinput, 12
+.defvar var_state_mgr, 16
+.defvar var_dt, 20
+.defvar var_position_x, 24
+.defvar var_position_y, 28
+.defvar var_position_z, 32
+.defvar var_hor_vel_x, 36
+.defvar var_hor_vel_y, 40
+
+_hook_start:
+stwu sp, -var_back_chain(sp)
+mfspr r0, LR
+stw r0, var_saved_lr(sp)
+stw r3, var_morphball(sp)
+stw r4, var_finalinput(sp)
+stw r5, var_state_mgr(sp)
+stfs f1, var_dt(sp)
+
+lis r3, SpringballInputAddr@ha
+ori r3, r3, SpringballInputAddr@l
+lbz r3, 0(r3)
+cmpwi r3, 0
+beq _hook_end
+
+lis r3, _allowedNormalZ@ha
+ori r3, r3, _allowedNormalZ@l
+lfs f2, 0(r3)
+lwz r3, var_morphball(sp)
+lwz r4, 0x74(r3)
+_collision_loop:
+cmplwi r4, 0
+beq _hook_end
+lfs f0, 0xc8(r3)
+fcmpo cr0, f0, f2
+bge _surface_found
+addi r3, r3, 0x60
+subi r4, r4, 1
+b _collision_loop
+
+_surface_found:
+lwz r3, var_state_mgr(sp)
+lwz r3, 0x8b8(r3)
+lwz r3, 0(r3)
+li r4, 6
+.4byte 0x{:08x}
+cmpwi r3, 0
+beq _hook_end
+
+lwz r3, var_morphball(sp)
+lwz r3, 0(r3)
+lwz r0, 0x138(r3)
+stw r0, var_hor_vel_x(sp)
+lwz r0, 0x13c(r3)
+stw r0, var_hor_vel_y(sp)
+lwz r5, var_state_mgr(sp)
+lwz r0, 0x40(r3)
+stw r0, var_position_x(sp)
+lwz r0, 0x50(r3)
+stw r0, var_position_y(sp)
+lwz r0, 0x60(r3)
+stw r0, var_position_z(sp)
+addi r4, sp, var_position_x
+.4byte 0x{:08x}
+
+lwz r3, var_morphball(sp)
+lwz r3, 0(r3)
+lwz r0, var_hor_vel_x(sp)
+stw r0, 0x138(r3)
+lwz r0, var_hor_vel_y(sp)
+stw r0, 0x13c(r3)
+
+_hook_end:
+lwz r0, var_saved_lr(sp)
+lwz r3, var_morphball(sp)
+lwz r4, var_finalinput(sp)
+lwz r5, var_state_mgr(sp)
+lfs f1, var_dt(sp)
+addi sp, sp, var_back_chain
+stwu sp, -0x20(sp)
+.4byte 0x{:08x}
+
+_allowedNormalZ:
+.float 0.70710677
+)",
+                  SPRINGBALL_HOOK_ADDRESS, SPRINGBALL_CAVE, SPRINGBALL_TRIGGER_SCRATCH,
+                  PpcBranch(SPRINGBALL_CAVE + 0x74u, SPRINGBALL_HAS_POWERUP) | 1u,
+                  PpcBranch(SPRINGBALL_CAVE + 0xB8u, SPRINGBALL_BOMB_JUMP) | 1u,
+                  PpcBranch(SPRINGBALL_CAVE + 0xF0u, SPRINGBALL_HOOK_ADDRESS + 8u)),
+      0);
+
+  if (Common::GekkoAssembler::IsFailure(assembled))
+    return false;
+
+  const auto& blocks = Common::GekkoAssembler::GetT(assembled);
+  bool cave_matches = true;
+  for (const auto& block : blocks)
+  {
+    if (block.block_address == SPRINGBALL_HOOK_ADDRESS)
+      continue;
+    for (u32 offset = 0; offset < block.instructions.size(); offset += 4u)
+    {
+      const u8* bytes = block.instructions.data() + offset;
+      const u32 expected = (static_cast<u32>(bytes[0]) << 24) |
+                           (static_cast<u32>(bytes[1]) << 16) |
+                           (static_cast<u32>(bytes[2]) << 8) | bytes[3];
+      u32 current = 0;
+      if (!TryReadU32(guard, block.block_address + offset, &current) || current != expected)
+        cave_matches = false;
+    }
+  }
+
+  bool wrote = false;
+  if (!cave_matches)
+  {
+    for (const auto& block : blocks)
+    {
+      if (block.block_address == SPRINGBALL_HOOK_ADDRESS)
+        continue;
+      for (u32 offset = 0; offset < block.instructions.size(); offset += 4u)
+      {
+        const u8* bytes = block.instructions.data() + offset;
+        const u32 instruction = (static_cast<u32>(bytes[0]) << 24) |
+                                (static_cast<u32>(bytes[1]) << 16) |
+                                (static_cast<u32>(bytes[2]) << 8) | bytes[3];
+        wrote = TryWriteInstruction(guard, block.block_address + offset, instruction) || wrote;
+      }
+    }
+  }
+
+  const u32 branch = PpcBranch(SPRINGBALL_HOOK_ADDRESS, SPRINGBALL_CAVE);
+  u32 current = 0;
+  if (!TryReadU32(guard, SPRINGBALL_HOOK_ADDRESS, &current))
+    return wrote;
+  if (current == branch)
+    return wrote;
+  if (current != SPRINGBALL_HOOK_ORIGINAL || !cave_matches && !wrote)
+    return wrote;
+  return TryWriteInstruction(guard, SPRINGBALL_HOOK_ADDRESS, branch) || wrote;
+}
+
 bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
 {
   bool wrote = false;
@@ -6726,6 +6888,7 @@ bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
       player >= 0x80000000u && ScanVisorActive(guard, player);
 
   wrote = ApplyGameFlowFlagPatches(guard) || wrote;
+  wrote = ApplySpringBallPatch(guard) || wrote;
   wrote = ApplyRenderModelOffsetPatch(guard) || wrote;
   wrote = RuntimeLoggingEnabled() ? (ApplyScanReticleTracePatch(guard) || wrote) :
                                     (RestoreScanReticleTracePatches(guard) || wrote);
@@ -6964,6 +7127,30 @@ void UpdateShaderHunterGameFlowFlags(const Core::CPUThreadGuard& guard)
     ShaderHunter::GetInstance().RegisterExternalFlag("primedgun_map_or_pause");
   }
 }
+
+void UpdateSpringBallInput(const Core::CPUThreadGuard& guard, const RuntimeSettings& settings,
+                           u32 player)
+{
+  float c_stick_y = 0.0f;
+  float xr_stick_y = 0.0f;
+#ifdef ENABLE_VR
+  const auto snapshot = Common::VR::OpenXRInputState::GetSnapshot();
+  if (snapshot.runtime_active && snapshot.controllers[1].connected)
+    xr_stick_y = snapshot.controllers[1].thumbstick_y;
+#endif
+  u32 morph_state = 0xffffffffu;
+  u32 movement_state = 0xffffffffu;
+  const bool input_read =
+      TryReadFloat(guard, ADDRESS.state_manager + FINAL_INPUT_RIGHT_STICK_Y, &c_stick_y);
+  const bool state_read = TryReadU32(guard, player + 0x2F8u, &morph_state) &&
+                          TryReadU32(guard, player + PLAYER_MOVEMENT_STATE_OFFSET,
+                                     &movement_state);
+  const bool active = settings.builtin_patches_enabled && PlayerObjectLooksValid(guard, player) &&
+                      input_read && state_read && (morph_state == 1u || morph_state == 2u) &&
+                      movement_state == 0u && std::max(c_stick_y, xr_stick_y) > 0.7f;
+  TryWriteU8(guard, SPRINGBALL_TRIGGER_SCRATCH, active ? 1u : 0u);
+
+}
 }  // namespace
 
 void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
@@ -6973,6 +7160,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   const RuntimeSettings settings = GetRuntimeSettings();
   if (!settings.enabled)
   {
+    TryWriteU8(guard, SPRINGBALL_TRIGGER_SCRATCH, 0u);
     TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
     TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, 0);
     ClearAudioListenerScratch(guard);
@@ -6986,6 +7174,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   const bool game_active = Core::IsRunning(system) && IsMetroidPrimeRev0(guard);
   if (!game_active)
   {
+    TryWriteU8(guard, SPRINGBALL_TRIGGER_SCRATCH, 0u);
     TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
     TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, 0);
     ClearAudioListenerScratch(guard);
@@ -7011,6 +7200,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
       PlayerObjectLooksValid(guard, player);
   if (!have_player)
   {
+    TryWriteU8(guard, SPRINGBALL_TRIGGER_SCRATCH, 0u);
     TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
     TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, 0);
     ClearAudioListenerScratch(guard);
@@ -7035,6 +7225,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
     TryWriteU32(guard, GAMEFLOW_MENU_SCRATCH, 0);
   }
   UpdateMorphballCameraLevelHookEnabled(guard, have_player, player);
+  UpdateSpringBallInput(guard, settings, player);
 
   bool dynamic_patch_applied = false;
   if (settings.builtin_patches_enabled)
