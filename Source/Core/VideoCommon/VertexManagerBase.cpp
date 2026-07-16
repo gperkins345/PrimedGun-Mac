@@ -381,6 +381,14 @@ bool IsMetroidPrime1Profile(MetroidElementProfile profile)
          profile == MetroidElementProfile::Prime1Wii;
 }
 
+#ifndef PRIMEDGUN_DISABLE_PRIME2
+bool IsMetroidPrime2Profile(MetroidElementProfile profile)
+{
+  return profile == MetroidElementProfile::Prime2GC ||
+         profile == MetroidElementProfile::Prime2Wii;
+}
+#endif
+
 float GetPrimedGunPerspectiveHudDistance()
 {
 #ifdef ENABLE_VR
@@ -404,8 +412,17 @@ float GetPrimedGunPerspectiveHudSize()
 MetroidHydraHudSettings GetMetroidHydraHudSettings(MetroidElementProfile profile,
                                                    MetroidElementLayer layer)
 {
-  if (!IsMetroidPrime1Profile(profile))
+  // Prime 2 shares the per-layer table: its layer set overlaps (DarkVisorHUD is already
+  // here from the Hydra lineage) and the values are starting points tunable via the VR
+  // menu overlay at the call sites. Prime 1 results are unchanged.
+  if (!IsMetroidPrime1Profile(profile)
+#ifndef PRIMEDGUN_DISABLE_PRIME2
+      && !IsMetroidPrime2Profile(profile)
+#endif
+  )
+  {
     return {};
+  }
 
   switch (layer)
   {
@@ -2180,6 +2197,43 @@ void VertexManagerBase::Flush()
               element_depth = -1.0f;
             }
 
+#ifndef PRIMEDGUN_DISABLE_PRIME2
+            // Prime 2: blanket-lock unclaimed full-screen 2D draws flat across the whole view.
+            // These are the in-game screen-space effects (dark-world tint, fades, damage/echo
+            // overlays) and the cinematic letterbox content, which Echoes emits as
+            // near-fullscreen ortho quads the classifier leaves as Unknown2D -> Skip (default
+            // virtual-screen placement = floating in 3D, user can look around them).
+            // FullscreenMono leaves the quad at full NDC so it fills the entire eye, fixed to
+            // the display (all-encompassing, head-locked) — not a sized screen at a distance
+            // like HandlingType::HeadLocked.
+            //
+            // Scope: only when a real 3D scene was present last frame (m_prime2_scene_active) —
+            // this is in-game and cutscenes. Main menus (0 persp draws) and loading/save
+            // screens (~1) fail the latch and keep their default virtual-screen placement, so
+            // the location-name and menu screens are NOT plastered to the face. Guards: per-
+            // hash/profile overrides already ran (they win); hidden layers took the
+            // elements_skip path and never reach here; the viewport-width gate excludes small
+            // 2D passes (shadows 128/32-wide). QPVR_P2_NO_LOCK_2D=1 disables for A/B.
+            if (element_draw && IsMetroidPrime2Profile(element_draw->profile_id) &&
+                element_draw->signature.perspective)
+            {
+              ++m_prime2_persp_draws;
+            }
+            // The pause/map/inventory screens render 3D content behind their artwork (Samus
+            // model, map holograms), so the scene latch alone cannot exclude them — the
+            // classifier-driven map-or-pause flag can (cutscenes never emit menu layers).
+            static const bool s_p2_no_lock_2d = getenv("QPVR_P2_NO_LOCK_2D") != nullptr;
+            if (!s_p2_no_lock_2d && m_prime2_scene_active &&
+                handling == ShaderHunter::HandlingType::Skip && element_draw &&
+                IsMetroidPrime2Profile(element_draw->profile_id) &&
+                !element_draw->signature.perspective &&
+                element_draw->signature.viewport_width >= 300 &&
+                !hunter.IsFlagActive("primedgun_map_or_pause"))
+            {
+              handling = ShaderHunter::HandlingType::FullscreenMono;
+            }
+#endif
+
             // QuestPrimeVR: trace label -> applied handling (QPVR_DRAW_TRACE env), the
             // link between the classifier verdicts and the VR presentation actually used.
             {
@@ -3115,6 +3169,11 @@ void VertexManagerBase::OnEndFrame()
   m_qpvr_map_scene_active =
       m_qpvr_map_wireframe_draws > 32 && !m_metroid_prime1_combat_context_seen;
   m_qpvr_map_wireframe_draws = 0;
+#endif
+#ifndef PRIMEDGUN_DISABLE_PRIME2
+  // Latch "a 3D scene was present" for next frame's 2D-lock scope gate (see header).
+  m_prime2_scene_active = m_prime2_persp_draws > 16;
+  m_prime2_persp_draws = 0;
 #endif
   auto& system = Core::System::GetInstance();
   system.GetGeometryShaderManager().vr_ortho_draw_counter = 0;

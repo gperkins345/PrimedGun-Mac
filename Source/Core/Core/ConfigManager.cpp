@@ -194,6 +194,20 @@ static bool IsVRSectionHeader(std::string_view line)
          Common::CaseInsensitiveEquals(section_name, LEGACY_VR_SECTION_NAME);
 }
 
+// Games that receive PrimedGun's emulator/VR rendering defaults. Prime 1's native
+// runtime stays gated on GM8E01 in NativeRuntime.cpp; Prime 2 (G2ME01) support is
+// compiled out entirely when PRIMEDGUN_DISABLE_PRIME2 is defined.
+static bool IsPrimedGunMetroidGameId(std::string_view game_id)
+{
+  if (Common::CaseInsensitiveEquals(game_id, "GM8E01"))
+    return true;
+#ifndef PRIMEDGUN_DISABLE_PRIME2
+  if (Common::CaseInsensitiveEquals(game_id, "G2ME01"))
+    return true;
+#endif
+  return false;
+}
+
 static VRSettingMap LoadVRSettingsFromINI(std::string_view game_id)
 {
   VRSettingMap values;
@@ -201,7 +215,7 @@ static VRSettingMap LoadVRSettingsFromINI(std::string_view game_id)
   if (game_id.empty() || game_id == DEFAULT_GAME_ID)
     return values;
 
-  if (Common::CaseInsensitiveEquals(game_id, "GM8E01"))
+  if (IsPrimedGunMetroidGameId(game_id))
   {
     values.insert_or_assign("EnableOpenXR", "True");
     values.insert_or_assign("UnitsPerMeter", "1.50");
@@ -820,7 +834,7 @@ Common::IniFile SConfig::LoadDefaultGameIni(std::string_view id, std::optional<u
   Common::IniFile game_ini;
   for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(id, revision))
     game_ini.Load(File::GetSysDirectory() + GAMESETTINGS_DIR DIR_SEP + filename, true);
-  if (Common::CaseInsensitiveEquals(id, "GM8E01"))
+  if (IsPrimedGunMetroidGameId(id))
     ApplyPrimedGunMetroidDefaults(&game_ini);
   return game_ini;
 }
@@ -838,7 +852,7 @@ Common::IniFile SConfig::LoadGameIni(std::string_view id, std::optional<u16> rev
   Common::IniFile game_ini;
   for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(id, revision))
     game_ini.Load(File::GetSysDirectory() + GAMESETTINGS_DIR DIR_SEP + filename, true);
-  if (Common::CaseInsensitiveEquals(id, "GM8E01"))
+  if (IsPrimedGunMetroidGameId(id))
     ApplyPrimedGunMetroidDefaults(&game_ini);
   for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(id, revision))
     game_ini.Load(File::GetUserPath(D_GAMESETTINGS_IDX) + filename, true);
