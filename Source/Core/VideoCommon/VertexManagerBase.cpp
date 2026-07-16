@@ -2278,10 +2278,38 @@ void VertexManagerBase::Flush()
                   p2_max_y = std::max(p2_max_y, clip[1] * inv_w);
                 }
               }
-              // NDC spans 2.0 fullscreen; 1.55 (~78%) keeps crop-riding cutscene quads in
-              // while every measured text/popup/dialog draw stays well under it.
-              if (p2_bounds_valid && p2_max_x - p2_min_x >= 1.55f && p2_max_y - p2_min_y >= 1.55f)
+              // NDC spans 2.0 fullscreen. Threshold history: 1.55 (~78%) flip-flopped at
+              // cutscene SHOT granularity — crop depth varies per shot and deeper crops
+              // (wider-aspect framings, ~1.3-1.5 span) fell under it while the latch was
+              // provably solid. 1.20 (60%) admits every crop variant; protected UI is
+              // either tiny (glyphs), short (title cards/text rows fail the Y span),
+              // hash-pinned (menu backgrounds), or cut by the pause flag (pause artwork).
+              constexpr float kPrime2FullviewSpan = 1.20f;
+              const float p2_span_x = p2_max_x - p2_min_x;
+              const float p2_span_y = p2_max_y - p2_min_y;
+              if (p2_bounds_valid && p2_span_x >= kPrime2FullviewSpan &&
+                  p2_span_y >= kPrime2FullviewSpan)
+              {
                 handling = ShaderHunter::HandlingType::FullscreenMono;
+              }
+              else if (p2_bounds_valid)
+              {
+                // A candidate that passed every state gate but failed coverage is exactly
+                // the draw that would flip-flop if the threshold is still wrong — name it.
+                static const bool s_p2_span_log = getenv("QPVR_PG_LOG") != nullptr;
+                if (s_p2_span_log) [[unlikely]]
+                {
+                  static std::set<u64> s_logged_span_ps;
+                  if (s_logged_span_ps.insert(ps_hash).second)
+                  {
+                    NOTICE_LOG_FMT(VIDEO,
+                                   "QPVR prime2 2D-lock DENIED by span: PS={:08x} "
+                                   "span=({:.2f},{:.2f}) need {:.2f} (draw #{})",
+                                   static_cast<u32>(ps_hash), p2_span_x, p2_span_y,
+                                   kPrime2FullviewSpan, m_draw_counter);
+                  }
+                }
+              }
             }
             // Prime 2: the helmet visor, when visible, is always plastered across the whole
             // view (hardcoded; wins over the profile's headlocked handling). Invisible when
