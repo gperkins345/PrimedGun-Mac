@@ -2222,15 +2222,21 @@ void VertexManagerBase::Flush()
             {
               ++m_prime2_persp_draws;
             }
-            // The decisive discriminator between effects and UI is GEOMETRIC, not state
-            // (every state gate tried — scene latch alone, map-or-pause flag, ztest —
-            // misclassified some UI draw whose live render state varies by game state,
-            // e.g. the load-screen per-glyph shimmer redraw drew ztest-off and got
-            // plastered across the face): transform the batch's vertices to NDC and
-            // require the draw to actually cover the view. Effect quads span the full
-            // ±1 range (crop-riding cutscene quads ~80% vertically); a glyph, popup,
-            // title card, or dialog never spans it in both axes. Per-hash ini pins
-            // still win — this only fires when handling is still Skip.
+            // Restored to the user-certified rule set (the "so much better" build): any
+            // unclaimed near-fullscreen-viewport ortho draw locks across the whole view
+            // while a scene is up. The NDC-coverage gate that later replaced this was
+            // measuring garbage — deny-telemetry showed known projection-filling quads
+            // (fade 9a2998f8, backdrop 4f01a884, portal 11b29574) with span 0.00 — so it
+            // silently vetoed every non-pinned lock and made locking depend on which
+            // filter-shader variant a scene happened to use (the works/not-works
+            // flip-flop). Do NOT reintroduce geometric gating without validating the
+            // vertex->NDC transform against those known-fullscreen hashes first.
+            //
+            // The one real defect of this rule — the location-banner per-glyph shimmer
+            // redraw plastering a letter across the face — is excluded surgically by its
+            // pixel shader, ortho-qualified so the hash's unrelated perspective
+            // shadow-pass twin keeps default treatment.
+            constexpr u32 kPrime2LocationTextPsHash = 0x6ec48426u;
             static const bool s_p2_no_lock_2d = getenv("QPVR_P2_NO_LOCK_2D") != nullptr;
             if (!s_p2_no_lock_2d && m_prime2_scene_active &&
                 handling == ShaderHunter::HandlingType::Skip && element_draw &&
@@ -2241,75 +2247,9 @@ void VertexManagerBase::Flush()
                 // Never the classifier's "primedgun_map_or_pause": in Prime 2 that fires
                 // every gameplay frame (Map-layer false positives) and killed the locks.
                 !hunter.IsFlagActive("prime2_pause") &&
-                (m_current_primitive_type == PrimitiveType::Triangles ||
-                 m_current_primitive_type == PrimitiveType::TriangleStrip))
+                static_cast<u32>(ps_hash) != kPrime2LocationTextPsHash)
             {
-              const PortableVertexDeclaration& p2_vdecl =
-                  VertexLoaderManager::GetCurrentVertexFormat()->GetVertexDeclaration();
-              const u32 p2_nverts = m_index_generator.GetNumVerts();
-              const u8* p2_base = m_base_buffer_pointer;
-              float p2_min_x = FLT_MAX, p2_min_y = FLT_MAX;
-              float p2_max_x = -FLT_MAX, p2_max_y = -FLT_MAX;
-              bool p2_bounds_valid =
-                  p2_nverts >= 3 && p2_vdecl.stride > 0 &&
-                  m_cur_buffer_pointer - m_base_buffer_pointer >=
-                      static_cast<ptrdiff_t>(p2_nverts) * p2_vdecl.stride;
-              if (p2_bounds_valid)
-              {
-                for (u32 v = 0; v < p2_nverts; ++v)
-                {
-                  float pos[3] = {0.0f, 0.0f, 0.0f};
-                  memcpy(pos, p2_base + v * p2_vdecl.stride + p2_vdecl.position.offset,
-                         p2_vdecl.position.components * sizeof(float));
-                  const u32 mtx_idx = p2_vdecl.posmtx.enable ?
-                                          p2_base[v * p2_vdecl.stride + p2_vdecl.posmtx.offset] :
-                                          u32(g_main_cp_state.matrix_index_a.PosNormalMtxIdx);
-                  float clip[4];
-                  vertex_shader_manager.TransformToClipSpace(pos, clip, mtx_idx);
-                  if (std::abs(clip[3]) < 1e-6f)
-                  {
-                    p2_bounds_valid = false;
-                    break;
-                  }
-                  const float inv_w = 1.0f / clip[3];
-                  p2_min_x = std::min(p2_min_x, clip[0] * inv_w);
-                  p2_max_x = std::max(p2_max_x, clip[0] * inv_w);
-                  p2_min_y = std::min(p2_min_y, clip[1] * inv_w);
-                  p2_max_y = std::max(p2_max_y, clip[1] * inv_w);
-                }
-              }
-              // NDC spans 2.0 fullscreen. Threshold history: 1.55 (~78%) flip-flopped at
-              // cutscene SHOT granularity — crop depth varies per shot and deeper crops
-              // (wider-aspect framings, ~1.3-1.5 span) fell under it while the latch was
-              // provably solid. 1.20 (60%) admits every crop variant; protected UI is
-              // either tiny (glyphs), short (title cards/text rows fail the Y span),
-              // hash-pinned (menu backgrounds), or cut by the pause flag (pause artwork).
-              constexpr float kPrime2FullviewSpan = 1.20f;
-              const float p2_span_x = p2_max_x - p2_min_x;
-              const float p2_span_y = p2_max_y - p2_min_y;
-              if (p2_bounds_valid && p2_span_x >= kPrime2FullviewSpan &&
-                  p2_span_y >= kPrime2FullviewSpan)
-              {
-                handling = ShaderHunter::HandlingType::FullscreenMono;
-              }
-              else if (p2_bounds_valid)
-              {
-                // A candidate that passed every state gate but failed coverage is exactly
-                // the draw that would flip-flop if the threshold is still wrong — name it.
-                static const bool s_p2_span_log = getenv("QPVR_PG_LOG") != nullptr;
-                if (s_p2_span_log) [[unlikely]]
-                {
-                  static std::set<u64> s_logged_span_ps;
-                  if (s_logged_span_ps.insert(ps_hash).second)
-                  {
-                    NOTICE_LOG_FMT(VIDEO,
-                                   "QPVR prime2 2D-lock DENIED by span: PS={:08x} "
-                                   "span=({:.2f},{:.2f}) need {:.2f} (draw #{})",
-                                   static_cast<u32>(ps_hash), p2_span_x, p2_span_y,
-                                   kPrime2FullviewSpan, m_draw_counter);
-                  }
-                }
-              }
+              handling = ShaderHunter::HandlingType::FullscreenMono;
             }
             // Prime 2: the helmet visor, when visible, is always plastered across the whole
             // view (hardcoded; wins over the profile's headlocked handling). Invisible when
