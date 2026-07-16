@@ -3239,7 +3239,13 @@ void VertexManagerBase::OnEndFrame()
   // excluded by the host-truth prime2_pause flag rather than this latch anyway.
   {
     constexpr int kPrime2SceneHoldFrames = 30;
-    const bool scene_now = m_prime2_persp_draws > 16;
+    // Union of host truth and draw statistics: the runtime's prime2_scene flag (gameplay
+    // resolved — includes cutscenes, which can render near-zero perspective draws for
+    // seconds during fades/sparse shots, the cause of the lock flip-flop) OR'd with the
+    // perspective-draw count (covers world-transition movies where the player object is
+    // briefly torn down and the host flag drops).
+    const bool host_scene = ShaderHunter::GetInstance().IsFlagActive("prime2_scene");
+    const bool scene_now = host_scene || m_prime2_persp_draws > 16;
     if (scene_now)
       m_prime2_scene_cooldown = kPrime2SceneHoldFrames;
     else if (m_prime2_scene_cooldown > 0)
@@ -3248,8 +3254,10 @@ void VertexManagerBase::OnEndFrame()
     static const bool s_p2_latch_log = getenv("QPVR_PG_LOG") != nullptr;
     if (s_p2_latch_log && latch != m_prime2_scene_active) [[unlikely]]
     {
-      NOTICE_LOG_FMT(VIDEO, "QPVR prime2 scene latch {} (persp_draws={} cooldown={})",
-                     latch ? "ON" : "off", m_prime2_persp_draws, m_prime2_scene_cooldown);
+      NOTICE_LOG_FMT(VIDEO,
+                     "QPVR prime2 scene latch {} (host_scene={} persp_draws={} cooldown={})",
+                     latch ? "ON" : "off", host_scene, m_prime2_persp_draws,
+                     m_prime2_scene_cooldown);
     }
     m_prime2_scene_active = latch;
     m_prime2_persp_draws = 0;

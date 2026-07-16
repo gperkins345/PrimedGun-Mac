@@ -8349,6 +8349,13 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard,
     return;
   }
 
+  // Host-truth scene signal for the render-side 2D-lock: gameplay resolution succeeding
+  // means world loaded + live player + not in a menu — true through cutscenes as well
+  // (the cannon redirect ran during landing cinematics), false on menus, load screens,
+  // and the frontend. The render side unions this with its perspective-draw count, which
+  // covers the moments a cutscene tears the player down (world-transition movies).
+  ShaderHunter::GetInstance().RegisterExternalFlag("prime2_scene");
+
   // The HMD supplies pitch at the render layer; keep the game camera level. Writing every
   // frame (not only on change) also covers Echoes' one-frame pitch flicker after unmorphing.
   const bool first_person = PlayerIsFirstPerson(guard, player);
