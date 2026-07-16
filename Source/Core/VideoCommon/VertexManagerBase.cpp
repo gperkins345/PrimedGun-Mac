@@ -2219,21 +2219,18 @@ void VertexManagerBase::Flush()
             {
               ++m_prime2_persp_draws;
             }
-            // The pause/map/inventory screens render 3D content behind their artwork (Samus
-            // model, map holograms), so the scene latch alone cannot exclude them — the
-            // classifier-driven map-or-pause flag can (cutscenes never emit menu layers).
-            // The ztest gate separates effects from UI: every full-view effect (dark-world
-            // ambience stack, fades, cutscene filter) draws with depth-test OFF, while
-            // UI-like 2D — menu backgrounds, popups, location-text glyphs (including the
-            // per-glyph shimmer redraw on load screens), cutscene title cards — draws with
-            // depth-test ON and must never be plastered to the face (measured, trace
-            // 2026-07-14; see PRIME2-PORT.md).
-            static const bool s_p2_no_lock_2d = getenv("QPVR_P2_NO_LOCK_2D") != nullptr;
-            if (!s_p2_no_lock_2d && m_prime2_scene_active &&
+            // EXPERIMENTAL, default OFF (QPVR_P2_LOCK_2D=1 enables): blanket-lock unclaimed
+            // fullscreen 2D. Retired from default use — every state-based discriminator
+            // tried (scene latch, map-or-pause flag, ztest) misclassified some UI draw
+            // (menu backgrounds, the load-screen per-glyph shimmer redraw) whose live
+            // render state varies by game state. The shipped path is deterministic
+            // per-hash fullscreen_mono pins in G2ME01.ini for the measured effect set
+            // (dark-world ambience stack, cutscene filter); see PRIME2-PORT.md.
+            static const bool s_p2_lock_2d_experiment = getenv("QPVR_P2_LOCK_2D") != nullptr;
+            if (s_p2_lock_2d_experiment && m_prime2_scene_active &&
                 handling == ShaderHunter::HandlingType::Skip && element_draw &&
                 IsMetroidPrime2Profile(element_draw->profile_id) &&
                 !element_draw->signature.perspective &&
-                !element_draw->signature.ztest &&
                 element_draw->signature.viewport_width >= 300 &&
                 !hunter.IsFlagActive("primedgun_map_or_pause"))
             {
@@ -2243,8 +2240,7 @@ void VertexManagerBase::Flush()
             // view (hardcoded; wins over the profile's headlocked handling). Invisible when
             // the menu's Helmet Visor toggle is off — the runtime zeroes the game's
             // helmet-alpha option, so nothing draws.
-            if (!s_p2_no_lock_2d && element_draw &&
-                IsMetroidPrime2Profile(element_draw->profile_id) &&
+            if (element_draw && IsMetroidPrime2Profile(element_draw->profile_id) &&
                 element_draw->profile_layer == MetroidElementLayer::Helmet)
             {
               handling = ShaderHunter::HandlingType::FullscreenMono;
