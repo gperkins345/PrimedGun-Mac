@@ -2232,6 +2232,16 @@ void VertexManagerBase::Flush()
             {
               handling = ShaderHunter::HandlingType::FullscreenMono;
             }
+            // Prime 2: the helmet visor, when visible, is always plastered across the whole
+            // view (hardcoded; wins over the profile's headlocked handling). Invisible when
+            // the menu's Helmet Visor toggle is off — the runtime zeroes the game's
+            // helmet-alpha option, so nothing draws.
+            if (!s_p2_no_lock_2d && element_draw &&
+                IsMetroidPrime2Profile(element_draw->profile_id) &&
+                element_draw->profile_layer == MetroidElementLayer::Helmet)
+            {
+              handling = ShaderHunter::HandlingType::FullscreenMono;
+            }
 #endif
 
             // QuestPrimeVR: trace label -> applied handling (QPVR_DRAW_TRACE env), the
