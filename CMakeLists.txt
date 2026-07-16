@@ -83,6 +83,17 @@ if(APPROVED_VENDORED_DEPENDENCIES)
 endif()
 option(USE_UPNP "Enables UPnP port mapping support" OFF)
 option(ENABLE_NOGUI "Enable NoGUI frontend" OFF)
+
+# Product split: one tree builds both Mac targets.
+#   PrimedGun-Mac  — Metroid Prime 1 only:  -DPRIMEDGUN_PRODUCT_NAME=PrimedGun-Mac -DPRIMEDGUN_ENABLE_PRIME2=OFF
+#   Primed2Gun-Mac — adds Metroid Prime 2:  -DPRIMEDGUN_PRODUCT_NAME=Primed2Gun-Mac (Prime 2 on by default)
+# With PRIMEDGUN_ENABLE_PRIME2=OFF every Prime 2 code path compiles out, leaving the
+# Prime 1 product byte-equivalent to a tree without the Prime 2 work.
+set(PRIMEDGUN_PRODUCT_NAME "PrimedGun" CACHE STRING "User-visible product name (binary and window title)")
+option(PRIMEDGUN_ENABLE_PRIME2 "Include Metroid Prime 2 (Echoes) VR support" ON)
+if(NOT PRIMEDGUN_ENABLE_PRIME2)
+  add_definitions(-DPRIMEDGUN_DISABLE_PRIME2)
+endif()
 option(ENABLE_QT "Enable Qt (Default)" ON)
 option(ENABLE_LTO "Enables Link Time Optimization" OFF)
 option(ENABLE_GENERIC "Enables generic build that should run on any little-endian host" OFF)
