@@ -2222,11 +2222,18 @@ void VertexManagerBase::Flush()
             // The pause/map/inventory screens render 3D content behind their artwork (Samus
             // model, map holograms), so the scene latch alone cannot exclude them — the
             // classifier-driven map-or-pause flag can (cutscenes never emit menu layers).
+            // The ztest gate separates effects from UI: every full-view effect (dark-world
+            // ambience stack, fades, cutscene filter) draws with depth-test OFF, while
+            // UI-like 2D — menu backgrounds, popups, location-text glyphs (including the
+            // per-glyph shimmer redraw on load screens), cutscene title cards — draws with
+            // depth-test ON and must never be plastered to the face (measured, trace
+            // 2026-07-14; see PRIME2-PORT.md).
             static const bool s_p2_no_lock_2d = getenv("QPVR_P2_NO_LOCK_2D") != nullptr;
             if (!s_p2_no_lock_2d && m_prime2_scene_active &&
                 handling == ShaderHunter::HandlingType::Skip && element_draw &&
                 IsMetroidPrime2Profile(element_draw->profile_id) &&
                 !element_draw->signature.perspective &&
+                !element_draw->signature.ztest &&
                 element_draw->signature.viewport_width >= 300 &&
                 !hunter.IsFlagActive("primedgun_map_or_pause"))
             {
