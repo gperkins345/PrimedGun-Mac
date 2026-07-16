@@ -5,10 +5,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
 #include <cmath>
 #include <set>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -2209,32 +2211,74 @@ void VertexManagerBase::Flush()
             //
             // Scope: only when a real 3D scene was present last frame (m_prime2_scene_active) —
             // this is in-game and cutscenes. Main menus (0 persp draws) and loading/save
-            // screens (~1) fail the latch and keep their default virtual-screen placement, so
-            // the location-name and menu screens are NOT plastered to the face. Guards: per-
-            // hash/profile overrides already ran (they win); hidden layers took the
-            // elements_skip path and never reach here; the viewport-width gate excludes small
-            // 2D passes (shadows 128/32-wide). QPVR_P2_NO_LOCK_2D=1 disables for A/B.
+            // screens (~1) fail the latch — but the latch alone is NOT sufficient (it bleeds
+            // a frame into load screens, where the per-glyph shimmer redraw animates), hence
+            // the NDC-coverage gate below. Guards: per-hash/profile overrides already ran
+            // (they win); hidden layers took the elements_skip path and never reach here; the
+            // viewport-width gate excludes small 2D passes (shadows 128/32-wide).
+            // QPVR_P2_NO_LOCK_2D=1 disables for A/B.
             if (element_draw && IsMetroidPrime2Profile(element_draw->profile_id) &&
                 element_draw->signature.perspective)
             {
               ++m_prime2_persp_draws;
             }
-            // EXPERIMENTAL, default OFF (QPVR_P2_LOCK_2D=1 enables): blanket-lock unclaimed
-            // fullscreen 2D. Retired from default use — every state-based discriminator
-            // tried (scene latch, map-or-pause flag, ztest) misclassified some UI draw
-            // (menu backgrounds, the load-screen per-glyph shimmer redraw) whose live
-            // render state varies by game state. The shipped path is deterministic
-            // per-hash fullscreen_mono pins in G2ME01.ini for the measured effect set
-            // (dark-world ambience stack, cutscene filter); see PRIME2-PORT.md.
-            static const bool s_p2_lock_2d_experiment = getenv("QPVR_P2_LOCK_2D") != nullptr;
-            if (s_p2_lock_2d_experiment && m_prime2_scene_active &&
+            // The decisive discriminator between effects and UI is GEOMETRIC, not state
+            // (every state gate tried — scene latch alone, map-or-pause flag, ztest —
+            // misclassified some UI draw whose live render state varies by game state,
+            // e.g. the load-screen per-glyph shimmer redraw drew ztest-off and got
+            // plastered across the face): transform the batch's vertices to NDC and
+            // require the draw to actually cover the view. Effect quads span the full
+            // ±1 range (crop-riding cutscene quads ~80% vertically); a glyph, popup,
+            // title card, or dialog never spans it in both axes. Per-hash ini pins
+            // still win — this only fires when handling is still Skip.
+            static const bool s_p2_no_lock_2d = getenv("QPVR_P2_NO_LOCK_2D") != nullptr;
+            if (!s_p2_no_lock_2d && m_prime2_scene_active &&
                 handling == ShaderHunter::HandlingType::Skip && element_draw &&
                 IsMetroidPrime2Profile(element_draw->profile_id) &&
                 !element_draw->signature.perspective &&
                 element_draw->signature.viewport_width >= 300 &&
-                !hunter.IsFlagActive("primedgun_map_or_pause"))
+                !hunter.IsFlagActive("primedgun_map_or_pause") &&
+                (m_current_primitive_type == PrimitiveType::Triangles ||
+                 m_current_primitive_type == PrimitiveType::TriangleStrip))
             {
-              handling = ShaderHunter::HandlingType::FullscreenMono;
+              const PortableVertexDeclaration& p2_vdecl =
+                  VertexLoaderManager::GetCurrentVertexFormat()->GetVertexDeclaration();
+              const u32 p2_nverts = m_index_generator.GetNumVerts();
+              const u8* p2_base = m_base_buffer_pointer;
+              float p2_min_x = FLT_MAX, p2_min_y = FLT_MAX;
+              float p2_max_x = -FLT_MAX, p2_max_y = -FLT_MAX;
+              bool p2_bounds_valid =
+                  p2_nverts >= 3 && p2_vdecl.stride > 0 &&
+                  m_cur_buffer_pointer - m_base_buffer_pointer >=
+                      static_cast<ptrdiff_t>(p2_nverts) * p2_vdecl.stride;
+              if (p2_bounds_valid)
+              {
+                for (u32 v = 0; v < p2_nverts; ++v)
+                {
+                  float pos[3] = {0.0f, 0.0f, 0.0f};
+                  memcpy(pos, p2_base + v * p2_vdecl.stride + p2_vdecl.position.offset,
+                         p2_vdecl.position.components * sizeof(float));
+                  const u32 mtx_idx = p2_vdecl.posmtx.enable ?
+                                          p2_base[v * p2_vdecl.stride + p2_vdecl.posmtx.offset] :
+                                          u32(g_main_cp_state.matrix_index_a.PosNormalMtxIdx);
+                  float clip[4];
+                  vertex_shader_manager.TransformToClipSpace(pos, clip, mtx_idx);
+                  if (std::abs(clip[3]) < 1e-6f)
+                  {
+                    p2_bounds_valid = false;
+                    break;
+                  }
+                  const float inv_w = 1.0f / clip[3];
+                  p2_min_x = std::min(p2_min_x, clip[0] * inv_w);
+                  p2_max_x = std::max(p2_max_x, clip[0] * inv_w);
+                  p2_min_y = std::min(p2_min_y, clip[1] * inv_w);
+                  p2_max_y = std::max(p2_max_y, clip[1] * inv_w);
+                }
+              }
+              // NDC spans 2.0 fullscreen; 1.55 (~78%) keeps crop-riding cutscene quads in
+              // while every measured text/popup/dialog draw stays well under it.
+              if (p2_bounds_valid && p2_max_x - p2_min_x >= 1.55f && p2_max_y - p2_min_y >= 1.55f)
+                handling = ShaderHunter::HandlingType::FullscreenMono;
             }
             // Prime 2: the helmet visor, when visible, is always plastered across the whole
             // view (hardcoded; wins over the profile's headlocked handling). Invisible when
