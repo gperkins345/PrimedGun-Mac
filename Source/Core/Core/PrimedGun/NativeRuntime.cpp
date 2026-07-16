@@ -8294,6 +8294,19 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard,
   if ((s_frame_counter % 60u) == 1u)
     ApplyHelmetOpacity(guard, settings);
 
+  // Host-truth pause flag for the render-side 2D-lock. The game's menu_state is nonzero on
+  // the pause/inventory/map and frontend screens but stays zero during cutscenes (verified:
+  // the cannon-transform redirect kept running through landing cinematics). The classifier's
+  // "primedgun_map_or_pause" flag is unusable for Prime 2 — its Map/MapOrHint verdicts fire
+  // every frame of ordinary gameplay (trace census: 'Map' count ≈ per-frame 'Helmet' count),
+  // which silently suppressed the cutscene/effect locks whenever that flag gated them.
+  u32 p2_menu_state = 0;
+  if (TryReadU32(guard, STATE_MANAGER + MENU_STATE_OFFSET, &p2_menu_state) &&
+      p2_menu_state != 0u)
+  {
+    ShaderHunter::GetInstance().RegisterExternalFlag("prime2_pause");
+  }
+
   RuntimeSettings live_settings = settings;
 #ifdef ENABLE_VR
   // The PrimedGun VR menu, overlay/layout publishing, and height recenter are pure host

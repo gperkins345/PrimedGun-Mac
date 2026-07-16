@@ -2237,7 +2237,10 @@ void VertexManagerBase::Flush()
                 IsMetroidPrime2Profile(element_draw->profile_id) &&
                 !element_draw->signature.perspective &&
                 element_draw->signature.viewport_width >= 300 &&
-                !hunter.IsFlagActive("primedgun_map_or_pause") &&
+                // Host-truth flag from prime2's NativeRuntime (game menu_state != 0).
+                // Never the classifier's "primedgun_map_or_pause": in Prime 2 that fires
+                // every gameplay frame (Map-layer false positives) and killed the locks.
+                !hunter.IsFlagActive("prime2_pause") &&
                 (m_current_primitive_type == PrimitiveType::Triangles ||
                  m_current_primitive_type == PrimitiveType::TriangleStrip))
             {
