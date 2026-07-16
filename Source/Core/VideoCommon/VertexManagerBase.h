@@ -263,6 +263,7 @@ private:
   // screens keep the default virtual-screen placement.
   u32 m_prime2_persp_draws = 0;
   bool m_prime2_scene_active = false;
+  int m_prime2_scene_cooldown = 0;
 #endif
   bool m_metroid_prime1_thermal_context_active = false;
   bool m_metroid_prime1_thermal_context_seen = false;

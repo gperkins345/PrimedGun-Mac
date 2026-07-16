@@ -3231,9 +3231,29 @@ void VertexManagerBase::OnEndFrame()
   m_qpvr_map_wireframe_draws = 0;
 #endif
 #ifndef PRIMEDGUN_DISABLE_PRIME2
-  // Latch "a 3D scene was present" for next frame's 2D-lock scope gate (see header).
-  m_prime2_scene_active = m_prime2_persp_draws > 16;
-  m_prime2_persp_draws = 0;
+  // Latch "a 3D scene was present" for next frame's 2D-lock scope gate (see header) — WITH
+  // HYSTERESIS: cutscenes constantly dip the perspective-draw count (camera cuts, fades,
+  // between-shot loads), and an instant latch made the letterbox/effect locks flip-flop in
+  // sync with those dips. Hold the latch for ~0.5s of quiet before releasing; menus/loads
+  // reach zero persp for far longer, so they still unlatch, and the pause screens are
+  // excluded by the host-truth prime2_pause flag rather than this latch anyway.
+  {
+    constexpr int kPrime2SceneHoldFrames = 30;
+    const bool scene_now = m_prime2_persp_draws > 16;
+    if (scene_now)
+      m_prime2_scene_cooldown = kPrime2SceneHoldFrames;
+    else if (m_prime2_scene_cooldown > 0)
+      --m_prime2_scene_cooldown;
+    const bool latch = m_prime2_scene_cooldown > 0;
+    static const bool s_p2_latch_log = getenv("QPVR_PG_LOG") != nullptr;
+    if (s_p2_latch_log && latch != m_prime2_scene_active) [[unlikely]]
+    {
+      NOTICE_LOG_FMT(VIDEO, "QPVR prime2 scene latch {} (persp_draws={} cooldown={})",
+                     latch ? "ON" : "off", m_prime2_persp_draws, m_prime2_scene_cooldown);
+    }
+    m_prime2_scene_active = latch;
+    m_prime2_persp_draws = 0;
+  }
 #endif
   auto& system = Core::System::GetInstance();
   system.GetGeometryShaderManager().vr_ortho_draw_counter = 0;

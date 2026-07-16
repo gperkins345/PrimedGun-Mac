@@ -8306,6 +8306,15 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard,
   {
     ShaderHunter::GetInstance().RegisterExternalFlag("prime2_pause");
   }
+  // Telemetry: if the 2D-lock flip-flops, the log must say which input oscillates —
+  // the render-side scene latch (logged in VertexManagerBase) or this pause signal.
+  static u32 s_last_logged_menu_state = 0xffffffffu;
+  if (RuntimeLoggingEnabled() && p2_menu_state != s_last_logged_menu_state)
+  {
+    NOTICE_LOG_FMT(CORE, "PrimedGun prime2 menu_state -> {} (frame {})", p2_menu_state,
+                   s_frame_counter);
+    s_last_logged_menu_state = p2_menu_state;
+  }
 
   RuntimeSettings live_settings = settings;
 #ifdef ENABLE_VR
