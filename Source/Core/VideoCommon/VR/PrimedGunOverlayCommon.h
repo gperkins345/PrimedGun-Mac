@@ -264,6 +264,12 @@ constexpr uint32_t RESET_TARGETING_ACTION = 2;
 constexpr uint32_t RESET_CALIBRATION_ACTION = 3;
 constexpr uint32_t RESET_CONTROLLER_ACTION = 4;
 constexpr uint32_t RESET_MOVEMENT_ACTION = 5;
+constexpr uint32_t STATE_LOAD_ACTION = 1;
+constexpr uint32_t STATE_SAVE_ACTION = 2;
+constexpr uint32_t STATE_LOAD_NEWEST_ACTION = 3;
+constexpr uint32_t STATE_SAVE_OLDEST_ACTION = 4;
+constexpr uint32_t STATE_ACTION_ROW_COUNT = 4;
+constexpr uint32_t STATE_SLOT_COUNT = 10;
 
 inline std::string ConfirmText(const Common::VR::PrimedGunVrOverlayState& s, uint32_t action)
 {
@@ -284,7 +290,7 @@ inline int CalibrationMenuActualIndex(uint32_t page, int local_index)
   if (local_index <= 0)
     return -1;
 
-  constexpr int first_page_items = 8;
+  constexpr int first_page_items = 12;
   return page == 0 ? local_index - 1 : first_page_items + local_index - 1;
 }
 
@@ -298,8 +304,8 @@ inline bool MenuRowIsNumeric(const Common::VR::PrimedGunVrOverlayState& s, int i
       return true;
 
     const int actual_index = CalibrationMenuActualIndex(s.calibration_page, index);
-    return (actual_index >= 1 && actual_index <= 4) ||
-           (actual_index >= 8 && actual_index <= 13);
+    return (actual_index >= 1 && actual_index <= 8) ||
+           (actual_index >= 12 && actual_index <= 17);
   }
   case VR_MENU_MOVEMENT_TAB:
     return (index >= 3 && index <= 7) || index == 9;
@@ -309,8 +315,8 @@ inline bool MenuRowIsNumeric(const Common::VR::PrimedGunVrOverlayState& s, int i
       return true;
 
     const int actual_index = ControlMenuActualIndex(s.control_page, index);
-    return actual_index == 3 || actual_index == 9 || actual_index == 12 ||
-           actual_index == 13 || actual_index == 14;
+    return actual_index == 3 || actual_index == 9 || actual_index == 13 ||
+           actual_index == 14 || actual_index == 15;
   }
   default:
     return false;
@@ -333,7 +339,7 @@ inline std::string RumbleHandModeText(int mode)
 inline int MenuRowTextY(const Common::VR::PrimedGunVrOverlayState& s, int index)
 {
   int y = 146 + index * 22;
-  if (s.tab == VR_MENU_STATE_TAB && index >= 1)
+  if (s.tab == VR_MENU_STATE_TAB && index >= static_cast<int>(STATE_ACTION_ROW_COUNT))
     y += 18;
   return y;
 }
@@ -352,6 +358,10 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
       rows.push_back({"CUTSCENE CINEMA SCREEN", s.cinematic_screen_enabled ? "ON" : "OFF"});
       rows.push_back({"HUD DISTANCE", FloatText(s.metroid_hud_distance, 2)});
       rows.push_back({"HUD SIZE", FloatText(s.metroid_hud_size, 2)});
+      rows.push_back({"HUD VERTICAL",
+                      FloatText(s.metroid_hud_offset_up - s.metroid_hud_offset_down, 2)});
+      rows.push_back({"HUD HORIZONTAL",
+                      FloatText(s.metroid_hud_offset_right - s.metroid_hud_offset_left, 2)});
       rows.push_back({"TARGET DISTANCE", FloatText(s.gun_targeting_distance, 1)});
       rows.push_back({"TARGET RADIUS", FloatText(s.gun_targeting_radius, 1)});
       rows.push_back({"VISOR HELMET", s.visor_helmet_enabled ? "ON" : "OFF"});
@@ -396,6 +406,7 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
       rows.push_back({"TRACKPAD SENSITIVITY", FloatText(s.primegun_trackpad_press_threshold, 2)});
       rows.push_back({"VISOR GESTURE", s.xr_dpad_enabled ? "ON" : "OFF"});
       rows.push_back({"DIRECTION PAD", s.xr_dpad_enabled ? "ON" : "OFF"});
+      rows.push_back({"QUEST THUMB REST", s.xr_dpad_use_thumbrest_modifier ? "ON" : "OFF"});
       rows.push_back({"HEAD RADIUS", FloatText(s.xr_dpad_head_radius, 2)});
       rows.push_back({"HEAD BELOW", FloatText(s.xr_dpad_head_y_below, 2)});
       rows.push_back({"STICK DEADZONE", FloatText(s.xr_dpad_deadzone, 2)});
@@ -427,8 +438,31 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimedGunVrOverlaySt
             {"SLOT 4", slot_status(4)}, {"CUSTOM", slot_status(5)}};
   }
   case VR_MENU_STATE_TAB:
-    return {{"LOAD STATE", s.state_confirm_action == 1 ? "ARE YOU SURE?" : "PRESS"},
-            {"SAVE STATE", s.state_confirm_action == 2 ? "ARE YOU SURE?" : "PRESS"}};
+  {
+    std::vector<MenuRow> rows;
+    const std::string selected_slot = "SLOT " + std::to_string(s.state_slot);
+    rows.push_back({"LOAD STATE",
+                    s.state_confirm_action == STATE_LOAD_ACTION ? "ARE YOU SURE?" :
+                                                                  selected_slot});
+    rows.push_back({"SAVE STATE",
+                    s.state_confirm_action == STATE_SAVE_ACTION ? "ARE YOU SURE?" :
+                                                                  selected_slot});
+    rows.push_back({"LOAD NEWEST",
+                    s.state_confirm_action == STATE_LOAD_NEWEST_ACTION ? "ARE YOU SURE?" :
+                                                                         "PRESS"});
+    rows.push_back({"SAVE OLDEST",
+                    s.state_confirm_action == STATE_SAVE_OLDEST_ACTION ? "ARE YOU SURE?" :
+                                                                         "PRESS"});
+    constexpr std::array<const char*, STATE_SLOT_COUNT> slot_labels = {
+        "SLOT 1", "SLOT 2", "SLOT 3", "SLOT 4", "SLOT 5",
+        "SLOT 6", "SLOT 7", "SLOT 8", "SLOT 9", "SLOT 10"};
+    for (uint32_t slot = 1; slot <= STATE_SLOT_COUNT; ++slot)
+    {
+      rows.push_back({slot_labels[static_cast<size_t>(slot - 1)],
+                      s.state_slot == slot ? "SELECTED" : "SELECT"});
+    }
+    return rows;
+  }
   default:
     return {};
   }

@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "Common/CommonPaths.h"
+#include "Common/Assembler/GekkoAssembler.h"
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
@@ -152,6 +153,7 @@ constexpr u32 CANNON_EXPECTED_GUN_SCRATCH = SCRATCH_BASE + 0x038u;
 constexpr u32 MODEL_OFFSET_WORLD_SCRATCH = SCRATCH_BASE + 0x040u;
 constexpr u32 ADJUSTED_GUN_POS_SCRATCH = SCRATCH_BASE + 0x050u;
 constexpr u32 AUDIO_LISTENER_CAVE = SCRATCH_BASE + 0x080u;
+constexpr u32 SPRINGBALL_CAVE = SCRATCH_BASE + 0x110u;
 constexpr u32 GUN_TARGET_SCRATCH = SCRATCH_BASE + 0x400u;
 constexpr u32 RETICLE_BILLBOARD_SCRATCH = SCRATCH_BASE + 0x500u;
 constexpr u32 SCAN_RETICLE_TRACE_SCRATCH = SCRATCH_BASE + 0x540u;
@@ -163,6 +165,7 @@ constexpr u32 DPAD_DISABLE_ORIGINAL_FLAGS_SCRATCH = SCRATCH_BASE + 0x68Cu;
 constexpr u32 GAMEFLOW_MENU_SCRATCH = SCRATCH_BASE + 0x690u;
 constexpr u32 MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH = SCRATCH_BASE + 0x694u;
 constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH = SCRATCH_BASE + 0x698u;
+constexpr u32 SPRINGBALL_TRIGGER_SCRATCH = SCRATCH_BASE + 0x69Cu;
 constexpr u32 AUDIO_LISTENER_SCRATCH = SCRATCH_BASE + 0x700u;
 constexpr u32 DPAD_DISABLE_OWNER_MAGIC = 0x50474450u;  // PGDP
 
@@ -202,6 +205,10 @@ constexpr u32 AUDIO_LISTENER_LEGACY_HIGH_CAVE = 0x817F8000u;
 constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ADDRESS = 0x8000E71Cu;
 constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_ORIGINAL = 0x801E0304u;
 constexpr u32 FIRST_PERSON_ORBIT_AIM_VECTOR_SKIP_ADDRESS = 0x8000E9C4u;
+constexpr u32 SPRINGBALL_HOOK_ADDRESS = 0x800F8D28u;
+constexpr u32 SPRINGBALL_HOOK_ORIGINAL = 0x9421FFE0u;
+constexpr u32 SPRINGBALL_HAS_POWERUP = 0x80091AC0u;
+constexpr u32 SPRINGBALL_BOMB_JUMP = 0x802853ECu;
 constexpr u32 PPC_BLR = 0x4E800020u;
 constexpr u32 LOAD_ZERO_TO_F1 = 0xC02280B0u;
 constexpr u32 LOAD_ZERO_TO_F31 = 0xC3E280B0u;
@@ -216,15 +223,15 @@ constexpr u32 VR_MENU_LAYOUT_TAB = 0;
 constexpr u32 VR_MENU_CALIBRATION_TAB = 1;
 constexpr float VR_MENU_TEXTURE_WIDTH = 1024.0f;
 constexpr float VR_MENU_TEXTURE_HEIGHT = 512.0f;
-constexpr u32 VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS = 8;
-constexpr u32 VR_MENU_CALIBRATION_TOTAL_ITEMS = 18;
+constexpr u32 VR_MENU_CALIBRATION_FIRST_PAGE_ITEMS = 10;
+constexpr u32 VR_MENU_CALIBRATION_TOTAL_ITEMS = 20;
 constexpr u32 VR_MENU_CALIBRATION_PAGE_COUNT = 2;
 constexpr u32 VR_MENU_CONTROL_TAB = 2;
 constexpr u32 VR_MENU_MOVEMENT_TAB = 3;
 constexpr u32 VR_MENU_CANNON_TAB = 4;
 constexpr u32 VR_MENU_STATE_TAB = 5;
 constexpr u32 VR_MENU_CONTROL_FIRST_PAGE_ITEMS = 8;
-constexpr u32 VR_MENU_CONTROL_TOTAL_ITEMS = 16;
+constexpr u32 VR_MENU_CONTROL_TOTAL_ITEMS = 17;
 constexpr u32 VR_MENU_CONTROL_PAGE_COUNT = 2;
 constexpr std::array<int, 4> SNAP_TURN_DEGREES_CHOICES = {30, 45, 60, 90};
 constexpr float VR_MENU_ROW_TEXT_Y = 146.0f;
@@ -234,6 +241,12 @@ constexpr float VR_MENU_STATE_ROW_GAP_Y = 18.0f;
 constexpr u64 VR_MENU_STATE_CONFIRM_FRAMES = 360;
 constexpr u64 VR_MENU_RESET_CONFIRM_FRAMES = 360;
 constexpr u64 VR_MENU_LONG_PRESS_FRAMES = 60;
+constexpr u32 VR_MENU_STATE_SLOT_COUNT = 10;
+constexpr u32 VR_MENU_STATE_ACTION_LOAD = 1;
+constexpr u32 VR_MENU_STATE_ACTION_SAVE = 2;
+constexpr u32 VR_MENU_STATE_ACTION_LOAD_NEWEST = 3;
+constexpr u32 VR_MENU_STATE_ACTION_SAVE_OLDEST = 4;
+constexpr u32 VR_MENU_STATE_ACTION_ROW_COUNT = 4;
 constexpr u32 VR_MENU_RESET_ALL_ACTION = 1;
 constexpr u32 VR_MENU_RESET_TARGETING_ACTION = 2;
 constexpr u32 VR_MENU_RESET_CALIBRATION_ACTION = 3;
@@ -396,6 +409,11 @@ u64 s_vr_cannon_texture_notice_until_frame = 0;
 bool s_vr_settings_save_requested = false;
 std::atomic_bool s_vr_state_load_requested{false};
 std::atomic_bool s_vr_state_save_requested{false};
+std::atomic_bool s_vr_state_load_newest_requested{false};
+std::atomic_bool s_vr_state_save_oldest_requested{false};
+std::atomic_int s_vr_state_slot_select_requested{0};
+std::atomic_int s_vr_state_slot_from_ui{0};
+u32 s_vr_state_slot = 1;
 u32 s_vr_state_confirm_action = 0;
 u64 s_vr_state_confirm_until_frame = 0;
 u32 s_vr_reset_confirm_action = 0;
@@ -1889,6 +1907,94 @@ RayCandidateMetrics ResolveActorRayMetrics(const Core::CPUThreadGuard& guard, u3
   return best;
 }
 
+bool ScanAabbUsableForAim(const ActorAabb& box, const RuntimeSettings& settings,
+                          float min_extent, float max_extent_cap)
+{
+  // Some scan actors use large trigger volumes, so scan aim only trusts bounded object shapes.
+  const float targeting_radius = ClampFinite(settings.gun_targeting_radius, 4.0f, 0.1f, 50.0f);
+  const float max_extent = std::clamp(targeting_radius * 2.0f, min_extent, max_extent_cap);
+  return AabbMaxExtent(box) <= max_extent;
+}
+
+bool ScanRenderAabbUsableForAim(const ActorAabb& box, const RuntimeSettings& settings)
+{
+  return ScanAabbUsableForAim(box, settings, 8.0f, 22.0f);
+}
+
+bool ScanPhysicsAabbUsableForAim(const ActorAabb& box, const RuntimeSettings& settings)
+{
+  return ScanAabbUsableForAim(box, settings, 6.0f, 10.0f);
+}
+
+RayCandidateMetrics ResolveScanActorRayMetrics(const Core::CPUThreadGuard& guard, u32 obj,
+                                               float ray_x, float ray_y, float ray_z, float dir_x,
+                                               float dir_y, float dir_z, float max_along,
+                                               const RuntimeSettings& settings)
+{
+  RayCandidateMetrics best = {};
+  float ox = 0.0f;
+  float oy = 0.0f;
+  float oz = 0.0f;
+  RayCandidateMetrics metrics = {};
+  if (ReadTransformTranslation(guard, obj + ADDRESS.transform_offset, &ox, &oy, &oz) &&
+      RayMetricsForPoint(ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, ox, oy, oz, max_along,
+                         &metrics) &&
+      PreferRayMetrics(metrics, best))
+  {
+    best = metrics;
+  }
+
+  ActorAabb box = {};
+  if (ReadActorRenderAabb(guard, obj, &box) && ScanRenderAabbUsableForAim(box, settings) &&
+      RayMetricsForAabb(ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, box, max_along, &metrics) &&
+      PreferRayMetrics(metrics, best))
+  {
+    best = metrics;
+  }
+
+  if (ReadActorPhysicsAabb(guard, obj, &box) && ScanPhysicsAabbUsableForAim(box, settings) &&
+      RayMetricsForAabb(ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, box, max_along, &metrics) &&
+      PreferRayMetrics(metrics, best))
+  {
+    best = metrics;
+  }
+
+  return best;
+}
+
+float ScanTargetAimConePerp(const RuntimeSettings& settings, const RayCandidateMetrics& metrics)
+{
+  const float targeting_radius = ClampFinite(settings.gun_targeting_radius, 4.0f, 0.1f, 50.0f);
+  const float base_perp = std::clamp(targeting_radius * 0.45f, 0.75f, 2.0f);
+  const float distance_slack = std::clamp(metrics.along - 3.0f, 0.0f, 60.0f) * 0.18f;
+  const float bounds_slack = std::min(metrics.radius, 3.0f) * 0.35f;
+  const float max_perp = std::clamp(targeting_radius * 2.75f, 3.0f, 14.0f);
+  return std::min(base_perp + distance_slack + bounds_slack, max_perp);
+}
+
+float ScanVisualAimConePerp(const RuntimeSettings& settings, const RayCandidateMetrics& metrics)
+{
+  const float targeting_radius = ClampFinite(settings.gun_targeting_radius, 4.0f, 0.1f, 50.0f);
+  const float base_perp = std::clamp(targeting_radius * 3.0f, 3.0f, 14.0f);
+  const float distance_slack = std::clamp(metrics.along, 0.0f, 80.0f) * 0.55f;
+  const float bounds_slack = std::min(metrics.radius, 2.0f) * 0.35f;
+  const float max_perp = std::clamp(targeting_radius * 8.0f, 18.0f, 36.0f);
+  return std::min(base_perp + distance_slack + bounds_slack, max_perp);
+}
+
+float ScoreScanTarget(const RayCandidateMetrics& metrics, float aim_cone_perp)
+{
+  const float cone_fraction = metrics.perp / std::max(aim_cone_perp, 0.001f);
+  const float radius_penalty = std::min(metrics.radius, 1.0f) * 0.02f;
+  return cone_fraction * 2.0f + metrics.perp * 0.20f + metrics.along * 0.003f + radius_penalty;
+}
+
+float ScoreScanVisualTarget(const RayCandidateMetrics& metrics, float aim_cone_perp)
+{
+  const float cone_fraction = metrics.perp / std::max(aim_cone_perp, 0.001f);
+  return cone_fraction + metrics.along * 0.001f + std::min(metrics.radius, 1.0f) * 0.02f;
+}
+
 bool LooksLikeTransformMatrix(const Core::CPUThreadGuard& guard, u32 transform)
 {
   float m[12] = {};
@@ -2317,39 +2423,40 @@ bool SeedScanIndicatorTargetsFromHmd(const Core::CPUThreadGuard& guard, u32 stat
     RayCandidateMetrics metrics = {};
     float score = std::numeric_limits<float>::infinity();
   };
-  std::array<Candidate, 8> best{};
-  const auto insert_candidate = [&](u16 uid, u32 obj, const RayCandidateMetrics& metrics,
-                                    float score) {
-    size_t slot = best.size();
+  std::array<Candidate, 16> visual_best{};
+  std::array<Candidate, 8> target_best{};
+  const auto insert_candidate = [](auto& candidates, u16 uid, u32 obj,
+                                   const RayCandidateMetrics& metrics, float score) {
+    size_t slot = candidates.size();
     float worst = -1.0f;
-    for (size_t i = 0; i < best.size(); ++i)
+    for (size_t i = 0; i < candidates.size(); ++i)
     {
-      if (best[i].uid == uid)
+      if (candidates[i].uid == uid)
         return;
-      if (best[i].uid == 0xffffu)
+      if (candidates[i].uid == 0xffffu)
       {
         slot = i;
         break;
       }
-      if (best[i].score > worst)
+      if (candidates[i].score > worst)
       {
-        worst = best[i].score;
+        worst = candidates[i].score;
         slot = i;
       }
     }
 
-    if (slot >= best.size() || (best[slot].uid != 0xffffu && score >= best[slot].score))
+    if (slot >= candidates.size() ||
+        (candidates[slot].uid != 0xffffu && score >= candidates[slot].score))
       return;
 
-    best[slot].uid = uid;
-    best[slot].obj = obj;
-    best[slot].metrics = metrics;
-    best[slot].score = score;
+    candidates[slot].uid = uid;
+    candidates[slot].obj = obj;
+    candidates[slot].metrics = metrics;
+    candidates[slot].score = score;
   };
 
   const u16 player_uid = static_cast<u16>(player_uid_word >> 16);
   const float max_along = std::clamp(settings.gun_targeting_distance, 15.0f, 100.0f);
-  const float base_perp = std::max(settings.gun_targeting_radius * 3.0f, 3.0f);
 
   for (u32 i = 0; i < 1024u; ++i)
   {
@@ -2381,26 +2488,31 @@ bool SeedScanIndicatorTargetsFromHmd(const Core::CPUThreadGuard& guard, u32 stat
     }
 
     const RayCandidateMetrics metrics =
-        ResolveActorRayMetrics(guard, obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z, max_along,
-                               true);
+        ResolveScanActorRayMetrics(guard, obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z,
+                                   max_along, settings);
     if (!metrics.valid)
       continue;
 
-    const float hmd_view_perp = base_perp + metrics.along * 0.55f + metrics.radius * 0.35f;
-    if (metrics.perp > hmd_view_perp)
-      continue;
+    const float visual_perp = ScanVisualAimConePerp(settings, metrics);
+    if (metrics.perp <= visual_perp)
+      insert_candidate(visual_best, uid, obj, metrics, ScoreScanVisualTarget(metrics, visual_perp));
 
-    const float cone_fraction = metrics.perp / std::max(hmd_view_perp, 0.001f);
-    const float score = cone_fraction * 1.5f + metrics.along * 0.002f - metrics.radius * 0.01f;
-    insert_candidate(uid, obj, metrics, score);
+    const float target_perp = ScanTargetAimConePerp(settings, metrics);
+    if (metrics.perp <= target_perp)
+      insert_candidate(target_best, uid, obj, metrics, ScoreScanTarget(metrics, target_perp));
+  }
+
+  for (const Candidate& candidate : visual_best)
+  {
+    if (candidate.uid != 0xffffu)
+      EnsureUidInScanVisorTargets(guard, visor, candidate.uid);
   }
 
   const Candidate* selected = nullptr;
-  for (const Candidate& candidate : best)
+  for (const Candidate& candidate : target_best)
   {
     if (candidate.uid != 0xffffu)
     {
-      EnsureUidInScanVisorTargets(guard, visor, candidate.uid);
       if (selected == nullptr || candidate.score < selected->score)
         selected = &candidate;
     }
@@ -2408,6 +2520,8 @@ bool SeedScanIndicatorTargetsFromHmd(const Core::CPUThreadGuard& guard, u32 stat
 
   if (selected == nullptr || pick == nullptr)
     return selected != nullptr;
+
+  EnsureUidInScanVisorTargets(guard, visor, selected->uid);
 
   pick->uid = selected->uid;
   pick->obj = selected->obj;
@@ -2459,9 +2573,7 @@ bool PickScanTargetFromHmd(const Core::CPUThreadGuard& guard, u32 state_manager,
   if (!GunAimDirectionFromMatrix(hmd, &dir_x, &dir_y, &dir_z))
     return false;
 
-  constexpr float scan_pick_radius_multiplier = 3.0f;
   const float max_along = settings.gun_targeting_distance;
-  const float max_perp = settings.gun_targeting_radius * scan_pick_radius_multiplier;
   bool found = false;
 
   for (const ScanTargetCandidate& candidate : candidates)
@@ -2470,14 +2582,16 @@ bool PickScanTargetFromHmd(const Core::CPUThreadGuard& guard, u32 state_manager,
       continue;
 
     const RayCandidateMetrics metrics =
-        ResolveActorRayMetrics(guard, candidate.obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z,
-                               max_along, true);
-    if (!metrics.valid || metrics.perp > max_perp)
+        ResolveScanActorRayMetrics(guard, candidate.obj, ray_x, ray_y, ray_z, dir_x, dir_y, dir_z,
+                                   max_along, settings);
+    if (!metrics.valid)
       continue;
 
-    const float cone_fraction = metrics.perp / std::max(max_perp, 0.001f);
-    const float score = cone_fraction * 1.50f + metrics.perp * 0.35f +
-                        metrics.along * 0.003f - metrics.radius * 0.015f;
+    const float hmd_view_perp = ScanTargetAimConePerp(settings, metrics);
+    if (metrics.perp > hmd_view_perp)
+      continue;
+
+    const float score = ScoreScanTarget(metrics, hmd_view_perp);
     if (!found || score < pick->score)
     {
       found = true;
@@ -3555,6 +3669,25 @@ bool LeftControllerNearHead(const Pose& left, const Pose& hmd, const RuntimeSett
          dy >= -(settings.xr_dpad_head_y_below + 0.04f) && dy <= 0.28f;
 }
 
+bool IsQuestTouchPlusProfile(std::string_view profile)
+{
+  return profile.find("/interaction_profiles/meta/touch_controller_plus") != std::string_view::npos;
+}
+
+bool QuestTouchPlusThumbrestModifierActive(const Common::VR::OpenXRInputSnapshot& snapshot)
+{
+  for (std::size_t hand = 0; hand < snapshot.controllers.size(); ++hand)
+  {
+    if (snapshot.controllers[hand].thumbrest_touch &&
+        IsQuestTouchPlusProfile(snapshot.interaction_profiles[hand]))
+    {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void ClearDpadDisableOwnershipScratch(const Core::CPUThreadGuard& guard)
 {
   TryWriteU32(guard, DPAD_DISABLE_OWNER_SCRATCH, 0);
@@ -4033,33 +4166,52 @@ void UpdateXrDpad(const Core::CPUThreadGuard& guard,
     return;
   }
 
+  const float deadzone = std::min(settings.xr_dpad_deadzone, 0.25f);
+  DpadDir dir = DpadNone;
+  bool dpad_modifier_active = false;
   const Common::VR::OpenXRControllerState& dpad_hand =
       snapshot.controllers[settings.use_right_hand ? 0 : 1];
-  if (!dpad_hand.connected || !dpad_hand.aim_pose.valid || !snapshot.head_pose.valid)
-  {
-    disarm();
-    return;
-  }
 
-  const Pose hand_pose = PoseFromOpenXR(dpad_hand.aim_pose);
-  const Pose hmd_pose = PoseFromOpenXR(snapshot.head_pose);
-  bool in_head_zone = LeftControllerNearHead(hand_pose, hmd_pose, settings);
-  if (in_head_zone)
+  if (settings.xr_dpad_use_thumbrest_modifier)
   {
-    s_last_near_head_frame = s_frame_counter;
-  }
-  else if (s_last_near_head_frame != 0 && s_frame_counter - s_last_near_head_frame < 16)
-  {
-    in_head_zone = true;
+    if (!dpad_hand.connected || !QuestTouchPlusThumbrestModifierActive(snapshot))
+    {
+      disarm();
+      return;
+    }
+
+    dpad_modifier_active = true;
+    dir = StickToDpad(dpad_hand.thumbstick_x, dpad_hand.thumbstick_y, deadzone, s_last_dir);
   }
   else
   {
-    disarm();
-    return;
+    if (!dpad_hand.connected || !dpad_hand.aim_pose.valid || !snapshot.head_pose.valid)
+    {
+      disarm();
+      return;
+    }
+
+    const Pose hand_pose = PoseFromOpenXR(dpad_hand.aim_pose);
+    const Pose hmd_pose = PoseFromOpenXR(snapshot.head_pose);
+    bool in_head_zone = LeftControllerNearHead(hand_pose, hmd_pose, settings);
+    if (in_head_zone)
+    {
+      s_last_near_head_frame = s_frame_counter;
+    }
+    else if (s_last_near_head_frame != 0 && s_frame_counter - s_last_near_head_frame < 16)
+    {
+      in_head_zone = true;
+    }
+    else
+    {
+      disarm();
+      return;
+    }
+
+    dpad_modifier_active = in_head_zone;
+    dir = StickToDpad(dpad_hand.thumbstick_x, dpad_hand.thumbstick_y, deadzone, s_last_dir);
   }
 
-  const float deadzone = std::min(settings.xr_dpad_deadzone, 0.25f);
-  DpadDir dir = StickToDpad(dpad_hand.thumbstick_x, dpad_hand.thumbstick_y, deadzone, s_last_dir);
   if (dir != DpadNone)
   {
     s_latched_dir = dir;
@@ -4076,7 +4228,7 @@ void UpdateXrDpad(const Core::CPUThreadGuard& guard,
     return;
   }
 
-  SetPlayerInputDisabledForDpad(guard, ADDRESS.state_manager, in_head_zone);
+  SetPlayerInputDisabledForDpad(guard, ADDRESS.state_manager, dpad_modifier_active);
   if (!s_c_stick_suppressed)
   {
     SuppressCStickForDpad(guard, ADDRESS.state_manager);
@@ -4169,6 +4321,13 @@ void UpdateDirectionalMovement(const Core::CPUThreadGuard& guard,
   const Pose controller_move_pose = PoseFromOpenXR(controller.aim_pose);
   const Pose move_pose =
       settings.directional_movement_use_hmd_direction ? hmd_pose : controller_move_pose;
+  if (settings.xr_dpad_enabled && settings.xr_dpad_use_thumbrest_modifier &&
+      QuestTouchPlusThumbrestModifierActive(snapshot))
+  {
+    s_directional_move_speed = 0.0f;
+    return;
+  }
+
   const Common::VR::OpenXRControllerState& dpad_hand =
       snapshot.controllers[settings.use_right_hand ? 0 : 1];
   if (dpad_hand.connected && dpad_hand.aim_pose.valid &&
@@ -4418,7 +4577,7 @@ u32 VrMenuItemCountForTab(u32 tab)
   case VR_MENU_CANNON_TAB:
     return 6;
   case VR_MENU_STATE_TAB:
-    return 2;
+    return VR_MENU_STATE_ACTION_ROW_COUNT + VR_MENU_STATE_SLOT_COUNT;
   default:
     return 0;
   }
@@ -4427,7 +4586,7 @@ u32 VrMenuItemCountForTab(u32 tab)
 float VrMenuRowCenterY(u32 tab, u32 index)
 {
   float y = VR_MENU_ROW_TEXT_Y + static_cast<float>(index) * VR_MENU_ROW_STEP_Y;
-  if (tab == VR_MENU_STATE_TAB && index >= 1)
+  if (tab == VR_MENU_STATE_TAB && index >= VR_MENU_STATE_ACTION_ROW_COUNT)
     y += VR_MENU_STATE_ROW_GAP_Y;
   return y;
 }
@@ -4448,6 +4607,12 @@ int VrMenuRowFromTextureY(u32 tab, float texture_y, u32 item_count)
   return best_index;
 }
 
+u32 ClampVrStateSlot(int slot)
+{
+  return static_cast<u32>(
+      std::clamp(slot, 1, static_cast<int>(VR_MENU_STATE_SLOT_COUNT)));
+}
+
 void ClearVrStateConfirmation()
 {
   if (s_vr_state_confirm_action == 0)
@@ -4455,6 +4620,21 @@ void ClearVrStateConfirmation()
 
   s_vr_state_confirm_action = 0;
   s_vr_state_confirm_until_frame = 0;
+  ++s_vr_menu_generation;
+}
+
+void ApplyPendingVrStateSlotFromUi()
+{
+  const int requested_slot = s_vr_state_slot_from_ui.exchange(0, std::memory_order_acq_rel);
+  if (requested_slot <= 0)
+    return;
+
+  const u32 slot = ClampVrStateSlot(requested_slot);
+  if (s_vr_state_slot == slot)
+    return;
+
+  s_vr_state_slot = slot;
+  ClearVrStateConfirmation();
   ++s_vr_menu_generation;
 }
 
@@ -4536,13 +4716,13 @@ int VrMenuCalibrationActualIndex(u32 local_index)
 u32 VrMenuResetActionForSelection()
 {
   if (s_vr_menu_tab == VR_MENU_CALIBRATION_TAB &&
-      VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 7)
+      VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 9)
     return VR_MENU_RESET_TARGETING_ACTION;
   if (s_vr_menu_tab == VR_MENU_CALIBRATION_TAB &&
-      VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 15)
+      VrMenuCalibrationActualIndex(s_vr_menu_selected_index) == 17)
     return VR_MENU_RESET_CALIBRATION_ACTION;
   if (s_vr_menu_tab == VR_MENU_CONTROL_TAB &&
-      VrMenuControlActualIndex(s_vr_menu_selected_index) == 15)
+      VrMenuControlActualIndex(s_vr_menu_selected_index) == 16)
   {
     return VR_MENU_RESET_CONTROLLER_ACTION;
   }
@@ -4561,8 +4741,8 @@ bool VrMenuRowIsNumeric(u32 tab, u32 index)
       return true;
 
     const int actual_index = VrMenuCalibrationActualIndex(index);
-    return (actual_index >= 1 && actual_index <= 4) ||
-           (actual_index >= 8 && actual_index <= 13);
+    return (actual_index >= 1 && actual_index <= 6) ||
+           (actual_index >= 10 && actual_index <= 15);
   }
   case VR_MENU_CONTROL_TAB:
   {
@@ -4570,8 +4750,8 @@ bool VrMenuRowIsNumeric(u32 tab, u32 index)
       return true;
 
     const int actual_index = VrMenuControlActualIndex(index);
-    return actual_index == 3 || actual_index == 9 || actual_index == 12 ||
-           actual_index == 13 || actual_index == 14;
+    return actual_index == 3 || actual_index == 9 || actual_index == 13 ||
+           actual_index == 14 || actual_index == 15;
   }
   case VR_MENU_MOVEMENT_TAB:
     return (index >= 3 && index <= 7) || index == 9;
@@ -4700,6 +4880,7 @@ void ResetControllerSettings(RuntimeSettings* settings)
   settings->vr_menu_hold_left_stick = false;
   settings->vr_menu_requires_head_zone = false;
   settings->xr_dpad_enabled = true;
+  settings->xr_dpad_use_thumbrest_modifier = false;
   settings->xr_dpad_head_radius = 0.28f;
   settings->xr_dpad_head_y_below = 0.02f;
   settings->xr_dpad_deadzone = 0.45f;
@@ -4839,29 +5020,47 @@ void AdjustVrMenuSetting(RuntimeSettings* settings, int direction)
           std::clamp(settings->metroid_hud_size + sign * 0.05f, 0.1f, 3.0f);
       break;
     case 3:
+    {
+      const float value = std::clamp(settings->metroid_hud_offset_up -
+                                         settings->metroid_hud_offset_down + sign * 0.01f,
+                                     -1.0f, 1.0f);
+      settings->metroid_hud_offset_up = std::max(value, 0.0f);
+      settings->metroid_hud_offset_down = std::max(-value, 0.0f);
+      break;
+    }
+    case 4:
+    {
+      const float value = std::clamp(settings->metroid_hud_offset_right -
+                                         settings->metroid_hud_offset_left + sign * 0.01f,
+                                     -1.0f, 1.0f);
+      settings->metroid_hud_offset_right = std::max(value, 0.0f);
+      settings->metroid_hud_offset_left = std::max(-value, 0.0f);
+      break;
+    }
+    case 5:
       settings->gun_targeting_distance =
           std::clamp(settings->gun_targeting_distance + sign * 1.0f, 1.0f, 200.0f);
       break;
-    case 4:
+    case 6:
       settings->gun_targeting_radius =
           std::clamp(settings->gun_targeting_radius + sign * 0.1f, 0.1f, 25.0f);
       break;
-    case 8:
+    case 10:
       settings->model_offset_x += sign * 0.01f;
       break;
-    case 9:
+    case 11:
       settings->model_offset_y += sign * 0.01f;
       break;
-    case 10:
+    case 12:
       settings->model_offset_z += sign * 0.01f;
       break;
-    case 11:
+    case 13:
       settings->rot_offset_x += sign * 1.0f;
       break;
-    case 12:
+    case 14:
       settings->rot_offset_y += sign * 1.0f;
       break;
-    case 13:
+    case 15:
       settings->rot_offset_z += sign * 1.0f;
       break;
     default:
@@ -4888,15 +5087,15 @@ void AdjustVrMenuSetting(RuntimeSettings* settings, int direction)
       settings->primegun_trackpad_press_threshold =
           std::clamp(settings->primegun_trackpad_press_threshold + sign * 0.05f, 0.05f, 1.0f);
       break;
-    case 12:
+    case 13:
       settings->xr_dpad_head_radius =
           std::clamp(settings->xr_dpad_head_radius + sign * 0.01f, 0.05f, 0.60f);
       break;
-    case 13:
+    case 14:
       settings->xr_dpad_head_y_below =
           std::clamp(settings->xr_dpad_head_y_below + sign * 0.01f, 0.0f, 0.60f);
       break;
-    case 14:
+    case 15:
       settings->xr_dpad_deadzone =
           std::clamp(settings->xr_dpad_deadzone + sign * 0.05f, 0.0f, 0.95f);
       break;
@@ -4958,11 +5157,11 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
     const int actual_index = VrMenuCalibrationActualIndex(s_vr_menu_selected_index);
     if (actual_index == 0)
       settings->cinematic_screen_enabled = !settings->cinematic_screen_enabled;
-    else if (actual_index == 5)
-      settings->visor_helmet_enabled = !settings->visor_helmet_enabled;
-    else if (actual_index == 6)
-      settings->height_prompt_enabled = !settings->height_prompt_enabled;
     else if (actual_index == 7)
+      settings->visor_helmet_enabled = !settings->visor_helmet_enabled;
+    else if (actual_index == 8)
+      settings->height_prompt_enabled = !settings->height_prompt_enabled;
+    else if (actual_index == 9)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4972,9 +5171,9 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->gun_targeting_radius = 4.0f;
       settings->visor_helmet_enabled = false;
     }
-    else if (actual_index == 14)
+    else if (actual_index == 16)
       settings->position_marker_enabled = !settings->position_marker_enabled;
-    else if (actual_index == 15)
+    else if (actual_index == 17)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -4986,7 +5185,7 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->rot_offset_y = DEFAULT_ROT_OFFSET_Y;
       settings->rot_offset_z = DEFAULT_ROT_OFFSET_Z;
     }
-    else if (actual_index == 16)
+    else if (actual_index == 18)
     {
       settings->offset_x = 0.0f;
       settings->offset_y = 0.0f;
@@ -4998,7 +5197,7 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->rot_offset_y = DEFAULT_ROT_OFFSET_Y;
       settings->rot_offset_z = DEFAULT_ROT_OFFSET_Z;
     }
-    else if (actual_index == 17)
+    else if (actual_index == 19)
     {
       settings->offset_x = 0.0f;
       settings->offset_y = 0.0f;
@@ -5040,7 +5239,9 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->primegun_grip_inputs_use_trackpad = !settings->primegun_grip_inputs_use_trackpad;
     else if (actual_index == 10 || actual_index == 11)
       settings->xr_dpad_enabled = !settings->xr_dpad_enabled;
-    else if (actual_index == 15)
+    else if (actual_index == 12)
+      settings->xr_dpad_use_thumbrest_modifier = !settings->xr_dpad_use_thumbrest_modifier;
+    else if (actual_index == 16)
     {
       if (!ConfirmVrResetAction(reset_action))
         return;
@@ -5086,19 +5287,34 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
 
   if (s_vr_menu_tab == VR_MENU_STATE_TAB)
   {
-    const u32 requested_action = s_vr_menu_selected_index == 0 ? 1u :
-                                 s_vr_menu_selected_index == 1 ? 2u :
-                                                                 0u;
-    if (requested_action == 0)
+    if (s_vr_menu_selected_index >= VR_MENU_STATE_ACTION_ROW_COUNT)
+    {
+      const u32 slot = s_vr_menu_selected_index - VR_MENU_STATE_ACTION_ROW_COUNT + 1;
+      if (slot >= 1 && slot <= VR_MENU_STATE_SLOT_COUNT)
+      {
+        s_vr_state_slot = slot;
+        s_vr_state_slot_select_requested.store(static_cast<int>(slot), std::memory_order_release);
+        ClearVrStateConfirmation();
+      }
+      return;
+    }
+
+    const u32 requested_action = s_vr_menu_selected_index + 1;
+    if (requested_action < VR_MENU_STATE_ACTION_LOAD ||
+        requested_action > VR_MENU_STATE_ACTION_SAVE_OLDEST)
       return;
 
     RefreshVrStateConfirmation();
     if (s_vr_state_confirm_action == requested_action)
     {
-      if (requested_action == 1)
+      if (requested_action == VR_MENU_STATE_ACTION_LOAD)
         s_vr_state_load_requested.store(true, std::memory_order_release);
-      else
+      else if (requested_action == VR_MENU_STATE_ACTION_SAVE)
         s_vr_state_save_requested.store(true, std::memory_order_release);
+      else if (requested_action == VR_MENU_STATE_ACTION_LOAD_NEWEST)
+        s_vr_state_load_newest_requested.store(true, std::memory_order_release);
+      else if (requested_action == VR_MENU_STATE_ACTION_SAVE_OLDEST)
+        s_vr_state_save_oldest_requested.store(true, std::memory_order_release);
       s_vr_state_confirm_action = 0;
       s_vr_state_confirm_until_frame = 0;
     }
@@ -5138,6 +5354,7 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.control_page = s_vr_menu_control_page;
   overlay.cannon_texture_slot = s_vr_cannon_texture_slot;
   overlay.cannon_texture_notice = s_frame_counter < s_vr_cannon_texture_notice_until_frame;
+  overlay.state_slot = s_vr_state_slot;
   overlay.state_confirm_action = s_vr_state_confirm_action;
   overlay.reset_confirm_action = s_vr_reset_confirm_action;
   overlay.weapon_panel_visible = settings.vr_overlays_enabled && previous.weapon_panel_visible;
@@ -5165,11 +5382,16 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.height_prompt_enabled = settings.height_prompt_enabled;
   overlay.position_marker_visible = settings.vr_overlays_enabled && settings.position_marker_enabled;
   overlay.xr_dpad_enabled = settings.xr_dpad_enabled;
+  overlay.xr_dpad_use_thumbrest_modifier = settings.xr_dpad_use_thumbrest_modifier;
   overlay.cinematic_screen_enabled = settings.cinematic_screen_enabled;
   overlay.cinematic_screen_active = settings.cinematic_screen_enabled && s_cinematic_screen_active;
   overlay.cinematic_screen_generation = s_cinematic_screen_generation;
   overlay.metroid_hud_distance = settings.metroid_hud_distance;
   overlay.metroid_hud_size = settings.metroid_hud_size;
+  overlay.metroid_hud_offset_up = settings.metroid_hud_offset_up;
+  overlay.metroid_hud_offset_down = settings.metroid_hud_offset_down;
+  overlay.metroid_hud_offset_left = settings.metroid_hud_offset_left;
+  overlay.metroid_hud_offset_right = settings.metroid_hud_offset_right;
   overlay.xr_dpad_head_radius = settings.xr_dpad_head_radius;
   overlay.xr_dpad_head_y_below = settings.xr_dpad_head_y_below;
   overlay.xr_dpad_deadzone = settings.xr_dpad_deadzone;
@@ -5198,6 +5420,8 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
 void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettings* settings,
                   bool prompt_visible)
 {
+  ApplyPendingVrStateSlotFromUi();
+
   if (!settings->vr_overlays_enabled)
   {
     if (s_vr_menu_visible)
@@ -6559,6 +6783,161 @@ void UpdateMorphballCameraLevelHookEnabled(const Core::CPUThreadGuard& guard, bo
   TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, enabled ? 1u : 0u);
 }
 
+bool ApplySpringBallPatch(const Core::CPUThreadGuard& guard)
+{
+  static const auto assembled = Common::GekkoAssembler::Assemble(
+      fmt::format(R"(
+.defvar HookStart, 0x{:x}
+.defvar HookBuffer, 0x{:x}
+.defvar SpringballInputAddr, 0x{:x}
+
+.locate HookStart
+b _hook_start
+
+.locate HookBuffer
+.defvar var_back_chain, 48
+.defvar var_saved_lr, 44
+.defvar var_morphball, 8
+.defvar var_finalinput, 12
+.defvar var_state_mgr, 16
+.defvar var_dt, 20
+.defvar var_position_x, 24
+.defvar var_position_y, 28
+.defvar var_position_z, 32
+.defvar var_hor_vel_x, 36
+.defvar var_hor_vel_y, 40
+
+_hook_start:
+stwu sp, -var_back_chain(sp)
+mfspr r0, LR
+stw r0, var_saved_lr(sp)
+stw r3, var_morphball(sp)
+stw r4, var_finalinput(sp)
+stw r5, var_state_mgr(sp)
+stfs f1, var_dt(sp)
+
+lis r3, SpringballInputAddr@ha
+ori r3, r3, SpringballInputAddr@l
+lbz r3, 0(r3)
+cmpwi r3, 0
+beq _hook_end
+
+lis r3, _allowedNormalZ@ha
+ori r3, r3, _allowedNormalZ@l
+lfs f2, 0(r3)
+lwz r3, var_morphball(sp)
+lwz r4, 0x74(r3)
+_collision_loop:
+cmplwi r4, 0
+beq _hook_end
+lfs f0, 0xc8(r3)
+fcmpo cr0, f0, f2
+bge _surface_found
+addi r3, r3, 0x60
+subi r4, r4, 1
+b _collision_loop
+
+_surface_found:
+lwz r3, var_state_mgr(sp)
+lwz r3, 0x8b8(r3)
+lwz r3, 0(r3)
+li r4, 6
+.4byte 0x{:08x}
+cmpwi r3, 0
+beq _hook_end
+
+lwz r3, var_morphball(sp)
+lwz r3, 0(r3)
+lwz r0, 0x138(r3)
+stw r0, var_hor_vel_x(sp)
+lwz r0, 0x13c(r3)
+stw r0, var_hor_vel_y(sp)
+lwz r5, var_state_mgr(sp)
+lwz r0, 0x40(r3)
+stw r0, var_position_x(sp)
+lwz r0, 0x50(r3)
+stw r0, var_position_y(sp)
+lwz r0, 0x60(r3)
+stw r0, var_position_z(sp)
+addi r4, sp, var_position_x
+.4byte 0x{:08x}
+
+lwz r3, var_morphball(sp)
+lwz r3, 0(r3)
+lwz r0, var_hor_vel_x(sp)
+stw r0, 0x138(r3)
+lwz r0, var_hor_vel_y(sp)
+stw r0, 0x13c(r3)
+
+_hook_end:
+lwz r0, var_saved_lr(sp)
+lwz r3, var_morphball(sp)
+lwz r4, var_finalinput(sp)
+lwz r5, var_state_mgr(sp)
+lfs f1, var_dt(sp)
+addi sp, sp, var_back_chain
+stwu sp, -0x20(sp)
+.4byte 0x{:08x}
+
+_allowedNormalZ:
+.float 0.70710677
+)",
+                  SPRINGBALL_HOOK_ADDRESS, SPRINGBALL_CAVE, SPRINGBALL_TRIGGER_SCRATCH,
+                  PpcBranch(SPRINGBALL_CAVE + 0x74u, SPRINGBALL_HAS_POWERUP) | 1u,
+                  PpcBranch(SPRINGBALL_CAVE + 0xB8u, SPRINGBALL_BOMB_JUMP) | 1u,
+                  PpcBranch(SPRINGBALL_CAVE + 0xF0u, SPRINGBALL_HOOK_ADDRESS + 8u)),
+      0);
+
+  if (Common::GekkoAssembler::IsFailure(assembled))
+    return false;
+
+  const auto& blocks = Common::GekkoAssembler::GetT(assembled);
+  bool cave_matches = true;
+  for (const auto& block : blocks)
+  {
+    if (block.block_address == SPRINGBALL_HOOK_ADDRESS)
+      continue;
+    for (u32 offset = 0; offset < block.instructions.size(); offset += 4u)
+    {
+      const u8* bytes = block.instructions.data() + offset;
+      const u32 expected = (static_cast<u32>(bytes[0]) << 24) |
+                           (static_cast<u32>(bytes[1]) << 16) |
+                           (static_cast<u32>(bytes[2]) << 8) | bytes[3];
+      u32 current = 0;
+      if (!TryReadU32(guard, block.block_address + offset, &current) || current != expected)
+        cave_matches = false;
+    }
+  }
+
+  bool wrote = false;
+  if (!cave_matches)
+  {
+    for (const auto& block : blocks)
+    {
+      if (block.block_address == SPRINGBALL_HOOK_ADDRESS)
+        continue;
+      for (u32 offset = 0; offset < block.instructions.size(); offset += 4u)
+      {
+        const u8* bytes = block.instructions.data() + offset;
+        const u32 instruction = (static_cast<u32>(bytes[0]) << 24) |
+                                (static_cast<u32>(bytes[1]) << 16) |
+                                (static_cast<u32>(bytes[2]) << 8) | bytes[3];
+        wrote = TryWriteInstruction(guard, block.block_address + offset, instruction) || wrote;
+      }
+    }
+  }
+
+  const u32 branch = PpcBranch(SPRINGBALL_HOOK_ADDRESS, SPRINGBALL_CAVE);
+  u32 current = 0;
+  if (!TryReadU32(guard, SPRINGBALL_HOOK_ADDRESS, &current))
+    return wrote;
+  if (current == branch)
+    return wrote;
+  if (current != SPRINGBALL_HOOK_ORIGINAL || !cave_matches && !wrote)
+    return wrote;
+  return TryWriteInstruction(guard, SPRINGBALL_HOOK_ADDRESS, branch) || wrote;
+}
+
 bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
 {
   bool wrote = false;
@@ -6568,6 +6947,7 @@ bool ApplyCombatPitchPatches(const Core::CPUThreadGuard& guard)
       player >= 0x80000000u && ScanVisorActive(guard, player);
 
   wrote = ApplyGameFlowFlagPatches(guard) || wrote;
+  wrote = ApplySpringBallPatch(guard) || wrote;
   wrote = ApplyRenderModelOffsetPatch(guard) || wrote;
   wrote = RuntimeLoggingEnabled() ? (ApplyScanReticleTracePatch(guard) || wrote) :
                                     (RestoreScanReticleTracePatches(guard) || wrote);
@@ -7997,6 +8377,30 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard,
 }
 }  // namespace prime2
 #endif  // PRIMEDGUN_DISABLE_PRIME2
+
+void UpdateSpringBallInput(const Core::CPUThreadGuard& guard, const RuntimeSettings& settings,
+                           u32 player)
+{
+  float c_stick_y = 0.0f;
+  float xr_stick_y = 0.0f;
+#ifdef ENABLE_VR
+  const auto snapshot = Common::VR::OpenXRInputState::GetSnapshot();
+  if (snapshot.runtime_active && snapshot.controllers[1].connected)
+    xr_stick_y = snapshot.controllers[1].thumbstick_y;
+#endif
+  u32 morph_state = 0xffffffffu;
+  u32 movement_state = 0xffffffffu;
+  const bool input_read =
+      TryReadFloat(guard, ADDRESS.state_manager + FINAL_INPUT_RIGHT_STICK_Y, &c_stick_y);
+  const bool state_read = TryReadU32(guard, player + 0x2F8u, &morph_state) &&
+                          TryReadU32(guard, player + PLAYER_MOVEMENT_STATE_OFFSET,
+                                     &movement_state);
+  const bool active = settings.builtin_patches_enabled && PlayerObjectLooksValid(guard, player) &&
+                      input_read && state_read && (morph_state == 1u || morph_state == 2u) &&
+                      movement_state == 0u && std::max(c_stick_y, xr_stick_y) > 0.7f;
+  TryWriteU8(guard, SPRINGBALL_TRIGGER_SCRATCH, active ? 1u : 0u);
+
+}
 }  // namespace
 
 void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
@@ -8006,6 +8410,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   const RuntimeSettings settings = GetRuntimeSettings();
   if (!settings.enabled)
   {
+    TryWriteU8(guard, SPRINGBALL_TRIGGER_SCRATCH, 0u);
     TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
     TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, 0);
     ClearAudioListenerScratch(guard);
@@ -8032,6 +8437,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
     }
     prime2::NoteInactive();
 #endif
+    TryWriteU8(guard, SPRINGBALL_TRIGGER_SCRATCH, 0u);
     TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
     TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, 0);
     ClearAudioListenerScratch(guard);
@@ -8060,6 +8466,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
       PlayerObjectLooksValid(guard, player);
   if (!have_player)
   {
+    TryWriteU8(guard, SPRINGBALL_TRIGGER_SCRATCH, 0u);
     TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
     TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, 0);
     ClearAudioListenerScratch(guard);
@@ -8084,6 +8491,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
     TryWriteU32(guard, GAMEFLOW_MENU_SCRATCH, 0);
   }
   UpdateMorphballCameraLevelHookEnabled(guard, have_player, player);
+  UpdateSpringBallInput(guard, settings, player);
 
   bool dynamic_patch_applied = false;
   if (settings.builtin_patches_enabled)
@@ -8136,7 +8544,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
       (!default_controls_active && s_frame_counter < s_gameplay_input_hold_until_frame);
   UpdatePitchZeroHookEnabled(guard, scan_active);
   const bool orbit_lock_active =
-      gameplay_input_active && !scan_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager) &&
+      gameplay_input_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager) &&
       PlayerHasOrbitControlTarget(guard, ADDRESS.state_manager, player);
   s_gameplay_input_active.store(gameplay_input_active, std::memory_order_relaxed);
   s_orbit_lock_active.store(orbit_lock_active, std::memory_order_relaxed);
@@ -8287,6 +8695,13 @@ void ResetNativeRuntime()
   s_vr_menu_long_press_start_frame = 0;
   s_vr_menu_long_press_consumed = false;
   s_vr_cannon_texture_notice_until_frame = 0;
+  s_vr_state_load_requested.store(false, std::memory_order_release);
+  s_vr_state_save_requested.store(false, std::memory_order_release);
+  s_vr_state_load_newest_requested.store(false, std::memory_order_release);
+  s_vr_state_save_oldest_requested.store(false, std::memory_order_release);
+  s_vr_state_slot_select_requested.store(0, std::memory_order_release);
+  s_vr_state_slot_from_ui.store(0, std::memory_order_release);
+  s_vr_state_slot = 1;
   s_vr_state_confirm_action = 0;
   s_vr_state_confirm_until_frame = 0;
   s_vr_reset_confirm_action = 0;
@@ -8393,6 +8808,14 @@ void SetRuntimeSettings(const RuntimeSettings& settings)
       ClampFinite(s_settings.metroid_hud_distance, defaults.metroid_hud_distance, 0.1f, 3.0f);
   s_settings.metroid_hud_size =
       ClampFinite(s_settings.metroid_hud_size, defaults.metroid_hud_size, 0.1f, 3.0f);
+  s_settings.metroid_hud_offset_up =
+      ClampFinite(s_settings.metroid_hud_offset_up, defaults.metroid_hud_offset_up, 0.0f, 1.0f);
+  s_settings.metroid_hud_offset_down = ClampFinite(s_settings.metroid_hud_offset_down,
+                                                   defaults.metroid_hud_offset_down, 0.0f, 1.0f);
+  s_settings.metroid_hud_offset_left = ClampFinite(s_settings.metroid_hud_offset_left,
+                                                   defaults.metroid_hud_offset_left, 0.0f, 1.0f);
+  s_settings.metroid_hud_offset_right = ClampFinite(s_settings.metroid_hud_offset_right,
+                                                    defaults.metroid_hud_offset_right, 0.0f, 1.0f);
   s_settings.xr_dpad_head_radius =
       ClampFinite(s_settings.xr_dpad_head_radius, defaults.xr_dpad_head_radius, 0.02f, 2.0f);
   s_settings.xr_dpad_head_y_below =
@@ -8455,6 +8878,11 @@ void ApplySamusArmPreset()
   s_settings.rot_offset_z = -90.0f;
 }
 
+void SetVrStateSlot(int slot)
+{
+  s_vr_state_slot_from_ui.store(static_cast<int>(ClampVrStateSlot(slot)), std::memory_order_release);
+}
+
 bool ConsumeVrSettingsSaveRequest()
 {
   std::lock_guard lock{s_settings_mutex};
@@ -8470,6 +8898,11 @@ void MarkVrSettingsSaved()
   ++s_vr_menu_generation;
 }
 
+int ConsumeVrStateSlotSelectRequest()
+{
+  return s_vr_state_slot_select_requested.exchange(0, std::memory_order_acq_rel);
+}
+
 bool ConsumeVrStateLoadRequest()
 {
   return s_vr_state_load_requested.exchange(false, std::memory_order_acq_rel);
@@ -8478,5 +8911,15 @@ bool ConsumeVrStateLoadRequest()
 bool ConsumeVrStateSaveRequest()
 {
   return s_vr_state_save_requested.exchange(false, std::memory_order_acq_rel);
+}
+
+bool ConsumeVrStateLoadNewestRequest()
+{
+  return s_vr_state_load_newest_requested.exchange(false, std::memory_order_acq_rel);
+}
+
+bool ConsumeVrStateSaveOldestRequest()
+{
+  return s_vr_state_save_oldest_requested.exchange(false, std::memory_order_acq_rel);
 }
 }  // namespace PrimedGun

@@ -631,23 +631,11 @@ int PrimedGunTransferDolphinSettingsNearMemoryCard(const QString& memory_card_pa
   const QDir old_user_dir(old_user_dir_path);
   const QDir current_user_dir(current_user_dir_path);
 
+  // Keep release-managed per-game fixes intact. GameSettings and GameSettingsVR can contain
+  // shader/render overrides, so only regular Dolphin Config INIs are migrated.
   if (!PrimedGunCopySettingsTree(old_user_dir.filePath(QStringLiteral("Config")),
                                  current_user_dir.filePath(QStringLiteral("Config")), timestamp,
                                  &copied_count, error_message))
-  {
-    return -1;
-  }
-
-  if (!PrimedGunCopySettingsTree(old_user_dir.filePath(QStringLiteral("GameSettings")),
-                                 current_user_dir.filePath(QStringLiteral("GameSettings")),
-                                 timestamp, &copied_count, error_message))
-  {
-    return -1;
-  }
-
-  if (!PrimedGunCopySettingsTree(old_user_dir.filePath(QStringLiteral("GameSettingsVR")),
-                                 current_user_dir.filePath(QStringLiteral("GameSettingsVR")),
-                                 timestamp, &copied_count, error_message))
   {
     return -1;
   }
@@ -1693,6 +1681,7 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
 
   m_state_slot =
       std::clamp(Settings::Instance().GetStateSlot(), 1, static_cast<int>(State::NUM_STATES));
+  PrimedGun::SetVrStateSlot(m_state_slot);
 
   m_render_widget_geometry = settings.value(QStringLiteral("renderwidget/geometry")).toByteArray();
 
@@ -2292,6 +2281,22 @@ void MainWindow::ConnectStack()
     runtime.metroid_hud_size =
         settings.value(QStringLiteral("primegun/metroid_hud_size"), runtime.metroid_hud_size)
             .toFloat();
+    runtime.metroid_hud_offset_up =
+        settings.value(QStringLiteral("primegun/metroid_hud_offset_up"),
+                       runtime.metroid_hud_offset_up)
+            .toFloat();
+    runtime.metroid_hud_offset_down =
+        settings.value(QStringLiteral("primegun/metroid_hud_offset_down"),
+                       runtime.metroid_hud_offset_down)
+            .toFloat();
+    runtime.metroid_hud_offset_left =
+        settings.value(QStringLiteral("primegun/metroid_hud_offset_left"),
+                       runtime.metroid_hud_offset_left)
+            .toFloat();
+    runtime.metroid_hud_offset_right =
+        settings.value(QStringLiteral("primegun/metroid_hud_offset_right"),
+                       runtime.metroid_hud_offset_right)
+            .toFloat();
     runtime.gun_targeting_enabled =
         settings.value(QStringLiteral("primegun/gun_targeting_enabled"),
                        runtime.gun_targeting_enabled)
@@ -2322,6 +2327,11 @@ void MainWindow::ConnectStack()
             .toBool();
     runtime.xr_dpad_enabled =
         settings.value(QStringLiteral("primegun/xr_dpad_enabled"), runtime.xr_dpad_enabled).toBool();
+    runtime.xr_dpad_use_thumbrest_modifier =
+        settings
+            .value(QStringLiteral("primegun/xr_dpad_use_thumbrest_modifier"),
+                   runtime.xr_dpad_use_thumbrest_modifier)
+            .toBool();
     runtime.xr_dpad_head_radius =
         settings.value(QStringLiteral("primegun/xr_dpad_head_radius"),
                        runtime.xr_dpad_head_radius)
@@ -2422,6 +2432,14 @@ void MainWindow::ConnectStack()
     settings.setValue(QStringLiteral("primegun/metroid_hud_distance"),
                       runtime.metroid_hud_distance);
     settings.setValue(QStringLiteral("primegun/metroid_hud_size"), runtime.metroid_hud_size);
+    settings.setValue(QStringLiteral("primegun/metroid_hud_offset_up"),
+                      runtime.metroid_hud_offset_up);
+    settings.setValue(QStringLiteral("primegun/metroid_hud_offset_down"),
+                      runtime.metroid_hud_offset_down);
+    settings.setValue(QStringLiteral("primegun/metroid_hud_offset_left"),
+                      runtime.metroid_hud_offset_left);
+    settings.setValue(QStringLiteral("primegun/metroid_hud_offset_right"),
+                      runtime.metroid_hud_offset_right);
     settings.setValue(QStringLiteral("primegun/gun_targeting_enabled"),
                       runtime.gun_targeting_enabled);
     settings.setValue(QStringLiteral("primegun/gun_targeting_distance"),
@@ -2435,6 +2453,8 @@ void MainWindow::ConnectStack()
     settings.setValue(QStringLiteral("primegun/position_marker_enabled"),
                       runtime.position_marker_enabled);
     settings.setValue(QStringLiteral("primegun/xr_dpad_enabled"), runtime.xr_dpad_enabled);
+    settings.setValue(QStringLiteral("primegun/xr_dpad_use_thumbrest_modifier"),
+                      runtime.xr_dpad_use_thumbrest_modifier);
     settings.setValue(QStringLiteral("primegun/xr_dpad_head_radius"), runtime.xr_dpad_head_radius);
     settings.setValue(QStringLiteral("primegun/xr_dpad_head_y_below"),
                       runtime.xr_dpad_head_y_below);
@@ -2466,6 +2486,16 @@ void MainWindow::ConnectStack()
       save_primegun_runtime_settings(PrimedGun::GetRuntimeSettings());
       PrimedGun::MarkVrSettingsSaved();
     }
+
+    PrimedGun::SetVrStateSlot(m_state_slot);
+    if (const int selected_slot = PrimedGun::ConsumeVrStateSlotSelectRequest(); selected_slot > 0)
+      m_menu_bar->SetStateSlot(selected_slot);
+
+    if (PrimedGun::ConsumeVrStateLoadNewestRequest())
+      StateLoadNewest();
+
+    if (PrimedGun::ConsumeVrStateSaveOldestRequest())
+      StateSaveOldest();
 
     if (PrimedGun::ConsumeVrStateLoadRequest())
       StateLoadSlot();
@@ -2651,6 +2681,35 @@ void MainWindow::ConnectStack()
   std::vector<StateSlotMenuRow> state_slot_menu_rows;
   state_slot_menu_rows.reserve(State::NUM_STATES);
   const int state_slot_count = static_cast<int>(State::NUM_STATES);
+
+  auto* quick_action = new QWidgetAction(select_state_slot_menu);
+  auto* quick_row = new QWidget(select_state_slot_menu);
+  auto* quick_row_layout = new QHBoxLayout(quick_row);
+  quick_row_layout->setContentsMargins(8, 6, 8, 4);
+  quick_row_layout->setSpacing(6);
+  auto* quick_load_newest = new QPushButton(tr("Quick Load Newest Slot"), quick_row);
+  auto* save_oldest = new QPushButton(tr("Save to Oldest Slot"), quick_row);
+  quick_load_newest->setFlat(true);
+  save_oldest->setFlat(true);
+  quick_load_newest->setStyleSheet(game_button_style);
+  save_oldest->setStyleSheet(game_button_style);
+  quick_load_newest->setMinimumWidth(176);
+  save_oldest->setMinimumWidth(176);
+  quick_row_layout->addWidget(quick_load_newest);
+  quick_row_layout->addWidget(save_oldest);
+  quick_action->setDefaultWidget(quick_row);
+  select_state_slot_menu->addAction(quick_action);
+  select_state_slot_menu->addSeparator();
+
+  connect(quick_load_newest, &QPushButton::clicked, this, [this, select_state_slot_menu] {
+    StateLoadNewest();
+    select_state_slot_menu->close();
+  });
+  connect(save_oldest, &QPushButton::clicked, this, [this, select_state_slot_menu] {
+    StateSaveOldest();
+    select_state_slot_menu->close();
+  });
+
   for (int slot = 1; slot <= state_slot_count; ++slot)
   {
     auto* action = new QWidgetAction(select_state_slot_menu);
@@ -2812,6 +2871,9 @@ void MainWindow::ConnectStack()
   rumble_hand_row->addStretch();
   auto* dpad_enabled = new QCheckBox(tr("Enable visor gesture input"), game_tab);
   dpad_enabled->setChecked(runtime->xr_dpad_enabled);
+  auto* dpad_thumbrest_modifier =
+      new QCheckBox(tr("Use Quest thumb rest for visor input"), game_tab);
+  dpad_thumbrest_modifier->setChecked(runtime->xr_dpad_use_thumbrest_modifier);
   auto* primegun_grip_inputs_enabled =
       new QCheckBox(tr("Use grip input"), game_tab);
   primegun_grip_inputs_enabled->setChecked(runtime->primegun_grip_inputs_enabled);
@@ -2889,6 +2951,7 @@ void MainWindow::ConnectStack()
   separator(controller_layout);
   controller_layout->addWidget(section_label(tr("D-pad"), game_tab));
   controller_layout->addWidget(dpad_enabled);
+  controller_layout->addWidget(dpad_thumbrest_modifier);
   auto* dpad_radius_spin =
       add_float_row(controller_layout, tr("Head radius"), 0.08, 0.28, 0.01,
                     runtime->xr_dpad_head_radius,
@@ -3008,6 +3071,20 @@ void MainWindow::ConnectStack()
       add_float_row(calibration_layout, tr("HUD size"), 0.10, 3.00, 0.05,
                     runtime->metroid_hud_size,
                     [runtime](float v) { runtime->metroid_hud_size = v; });
+  auto* metroid_hud_offset_vertical_spin =
+      add_float_row(calibration_layout, tr("HUD vertical"), -1.00, 1.00, 0.01,
+                    runtime->metroid_hud_offset_up - runtime->metroid_hud_offset_down,
+                    [runtime](float v) {
+                      runtime->metroid_hud_offset_up = std::max(v, 0.0f);
+                      runtime->metroid_hud_offset_down = std::max(-v, 0.0f);
+                    });
+  auto* metroid_hud_offset_horizontal_spin =
+      add_float_row(calibration_layout, tr("HUD horizontal"), -1.00, 1.00, 0.01,
+                    runtime->metroid_hud_offset_right - runtime->metroid_hud_offset_left,
+                    [runtime](float v) {
+                      runtime->metroid_hud_offset_right = std::max(v, 0.0f);
+                      runtime->metroid_hud_offset_left = std::max(-v, 0.0f);
+                    });
   separator(calibration_layout);
   calibration_layout->addWidget(section_label(tr("Targeting"), game_tab));
   auto* reset_aiming = new QPushButton(tr("Reset Targeting"), game_tab);
@@ -3436,6 +3513,10 @@ void MainWindow::ConnectStack()
   auto* open_memcards = new QPushButton(tr("Memory Card Manager"), game_tab);
   auto* open_cheats = new QPushButton(tr("Cheat Manager"), game_tab);
   auto* open_texture_packs = new QPushButton(tr("Resource Pack Manager"), game_tab);
+  auto* suppress_cpu_thread_warnings =
+      new QCheckBox(tr("Suppress CPU thread warnings"), game_tab);
+  suppress_cpu_thread_warnings->setChecked(
+      Config::Get(Config::MAIN_SUPPRESS_CPU_THREAD_WARNINGS));
   auto* debug_label = section_label(tr("Debug (send dump to dev upon crash)"), game_tab);
   auto* dump_ram = new QPushButton(tr("Dump RAM"), game_tab);
   dolphin_layout->addWidget(open_general);
@@ -3443,6 +3524,9 @@ void MainWindow::ConnectStack()
   dolphin_layout->addWidget(open_memcards);
   dolphin_layout->addWidget(open_cheats);
   dolphin_layout->addWidget(open_texture_packs);
+  dolphin_layout->addSpacing(16);
+  dolphin_layout->addWidget(section_label(tr("Warnings"), game_tab));
+  dolphin_layout->addWidget(suppress_cpu_thread_warnings);
   dolphin_layout->addSpacing(16);
   dolphin_layout->addWidget(debug_label);
   dolphin_layout->addWidget(dump_ram);
@@ -3452,6 +3536,9 @@ void MainWindow::ConnectStack()
   connect(open_memcards, &QPushButton::clicked, this, &MainWindow::ShowMemcardManager);
   connect(open_cheats, &QPushButton::clicked, this, &MainWindow::ShowCheatsManager);
   connect(open_texture_packs, &QPushButton::clicked, this, &MainWindow::ShowResourcePackManager);
+  connect(suppress_cpu_thread_warnings, &QCheckBox::toggled, this, [](bool checked) {
+    Config::SetBaseOrCurrent(Config::MAIN_SUPPRESS_CPU_THREAD_WARNINGS, checked);
+  });
   connect(dump_ram, &QPushButton::clicked, this, [this] { PrimedGunDumpMem1(this); });
 
   game_layout->addWidget(tabs, 1);
@@ -3524,6 +3611,7 @@ void MainWindow::ConnectStack()
     rumble_enabled->setChecked(runtime->rumble_enabled);
     rumble_hand_mode->setCurrentIndex(std::clamp(runtime->rumble_hand_mode, 0, 2));
     dpad_enabled->setChecked(runtime->xr_dpad_enabled);
+    dpad_thumbrest_modifier->setChecked(runtime->xr_dpad_use_thumbrest_modifier);
     combat_jump_use_primary_button->setChecked(runtime->combat_jump_use_primary_button);
     primegun_grip_inputs_enabled->setChecked(runtime->primegun_grip_inputs_enabled);
     primegun_grip_inputs_use_trackpad->setChecked(runtime->primegun_grip_inputs_use_trackpad);
@@ -3548,6 +3636,10 @@ void MainWindow::ConnectStack()
     set_float(look_yaw_sensitivity_spin, runtime->look_yaw_sensitivity);
     set_float(metroid_hud_distance_spin, runtime->metroid_hud_distance);
     set_float(metroid_hud_size_spin, runtime->metroid_hud_size);
+    set_float(metroid_hud_offset_vertical_spin,
+              runtime->metroid_hud_offset_up - runtime->metroid_hud_offset_down);
+    set_float(metroid_hud_offset_horizontal_spin,
+              runtime->metroid_hud_offset_right - runtime->metroid_hud_offset_left);
     set_float(target_distance_spin, runtime->gun_targeting_distance);
     set_float(target_radius_spin, runtime->gun_targeting_radius);
     set_float(model_x_spin, runtime->model_offset_x);
@@ -3579,6 +3671,7 @@ void MainWindow::ConnectStack()
     runtime->rumble_intensity = 0.35f;
     runtime->rumble_hand_mode = 2;
     runtime->xr_dpad_enabled = true;
+    runtime->xr_dpad_use_thumbrest_modifier = false;
     runtime->combat_jump_use_primary_button = false;
     runtime->primegun_grip_inputs_enabled = true;
     runtime->primegun_grip_inputs_use_trackpad = false;
@@ -3653,6 +3746,11 @@ void MainWindow::ConnectStack()
   });
   connect(dpad_enabled, &QCheckBox::toggled, this, [runtime, apply_runtime](bool checked) {
     runtime->xr_dpad_enabled = checked;
+    apply_runtime();
+  });
+  connect(dpad_thumbrest_modifier, &QCheckBox::toggled, this,
+          [runtime, apply_runtime](bool checked) {
+    runtime->xr_dpad_use_thumbrest_modifier = checked;
     apply_runtime();
   });
   connect(combat_jump_use_primary_button, &QCheckBox::toggled, this,
@@ -3734,6 +3832,10 @@ void MainWindow::ConnectStack()
     const PrimedGun::RuntimeSettings defaults{};
     runtime->metroid_hud_distance = defaults.metroid_hud_distance;
     runtime->metroid_hud_size = defaults.metroid_hud_size;
+    runtime->metroid_hud_offset_up = defaults.metroid_hud_offset_up;
+    runtime->metroid_hud_offset_down = defaults.metroid_hud_offset_down;
+    runtime->metroid_hud_offset_left = defaults.metroid_hud_offset_left;
+    runtime->metroid_hud_offset_right = defaults.metroid_hud_offset_right;
     refresh_visible_settings();
     apply_runtime();
   });
@@ -3804,7 +3906,8 @@ void MainWindow::ConnectStack()
     prompt.setText(tr("Transfer old save game."));
     prompt.setInformativeText(
         tr("PrimedGun will search nearby old PrimedGun folders and automatically transfer and "
-           "apply your save."));
+           "apply your save, PrimeGun settings, and Dolphin config settings. Per-game "
+           "GameSettings, GameSettingsVR, and shader overrides are not transferred."));
     auto* transfer_button = prompt.addButton(tr("Transfer"), QMessageBox::AcceptRole);
     prompt.addButton(QMessageBox::Cancel);
     prompt.exec();
@@ -3912,15 +4015,17 @@ void MainWindow::ConnectStack()
     }
     if (imported_dolphin_settings_count > 0)
     {
-      message += tr("\n\nDolphin settings transferred from:\n%1\n%2 file(s) copied.")
+      message += tr("\n\nDolphin config settings transferred from:\n%1\n%2 file(s) copied.")
                      .arg(old_dolphin_settings_source)
                      .arg(imported_dolphin_settings_count);
     }
     else
     {
-      message += tr("\n\nNo old user-created Dolphin settings were found in a folder with "
+      message += tr("\n\nNo old Dolphin config settings were found in a folder with "
                     "PrimedGun.exe.");
     }
+    message += tr("\n\nPer-game GameSettings, GameSettingsVR, and shader overrides were not "
+                  "transferred.");
     ModalMessageBox::information(this, tr("Transfer Old Memory Card"), message);
   });
 
@@ -4762,6 +4867,31 @@ void MainWindow::StateSaveSlot()
   State::Save(m_system, m_state_slot);
 }
 
+void MainWindow::StateLoadNewest()
+{
+  State::WaitForPendingSaves();
+
+  int newest_slot = 0;
+  u64 newest_time = 0;
+  for (int slot = 1; slot <= static_cast<int>(State::NUM_STATES); ++slot)
+  {
+    const u64 timestamp = State::GetUnixTimeOfSlot(slot);
+    if (timestamp > newest_time)
+    {
+      newest_time = timestamp;
+      newest_slot = slot;
+    }
+  }
+
+  if (newest_slot == 0)
+  {
+    Core::DisplayMessage("State doesn't exist", 2000);
+    return;
+  }
+
+  State::Load(m_system, newest_slot);
+}
+
 void MainWindow::StateLoadSlotAt(int slot)
 {
   State::Load(m_system, slot);
@@ -4794,8 +4924,10 @@ void MainWindow::StateSaveOldest()
 
 void MainWindow::SetStateSlot(int slot)
 {
+  slot = std::clamp(slot, 1, static_cast<int>(State::NUM_STATES));
   Settings::Instance().SetStateSlot(slot);
   m_state_slot = slot;
+  PrimedGun::SetVrStateSlot(slot);
 
   Core::DisplayMessage(fmt::format("Selected slot {} - {}", m_state_slot,
                                    State::GetInfoStringOfSlot(m_state_slot, false)),

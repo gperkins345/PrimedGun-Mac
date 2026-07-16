@@ -48,6 +48,8 @@ For SteamOS-specific builds, see [PrimedSteam](https://github.com/josethevrtech/
 - Cannon position and rotation calibration.
 - Easy cannon texture swapping tool.
 - In-headset settings menu.
+- HMD Directional audio.
+- Left-handed support.
 
 ## Setup Notes
 
@@ -60,6 +62,31 @@ For SteamOS-specific builds, see [PrimedSteam](https://github.com/josethevrtech/
 - Click the left thumbstick to open or close the in-headset settings menu.
 - Try to stay in the centre of your play space and face forward, this mod is not roomscaled.
 - Use Save Settings after changing PrimedGun options to apply them.
+
+## Archipelago / MultiworldGG
+
+PrimedGun supports Metroid Prime multiworld through the external
+[MultiworldGG](https://multiworld.gg/) Metroid Prime client. This has been tested with a patched
+Metroid Prime NTSC-U Revision 0 (1.0) ISO. Other game revisions are not supported by PrimedGun.
+
+1. Install MultiworldGG and obtain the `.apmp1` file for your Metroid Prime slot.
+2. Open the `.apmp1` file with MultiworldGG and patch a clean NTSC-U Revision 0 ISO.
+3. Create `Launch MultiworldGG for PrimedGun.bat` beside `MultiworldGGLauncher.exe` with:
+
+```bat
+@echo off
+set "DME_DOLPHIN_PROCESS_NAME=PrimedGun"
+start "" "%~dp0MultiworldGGLauncher.exe"
+```
+
+4. Use that batch file to start MultiworldGG. The environment variable allows its bundled Dolphin
+   Memory Engine to find `PrimedGun.exe`; no separate Memory Engine installation is required.
+5. Start the generated Archipelago ISO in PrimedGun, then connect the Metroid Prime client using
+   the room's server address, slot name, and password.
+
+If the client cannot find the game, close extra Dolphin or PrimedGun instances, confirm emulation
+has started, and make sure MultiworldGG was opened through the batch file. Use normal in-game saves
+for multiworld sessions; restoring an old save state can desynchronize game memory from the server.
 
 ## Change Controller Bindings
 

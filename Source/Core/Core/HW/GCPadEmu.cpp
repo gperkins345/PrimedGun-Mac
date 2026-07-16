@@ -681,7 +681,7 @@ static bool ApplyPrimedGunModernControls(GCPadStatus* pad)
   if (orbit_lock_active)
   {
     // Vanilla lock-on/orbit: main stick drives orbit strafe/forward-back,
-    // C-stick stays neutral, and PrimedGun does not inject smooth-turn yaw.
+    // C-stick remains available for beam select, and PrimedGun does not inject smooth-turn yaw.
     pad->stickX =
         move_stick.connected && !suppress_left_stick ?
             PrimedGunAxisToPadByte(move_stick.thumbstick_x, GCPadStatus::MAIN_STICK_CENTER_X) :
@@ -690,8 +690,17 @@ static bool ApplyPrimedGunModernControls(GCPadStatus* pad)
         move_stick.connected && !suppress_left_stick ?
             PrimedGunAxisToPadByte(move_stick.thumbstick_y, GCPadStatus::MAIN_STICK_CENTER_Y) :
             GCPadStatus::MAIN_STICK_CENTER_Y;
-    pad->substickX = GCPadStatus::C_STICK_CENTER_X;
-    pad->substickY = GCPadStatus::C_STICK_CENTER_Y;
+    if (weapon_modifier && weapon_hand.connected)
+    {
+      UpdatePrimedGunWeaponSelect(weapon_hand, pad);
+    }
+    else
+    {
+      pad->substickX = GCPadStatus::C_STICK_CENTER_X;
+      pad->substickY = GCPadStatus::C_STICK_CENTER_Y;
+      if (weapon_hand.connected)
+        UpdatePrimedGunWeaponSelect(weapon_hand, pad);
+    }
 
     if (game_left.connected)
     {
