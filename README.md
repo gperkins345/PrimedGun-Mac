@@ -38,6 +38,22 @@ ninja -C build
 
 The app binary is `build/Binaries/PrimedGun`.
 
+### Make a double-click app (optional)
+
+To get a `PrimedGun.app` you can launch from Finder — double-clicking forwards the
+Quest streaming ports, restarts the OXRSys client, and opens the PrimedGun GUI:
+
+```sh
+Tools/mac/make-app.sh build
+open build/Binaries/PrimedGun.app
+```
+
+The bundle wraps the binary in place (it keeps its link to your Qt install and finds
+MoltenVK via the Vulkan SDK), so it runs on the machine you built it on. Set
+`XR_RUNTIME_JSON` to your OXRSys runtime, or keep an `OpenXR-OSX` checkout beside this
+repo. For a bundle you can hand to someone else, run `macdeployqt` on the `.app` to
+embed the Qt frameworks.
+
 ## Run (VR, streaming to the Quest over USB)
 
 1. Connect the Quest by USB and accept the on-headset debugging prompt.
