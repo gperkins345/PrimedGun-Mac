@@ -1,83 +1,92 @@
-# Primed2Gun — Metroid Prime 1 & 2 VR on macOS
+# PrimedGun-Mac — Metroid Prime VR on macOS
 
-This tree builds **two separate Mac apps** from one codebase, streaming to a Meta
-Quest over USB via the [OXRSys](https://github.com/demonixis/OpenXR-OSX) OpenXR
-runtime — no PCVR, no Windows, no SteamVR:
+A macOS build of **[PrimedGun](https://github.com/Nobbie248/PrimedGun)** (a Dolphin
+fork that adds motion-controlled VR to Metroid Prime), streaming to a **Meta Quest
+over USB** via the [OXRSys](https://github.com/demonixis/OpenXR-OSX) OpenXR runtime —
+**no PCVR, no Windows, no SteamVR.**
 
-| Product | Game | Build flag |
-|---|---|---|
-| **PrimedGun-Mac** | Metroid Prime (GC, `GM8E01`) | `-DPRIMEDGUN_ENABLE_PRIME2=OFF` |
-| **Primed2Gun-Mac** | Metroid Prime 2: Echoes (GC, `G2ME01`) + Prime 1 | default |
+This fork is **Metroid Prime 1 only** (GameCube, `GM8E01`). It carries the macOS/
+MoltenVK-specific fixes needed to run PrimedGun natively on Apple Silicon
+(multiview stereo, the menu-map depth fix, 3D cutscene rendering, color pipeline).
+For Metroid Prime 2: Echoes support, see the separate
+[Primed2Gun](https://github.com/gperkins345/Primed2Gun) project.
 
-With `PRIMEDGUN_ENABLE_PRIME2=OFF`, every Prime 2 code path compiles out — the
-Prime 1 product is byte-equivalent to a tree without the Prime 2 work, which keeps
-it clean for upstreaming.
+## What you need
 
-Prime 2 support includes: hand-aimed arm cannon (projectiles follow the hand ray),
-native lock-on, HMD-relative locomotion, snap turn, gesture visor/beam switching,
-the PrimedGun VR menu (left-stick press) and height recenter (right-stick press),
-head-locked full-view screen effects and cutscenes, and helmet-visor rendering.
-
-## Prerequisites
-
-- Apple Silicon Mac, macOS 11+
-- Xcode command-line tools, `cmake`, `ninja` (`brew install cmake ninja`)
-- Qt 6 for macOS (point `CMAKE_PREFIX_PATH` at it, e.g. `~/Qt/6.8.3/macos`)
-- Vulkan SDK / MoltenVK (`brew install molten-vk` or the LunarG SDK)
-- `adb` (`brew install android-platform-tools`) with the Quest in developer mode
-- The **OXRSys** runtime built for macOS and its Quest client APK installed on the
-  headset (checked out as a sibling directory `../OpenXR-OSX`, or set
-  `XR_RUNTIME_JSON` to your runtime manifest)
+- **Apple Silicon Mac**, macOS 11 or newer
+- **Xcode command-line tools** (`xcode-select --install`)
+- **cmake** and **ninja** — `brew install cmake ninja`
+- **Qt 6 for macOS** — install from the Qt online installer (e.g. `~/Qt/6.8.3/macos`)
+- **MoltenVK / Vulkan SDK** — `brew install molten-vk`, or the LunarG Vulkan SDK
+- **adb** — `brew install android-platform-tools`, with the Quest in developer mode
+- The **OXRSys runtime** built for macOS, and its **Quest client app** installed on
+  the headset. Follow [OpenXR-OSX](https://github.com/demonixis/OpenXR-OSX); note the
+  path to its `oxrsys-runtime.json`.
+- A **Metroid Prime (USA) GameCube disc image** you dumped yourself (`.rvz`/`.iso`),
+  game ID `GM8E01`.
 
 ## Build
 
 ```sh
-# Primed2Gun-Mac (Prime 2 + Prime 1)
-cmake -B build-macos -G Ninja \
-  -DPRIMEDGUN_PRODUCT_NAME=Primed2Gun-Mac \
-  -DCMAKE_PREFIX_PATH=$HOME/Qt/6.8.3/macos
-ninja -C build-macos
+git clone https://github.com/gperkins345/PrimedGun-Mac.git
+cd PrimedGun-Mac
+git submodule update --init --recursive
 
-# PrimedGun-Mac (Prime 1 only)
-cmake -B build-macos-prime1 -G Ninja \
-  -DPRIMEDGUN_PRODUCT_NAME=PrimedGun-Mac \
-  -DPRIMEDGUN_ENABLE_PRIME2=OFF \
-  -DCMAKE_PREFIX_PATH=$HOME/Qt/6.8.3/macos
-ninja -C build-macos-prime1
+cmake -B build -G Ninja -DCMAKE_PREFIX_PATH=$HOME/Qt/6.8.3/macos
+ninja -C build
 ```
 
-Binaries land in `<build-dir>/Binaries/<ProductName>`.
+The app binary is `build/Binaries/PrimedGun`.
 
-## Launch (VR, Quest over USB)
+## Run (VR, streaming to the Quest over USB)
 
-1. Connect the Quest over USB (accept the debugging prompt in the headset).
-2. Run the launcher for the game you want:
+1. Connect the Quest by USB and accept the on-headset debugging prompt.
+2. Point the OpenXR loader at your OXRSys runtime and start the Quest client:
 
 ```sh
-# Metroid Prime 2: Echoes in VR
-Tools/mac/run-vr.sh prime2 "/path/to/Metroid Prime 2 - Echoes (USA).rvz"
+export XR_RUNTIME_JSON=/path/to/OpenXR-OSX/build/macos-arm64/runtime/oxrsys-runtime.json
 
-# Metroid Prime in VR
-Tools/mac/run-vr.sh prime1 "/path/to/Metroid Prime (USA).rvz"
+# forward the streaming ports and (re)launch the headset client
+for p in 9944 9945 9946; do adb reverse tcp:$p tcp:$p; done
+adb shell am force-stop net.demonixis.oxrsys.android
+adb shell am start -n net.demonixis.oxrsys.android/com.oculus.NativeActivity
 ```
 
-The script sets up the adb port reverses, (re)starts the OXRSys client on the
-headset, and boots the game in OpenXR stereo. Put the headset on; press Ctrl-C in
-the terminal to stop. Each product keeps its own user directory
-(`vr-user-mac-prime1` / `vr-user-mac-prime2`), so their settings never collide.
-
-To launch flat (no VR) for testing, run the binary directly:
+3. Launch the game in VR:
 
 ```sh
-build-macos/Binaries/Primed2Gun-Mac -e "/path/to/game.rvz" -u /tmp/p2-user \
+build/Binaries/PrimedGun -b -v Vulkan \
+  -e "/path/to/Metroid Prime (USA).rvz" \
+  -u ~/Library/Application\ Support/PrimedGun-Mac \
+  -C GFX.Stereoscopy.StereoMode=6 \
+  -C GFX.VR.EnableOpenXR=True
+```
+
+Put the headset on. Press `Ctrl-C` in the terminal to stop.
+
+There's also a convenience launcher that does the adb setup for you:
+
+```sh
+XR_RUNTIME_JSON=/path/to/oxrsys-runtime.json \
+  Tools/mac/run-vr.sh "/path/to/Metroid Prime (USA).rvz"
+```
+
+To run flat (no headset, for testing) drop the VR flags:
+
+```sh
+build/Binaries/PrimedGun -e "/path/to/Metroid Prime (USA).rvz" \
   -C GFX.VR.EnableOpenXR=False
 ```
 
-## In-headset controls (Prime 2)
+## In-headset controls
 
-- **Right controller** aims the arm cannon; trigger fires
-- **Left stick** moves relative to where you look/point; **right stick** snap-turns
-- **Off-hand near head + stick flick** switches visors; **cannon hand near head +
-  stick flick** switches beams
-- **Left stick click** opens the PrimedGun VR menu (calibration, layout, movement)
-- **Right stick click** recenters your height
+PrimedGun's motion controls apply: aim the arm cannon with your controller and pull
+the trigger to fire, motion-based visor/beam handling, and the VR calibration menu.
+See the upstream [PrimedGun](https://github.com/Nobbie248/PrimedGun) docs for the
+full control scheme and calibration options.
+
+## Credits
+
+Metroid Prime VR by **PrimedGun** (Nobbie248), built on the **Dolphin** emulator.
+This fork adds the macOS-native support. Not affiliated with Nintendo or Retro
+Studios; bring your own legally-dumped disc image.

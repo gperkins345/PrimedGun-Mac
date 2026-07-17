@@ -1,4 +1,13 @@
-# PrimedGun
+# PrimedGun-Mac
+
+> **macOS fork of [PrimedGun](https://github.com/Nobbie248/PrimedGun)** — run Metroid
+> Prime VR natively on Apple Silicon, streaming to a Meta Quest over USB (no PCVR).
+> **➡️ Install, build, and run instructions: [README-Mac.md](README-Mac.md).**
+> This fork is Metroid Prime 1 only; for Prime 2: Echoes see
+> [Primed2Gun](https://github.com/gperkins345/Primed2Gun). Upstream Dolphin/PrimedGun
+> documentation follows below.
+
+---
 
 ![PrimedGun gameplay](assets/readme/primedgun-hero.jfif)
 
