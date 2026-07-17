@@ -194,18 +194,10 @@ static bool IsVRSectionHeader(std::string_view line)
          Common::CaseInsensitiveEquals(section_name, LEGACY_VR_SECTION_NAME);
 }
 
-// Games that receive PrimedGun's emulator/VR rendering defaults. Prime 1's native
-// runtime stays gated on GM8E01 in NativeRuntime.cpp; Prime 2 (G2ME01) support is
-// compiled out entirely when PRIMEDGUN_DISABLE_PRIME2 is defined.
+// Games that receive PrimedGun's emulator/VR rendering defaults (Metroid Prime, GM8E01).
 static bool IsPrimedGunMetroidGameId(std::string_view game_id)
 {
-  if (Common::CaseInsensitiveEquals(game_id, "GM8E01"))
-    return true;
-#ifndef PRIMEDGUN_DISABLE_PRIME2
-  if (Common::CaseInsensitiveEquals(game_id, "G2ME01"))
-    return true;
-#endif
-  return false;
+  return Common::CaseInsensitiveEquals(game_id, "GM8E01");
 }
 
 static VRSettingMap LoadVRSettingsFromINI(std::string_view game_id)

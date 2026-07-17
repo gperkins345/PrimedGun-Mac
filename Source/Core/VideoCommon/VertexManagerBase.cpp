@@ -383,13 +383,6 @@ bool IsMetroidPrime1Profile(MetroidElementProfile profile)
          profile == MetroidElementProfile::Prime1Wii;
 }
 
-#ifndef PRIMEDGUN_DISABLE_PRIME2
-bool IsMetroidPrime2Profile(MetroidElementProfile profile)
-{
-  return profile == MetroidElementProfile::Prime2GC ||
-         profile == MetroidElementProfile::Prime2Wii;
-}
-#endif
 
 float GetPrimedGunPerspectiveHudDistance()
 {
@@ -418,9 +411,6 @@ MetroidHydraHudSettings GetMetroidHydraHudSettings(MetroidElementProfile profile
   // here from the Hydra lineage) and the values are starting points tunable via the VR
   // menu overlay at the call sites. Prime 1 results are unchanged.
   if (!IsMetroidPrime1Profile(profile)
-#ifndef PRIMEDGUN_DISABLE_PRIME2
-      && !IsMetroidPrime2Profile(profile)
-#endif
   )
   {
     return {};
@@ -2199,68 +2189,6 @@ void VertexManagerBase::Flush()
               element_depth = -1.0f;
             }
 
-#ifndef PRIMEDGUN_DISABLE_PRIME2
-            // Prime 2: blanket-lock unclaimed full-screen 2D draws flat across the whole view.
-            // These are the in-game screen-space effects (dark-world tint, fades, damage/echo
-            // overlays) and the cinematic letterbox content, which Echoes emits as
-            // near-fullscreen ortho quads the classifier leaves as Unknown2D -> Skip (default
-            // virtual-screen placement = floating in 3D, user can look around them).
-            // FullscreenMono leaves the quad at full NDC so it fills the entire eye, fixed to
-            // the display (all-encompassing, head-locked) — not a sized screen at a distance
-            // like HandlingType::HeadLocked.
-            //
-            // Scope: only when a real 3D scene was present last frame (m_prime2_scene_active) —
-            // this is in-game and cutscenes. Main menus (0 persp draws) and loading/save
-            // screens (~1) fail the latch — but the latch alone is NOT sufficient (it bleeds
-            // a frame into load screens, where the per-glyph shimmer redraw animates), hence
-            // the NDC-coverage gate below. Guards: per-hash/profile overrides already ran
-            // (they win); hidden layers took the elements_skip path and never reach here; the
-            // viewport-width gate excludes small 2D passes (shadows 128/32-wide).
-            // QPVR_P2_NO_LOCK_2D=1 disables for A/B.
-            if (element_draw && IsMetroidPrime2Profile(element_draw->profile_id) &&
-                element_draw->signature.perspective)
-            {
-              ++m_prime2_persp_draws;
-            }
-            // Restored to the user-certified rule set (the "so much better" build): any
-            // unclaimed near-fullscreen-viewport ortho draw locks across the whole view
-            // while a scene is up. The NDC-coverage gate that later replaced this was
-            // measuring garbage — deny-telemetry showed known projection-filling quads
-            // (fade 9a2998f8, backdrop 4f01a884, portal 11b29574) with span 0.00 — so it
-            // silently vetoed every non-pinned lock and made locking depend on which
-            // filter-shader variant a scene happened to use (the works/not-works
-            // flip-flop). Do NOT reintroduce geometric gating without validating the
-            // vertex->NDC transform against those known-fullscreen hashes first.
-            //
-            // The one real defect of this rule — the location-banner per-glyph shimmer
-            // redraw plastering a letter across the face — is excluded surgically by its
-            // pixel shader, ortho-qualified so the hash's unrelated perspective
-            // shadow-pass twin keeps default treatment.
-            constexpr u32 kPrime2LocationTextPsHash = 0x6ec48426u;
-            static const bool s_p2_no_lock_2d = getenv("QPVR_P2_NO_LOCK_2D") != nullptr;
-            if (!s_p2_no_lock_2d && m_prime2_scene_active &&
-                handling == ShaderHunter::HandlingType::Skip && element_draw &&
-                IsMetroidPrime2Profile(element_draw->profile_id) &&
-                !element_draw->signature.perspective &&
-                element_draw->signature.viewport_width >= 300 &&
-                // Host-truth flag from prime2's NativeRuntime (game menu_state != 0).
-                // Never the classifier's "primedgun_map_or_pause": in Prime 2 that fires
-                // every gameplay frame (Map-layer false positives) and killed the locks.
-                !hunter.IsFlagActive("prime2_pause") &&
-                static_cast<u32>(ps_hash) != kPrime2LocationTextPsHash)
-            {
-              handling = ShaderHunter::HandlingType::FullscreenMono;
-            }
-            // Prime 2: the helmet visor, when visible, is always plastered across the whole
-            // view (hardcoded; wins over the profile's headlocked handling). Invisible when
-            // the menu's Helmet Visor toggle is off — the runtime zeroes the game's
-            // helmet-alpha option, so nothing draws.
-            if (element_draw && IsMetroidPrime2Profile(element_draw->profile_id) &&
-                element_draw->profile_layer == MetroidElementLayer::Helmet)
-            {
-              handling = ShaderHunter::HandlingType::FullscreenMono;
-            }
-#endif
 
             // QuestPrimeVR: trace label -> applied handling (QPVR_DRAW_TRACE env), the
             // link between the classifier verdicts and the VR presentation actually used.
@@ -3197,39 +3125,6 @@ void VertexManagerBase::OnEndFrame()
   m_qpvr_map_scene_active =
       m_qpvr_map_wireframe_draws > 32 && !m_metroid_prime1_combat_context_seen;
   m_qpvr_map_wireframe_draws = 0;
-#endif
-#ifndef PRIMEDGUN_DISABLE_PRIME2
-  // Latch "a 3D scene was present" for next frame's 2D-lock scope gate (see header) — WITH
-  // HYSTERESIS: cutscenes constantly dip the perspective-draw count (camera cuts, fades,
-  // between-shot loads), and an instant latch made the letterbox/effect locks flip-flop in
-  // sync with those dips. Hold the latch for ~0.5s of quiet before releasing; menus/loads
-  // reach zero persp for far longer, so they still unlatch, and the pause screens are
-  // excluded by the host-truth prime2_pause flag rather than this latch anyway.
-  {
-    constexpr int kPrime2SceneHoldFrames = 30;
-    // Union of host truth and draw statistics: the runtime's prime2_scene flag (gameplay
-    // resolved — includes cutscenes, which can render near-zero perspective draws for
-    // seconds during fades/sparse shots, the cause of the lock flip-flop) OR'd with the
-    // perspective-draw count (covers world-transition movies where the player object is
-    // briefly torn down and the host flag drops).
-    const bool host_scene = ShaderHunter::GetInstance().IsFlagActive("prime2_scene");
-    const bool scene_now = host_scene || m_prime2_persp_draws > 16;
-    if (scene_now)
-      m_prime2_scene_cooldown = kPrime2SceneHoldFrames;
-    else if (m_prime2_scene_cooldown > 0)
-      --m_prime2_scene_cooldown;
-    const bool latch = m_prime2_scene_cooldown > 0;
-    static const bool s_p2_latch_log = getenv("QPVR_PG_LOG") != nullptr;
-    if (s_p2_latch_log && latch != m_prime2_scene_active) [[unlikely]]
-    {
-      NOTICE_LOG_FMT(VIDEO,
-                     "QPVR prime2 scene latch {} (host_scene={} persp_draws={} cooldown={})",
-                     latch ? "ON" : "off", host_scene, m_prime2_persp_draws,
-                     m_prime2_scene_cooldown);
-    }
-    m_prime2_scene_active = latch;
-    m_prime2_persp_draws = 0;
-  }
 #endif
   auto& system = Core::System::GetInstance();
   system.GetGeometryShaderManager().vr_ortho_draw_counter = 0;

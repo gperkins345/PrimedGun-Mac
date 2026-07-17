@@ -5383,7 +5383,7 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.position_marker_visible = settings.vr_overlays_enabled && settings.position_marker_enabled;
   overlay.xr_dpad_enabled = settings.xr_dpad_enabled;
   overlay.xr_dpad_use_thumbrest_modifier = settings.xr_dpad_use_thumbrest_modifier;
-  // Cutscenes render as full 3D stereo (both Prime 1 and Prime 2). The "cinematic screen"
+  // Cutscenes render as full 3D stereo. The "cinematic screen"
   // feature (flat 2D theater panel for cutscenes) is force-disabled here regardless of the
   // setting/VR-menu toggle — user wants immersive 3D cutscenes, not a 2D screen. To restore
   // the opt-in theater mode, revert to feeding settings.cinematic_screen_enabled through.
@@ -7204,13 +7204,6 @@ void UpdateShaderHunterGameFlowFlags(const Core::CPUThreadGuard& guard)
     ShaderHunter::GetInstance().RegisterExternalFlag("primedgun_map_or_pause");
   }
 }
-// --- Metroid Prime 2 (Echoes) runtime — separated into its own file ---
-// Nobbie's plan: keep the Prime 2 runtime writes out of NativeRuntime.cpp so Prime 1
-// upstream merges never conflict. Included inside the anonymous namespace to share the
-// helpers above. PRIMEDGUN_DISABLE_PRIME2 (the Prime-1-only build target) drops it.
-#ifndef PRIMEDGUN_DISABLE_PRIME2
-#include "Core/PrimedGun/NativeRuntimePrime2.inc"
-#endif  // PRIMEDGUN_DISABLE_PRIME2
 
 void UpdateSpringBallInput(const Core::CPUThreadGuard& guard, const RuntimeSettings& settings,
                            u32 player)
@@ -7258,19 +7251,6 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   const bool game_active = Core::IsRunning(system) && IsMetroidPrimeRev0(guard);
   if (!game_active)
   {
-#ifndef PRIMEDGUN_DISABLE_PRIME2
-    if (Core::IsRunning(system) && prime2::IsMetroidPrime2(guard))
-    {
-      // Prime 2 (G2ME01) takes its own additive path; Prime 1 state parks first, and none
-      // of the Prime 1 scratch-arena writes below run against Prime 2's memory.
-      if (s_game_was_active)
-        ResetNativeRuntime();
-      s_game_was_active = false;
-      prime2::OnFrameEnd(system, guard, settings);
-      return;
-    }
-    prime2::NoteInactive();
-#endif
     TryWriteU8(guard, SPRINGBALL_TRIGGER_SCRATCH, 0u);
     TryWriteU32(guard, MORPHBALL_CAMERA_LEVEL_ENABLE_SCRATCH, 0);
     TryWriteU32(guard, FIRST_PERSON_ORBIT_AIM_VECTOR_ENABLE_SCRATCH, 0);
@@ -7285,9 +7265,6 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
     return;
   }
 
-#ifndef PRIMEDGUN_DISABLE_PRIME2
-  prime2::NoteInactive();
-#endif
   s_game_was_active = true;
   UpdateCinematicScreenState(guard, settings);
   UpdateShaderHunterGameFlowFlags(guard);

@@ -255,16 +255,6 @@ private:
   // outlines) can never match mid-frame the way the context accumulators can.
   u32 m_qpvr_map_wireframe_draws = 0;
   bool m_qpvr_map_scene_active = false;
-#ifndef PRIMEDGUN_DISABLE_PRIME2
-  // Prime 2 blanket 2D-lock scope gate: count perspective (3D scene) draws per frame and
-  // latch at end-of-frame. In-game and cutscenes render a full 3D scene (dozens–hundreds of
-  // persp draws); main menus render 0 and loading/save screens ~1. Only when a real scene
-  // was present last frame do we head-lock full-screen 2D effects, so menus and loading
-  // screens keep the default virtual-screen placement.
-  u32 m_prime2_persp_draws = 0;
-  bool m_prime2_scene_active = false;
-  int m_prime2_scene_cooldown = 0;
-#endif
   bool m_metroid_prime1_thermal_context_active = false;
   bool m_metroid_prime1_thermal_context_seen = false;
   bool m_unflushed_efb_copy = false;
