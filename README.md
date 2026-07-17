@@ -1,116 +1,96 @@
-# PrimedGun-Mac
+# PrimedGun-Mac — Metroid Prime VR on macOS
 
-> **macOS fork of [PrimedGun](https://github.com/Nobbie248/PrimedGun)** — run Metroid
-> Prime VR natively on Apple Silicon, streaming to a Meta Quest over USB (no PCVR).
-> **➡️ Install, build, and run instructions: [README-Mac.md](README-Mac.md).**
-> This fork is Metroid Prime 1 only; for Prime 2: Echoes see
-> [Primed2Gun](https://github.com/gperkins345/Primed2Gun). Upstream Dolphin/PrimedGun
-> documentation follows below.
+A macOS build of **[PrimedGun](https://github.com/Nobbie248/PrimedGun)** (a Dolphin
+fork that adds motion-controlled VR to Metroid Prime), streaming to a **Meta Quest
+over USB** via the [OXRSys](https://github.com/demonixis/OpenXR-OSX) OpenXR runtime —
+**no PCVR, no Windows, no SteamVR.**
 
----
+This fork is **Metroid Prime 1 only** (GameCube, `GM8E01`). It carries the macOS/
+MoltenVK-specific work needed to run PrimedGun natively on Apple Silicon (multiview
+stereo, the menu-map depth fix, 3D cutscene rendering, color pipeline). For Metroid
+Prime 2: Echoes support, see the separate
+[Primed2Gun](https://github.com/gperkins345/Primed2Gun) project.
 
-![PrimedGun gameplay](assets/readme/primedgun-hero.jfif)
+## What you need
 
-PrimedGun is a Dolphin ReduX-based build focused on improving Metroid Prime's VR experience.
+- **Apple Silicon Mac**, macOS 11 or newer
+- **Xcode command-line tools** (`xcode-select --install`)
+- **cmake** and **ninja** — `brew install cmake ninja`
+- **Qt 6 for macOS** — install from the Qt online installer (e.g. `~/Qt/6.8.3/macos`)
+- **MoltenVK / Vulkan SDK** — `brew install molten-vk`, or the LunarG Vulkan SDK
+- **adb** — `brew install android-platform-tools`, with the Quest in developer mode
+- The **OXRSys runtime** built for macOS, and its **Quest client app** installed on
+  the headset. Follow [OpenXR-OSX](https://github.com/demonixis/OpenXR-OSX); note the
+  path to its `oxrsys-runtime.json`.
+- A **Metroid Prime (USA) GameCube disc image** you dumped yourself (`.rvz`/`.iso`),
+  game ID `GM8E01`.
 
-## Build - Windows
+## Build
 
-Open a Visual Studio x64 Native Tools Command Prompt, then run:
-
-```bat
-git clone --recurse-submodules https://github.com/Nobbie248/PrimedGun.git
-cd PrimedGun
+```sh
+git clone https://github.com/gperkins345/PrimedGun-Mac.git
+cd PrimedGun-Mac
 git submodule update --init --recursive
-cmake -S . -B build\Release -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build\Release --parallel
+
+cmake -B build -G Ninja -DCMAKE_PREFIX_PATH=$HOME/Qt/6.8.3/macos
+ninja -C build
 ```
 
-The built app is written to `Binary\x64\PrimedGun.exe`.
+The app binary is `build/Binaries/PrimedGun`.
 
-## Build - Linux
+## Run (VR, streaming to the Quest over USB)
 
-Requires GCC 12+ or Clang 15+.
+1. Connect the Quest by USB and accept the on-headset debugging prompt.
+2. Point the OpenXR loader at your OXRSys runtime and start the Quest client:
 
-```bash
-git clone --recurse-submodules https://github.com/Nobbie248/PrimedGun.git
-cd PrimedGun
-git submodule update --init --recursive
-cmake -S . -B build -G Ninja \
-  -DLINUX_LOCAL_DEV=ON \
-  -DUSE_SYSTEM_FMT=OFF
-cmake --build build --parallel
-ln -sfn ../../Data/Sys build/Binaries/Sys
+```sh
+export XR_RUNTIME_JSON=/path/to/OpenXR-OSX/build/macos-arm64/runtime/oxrsys-runtime.json
+
+# forward the streaming ports and (re)launch the headset client
+for p in 9944 9945 9946; do adb reverse tcp:$p tcp:$p; done
+adb shell am force-stop net.demonixis.oxrsys.android
+adb shell am start -n net.demonixis.oxrsys.android/com.oculus.NativeActivity
 ```
 
-If CMake has already configured the repo before, delete the old `build` folder before rebuilding so cached settings do not carry over. Do not patch files inside `Externals/OpenXR`; the repo configures the bundled OpenXR loader directly.
+3. Launch the game in VR:
 
-For SteamOS-specific builds, see [PrimedSteam](https://github.com/josethevrtech/PrimedSteam).
-
-## Features
-
-- Full directional movement.
-- Modern VR control scheme.
-- Visor head tracking with hand gesture input.
-- Improved gun-based targeting and grapple.
-- 6DOF arm cannon tracking.
-- One-click height calibration.
-- Cannon position and rotation calibration.
-- Easy cannon texture swapping tool.
-- In-headset settings menu.
-- HMD Directional audio.
-- Left-handed support.
-
-## Setup Notes
-
-- Meta's own OpenXR environment is not recommended; try SteamVR or Virtual Desktop instead.
-- Run the app and select your Metroid Prime NTSC Revision 0 (1.0) game file.
-- Check the Layout tab for controller bindings.
-- To transfer your old saves, go to `User\GC`, copy your memory card, and place it into the new folder. Then go to Dolphin Settings, open the GameCube tab, and select the save there.
-- Do not transfer save states across versions. Make sure to save normally before you transfer.
-- Once in game, click the right stick to set your height.
-- Click the left thumbstick to open or close the in-headset settings menu.
-- Try to stay in the centre of your play space and face forward, this mod is not roomscaled.
-- Use Save Settings after changing PrimedGun options to apply them.
-
-## Archipelago / MultiworldGG
-
-PrimedGun supports Metroid Prime multiworld through the external
-[MultiworldGG](https://multiworld.gg/) Metroid Prime client. This has been tested with a patched
-Metroid Prime NTSC-U Revision 0 (1.0) ISO. Other game revisions are not supported by PrimedGun.
-
-1. Install MultiworldGG and obtain the `.apmp1` file for your Metroid Prime slot.
-2. Open the `.apmp1` file with MultiworldGG and patch a clean NTSC-U Revision 0 ISO.
-3. Create `Launch MultiworldGG for PrimedGun.bat` beside `MultiworldGGLauncher.exe` with:
-
-```bat
-@echo off
-set "DME_DOLPHIN_PROCESS_NAME=PrimedGun"
-start "" "%~dp0MultiworldGGLauncher.exe"
+```sh
+build/Binaries/PrimedGun -b -v Vulkan \
+  -e "/path/to/Metroid Prime (USA).rvz" \
+  -u ~/Library/Application\ Support/PrimedGun-Mac \
+  -C GFX.Stereoscopy.StereoMode=6 \
+  -C GFX.VR.EnableOpenXR=True
 ```
 
-4. Use that batch file to start MultiworldGG. The environment variable allows its bundled Dolphin
-   Memory Engine to find `PrimedGun.exe`; no separate Memory Engine installation is required.
-5. Start the generated Archipelago ISO in PrimedGun, then connect the Metroid Prime client using
-   the room's server address, slot name, and password.
+Put the headset on. Press `Ctrl-C` in the terminal to stop.
 
-If the client cannot find the game, close extra Dolphin or PrimedGun instances, confirm emulation
-has started, and make sure MultiworldGG was opened through the batch file. Use normal in-game saves
-for multiworld sessions; restoring an old save state can desynchronize game memory from the server.
+There's also a convenience launcher that does the adb setup for you:
 
-## Change Controller Bindings
+```sh
+XR_RUNTIME_JSON=/path/to/oxrsys-runtime.json \
+  Tools/mac/run-vr.sh "/path/to/Metroid Prime (USA).rvz"
+```
 
-![PrimedGun controller layout](assets/controller%20layout.png)
+To run flat (no headset, for testing) drop the VR flags:
 
-PrimedGun sets up the recommended controls automatically, but you can disable parts of that setup from the Controller tab. Turn off auto controller bindings, visor gesture input, or PrimedGun grip inputs there if you want to bind those controls manually.
+```sh
+build/Binaries/PrimedGun -e "/path/to/Metroid Prime (USA).rvz" \
+  -C GFX.VR.EnableOpenXR=False
+```
 
-By default, PrimedGun maps GameCube `Z` to the map, `Y` to missiles, and the D-Pad to visors.
+## In-headset controls
 
-To change bindings in Dolphin, open Dolphin Settings, go to Controllers, then choose Configure. Select `OpenXR Controller` at the top of the mapping window. Right-click any input you want to change, choose Clear, then assign the new input. When finished, name the profile and save it.
+PrimedGun's motion controls apply: aim the arm cannon with your controller and pull
+the trigger to fire, motion-based visor/beam handling, one-click height calibration
+(right-stick press), and the in-headset settings menu (left-stick press). See the
+[upstream documentation](README-upstream.md) for the full control scheme, calibration
+options, save transfer, and multiworld support.
 
 ## Credits
 
-- Created by Nobbie.
-- Thank you to the Metroid Prime modding community for the resources and research that helped make this possible.
-- Huge thank you to iChris4 for Dolphin ReduX development, and to the Dolphin team.
-- Thank you to the early testers: GeekyGami, Lucaspec72, TorchRing, detective_yoshi, PHA3ESH1FTGAMES, retrovideogamer, Samevi, Mochu, VideoGameEsoterica and VRified Games.
-- For further enhancements to your VR experience, join the Dolphin VR Discord: https://discord.gg/GdmffzCTrh
+- **macOS port** by **Ceiling**.
+- Metroid Prime VR by **[PrimedGun](https://github.com/Nobbie248/PrimedGun)** (Nobbie),
+  built on the **Dolphin** emulator (Dolphin ReduX by iChris4).
+- See the [upstream documentation](README-upstream.md) for the full PrimedGun credits.
+
+Not affiliated with Nintendo or Retro Studios; bring your own legally-dumped disc image.
