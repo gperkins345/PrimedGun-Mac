@@ -513,10 +513,7 @@ endif()
 option(PRIMEGUN_ENABLE_TRANSLATIONS "Build and deploy Dolphin UI translation files for PrimedGun" OFF)
 
 set_target_properties(dolphin-emu PROPERTIES
-  OUTPUT_NAME ${PRIMEDGUN_PRODUCT_NAME}
-)
-target_compile_definitions(dolphin-emu PRIVATE
-  PRIMEDGUN_PRODUCT_NAME_STR="${PRIMEDGUN_PRODUCT_NAME}"
+  OUTPUT_NAME PrimedGun
 )
 
 if(WIN32)

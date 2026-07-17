@@ -2039,14 +2039,7 @@ bool VulkanOpenXR::SubmitFrame()
   const bool cinematic_screen_active =
       overlay.cinematic_screen_enabled && overlay.cinematic_screen_active;
 #if !defined(ANDROID)
-  // OXRSys promotes only the PROJECTION layer to the encoded video stream; quad layers are
-  // composited as overlays on top of it. A quad-only cinematic frame therefore encodes
-  // nothing and the Quest client falls back to "waiting for video" (observed on Prime 1
-  // save-load cutscenes). Default to the projection path — Present.cpp feeds both eyes the
-  // mono cinema image — and keep the quad-only submit opt-in (QPVR_CINEMATIC_QUAD=1) for
-  // runtimes that can promote a quad to primary content.
-  static const bool s_cinematic_quad_submit = getenv("QPVR_CINEMATIC_QUAD") != nullptr;
-  if (s_cinematic_quad_submit && cinematic_screen_active &&
+  if (cinematic_screen_active &&
       BuildCinematicScreenLayer(m_eye_swapchains, overlay.cinematic_screen_generation,
                                 &m_cinematic_screen_layer))
   {

@@ -1592,7 +1592,7 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
     : QMainWindow(nullptr), m_system(system)
 {
   setWindowTitle(
-      QStringLiteral(PRIMEDGUN_PRODUCT_NAME_STR " v%1").arg(QString::fromStdString(Common::GetScmDescStr())));
+      QStringLiteral("PrimedGun v%1").arg(QString::fromStdString(Common::GetScmDescStr())));
   const QIcon primegun_icon(QApplication::applicationDirPath() +
                             QStringLiteral("/assets/PrimedGun.png"));
   setWindowIcon(primegun_icon.isNull() ? Resources::GetAppIcon() : primegun_icon);
@@ -2550,7 +2550,7 @@ void MainWindow::ConnectStack()
 
   setMinimumSize(700, 720);
   setWindowTitle(
-      QStringLiteral(PRIMEDGUN_PRODUCT_NAME_STR " v%1").arg(QString::fromStdString(Common::GetScmDescStr())));
+      QStringLiteral("PrimedGun v%1").arg(QString::fromStdString(Common::GetScmDescStr())));
 
   game_layout->setContentsMargins(14, 12, 14, 10);
   game_layout->setSpacing(8);
@@ -4611,7 +4611,7 @@ void MainWindow::ShowRenderWidget()
 
     m_stack->setCurrentIndex(m_stack->addWidget(m_render_widget));
     setWindowTitle(
-        QStringLiteral(PRIMEDGUN_PRODUCT_NAME_STR " v%1").arg(QString::fromStdString(Common::GetScmDescStr())));
+        QStringLiteral("PrimedGun v%1").arg(QString::fromStdString(Common::GetScmDescStr())));
     m_stack->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     m_stack->repaint();
 
@@ -4638,7 +4638,7 @@ void MainWindow::HideRenderWidget(bool reinit, bool is_exit)
     m_rendering_to_main = false;
     m_stack->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     setWindowTitle(
-        QStringLiteral(PRIMEDGUN_PRODUCT_NAME_STR " v%1").arg(QString::fromStdString(Common::GetScmDescStr())));
+        QStringLiteral("PrimedGun v%1").arg(QString::fromStdString(Common::GetScmDescStr())));
   }
 
   // The following code works around a driver bug that would lead to Dolphin crashing when changing

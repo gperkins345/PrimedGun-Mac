@@ -980,12 +980,7 @@ void Presenter::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
         }
       }
 
-      // Both eyes must ALWAYS be acquired and released: the OpenXR frame composes a stereo
-      // layer from both swapchain images, so submitting only eye 0 leaves the HMD with no
-      // valid frame — cinematics went dark in the headset while the desktop mirror showed
-      // them. Cinematic mode is mono content; the source_layer selection below already
-      // feeds EFB layer 0 to both eyes.
-      const uint32_t eye_count = 2u;
+      const uint32_t eye_count = cinematic_screen_active ? 1u : 2u;
       for (uint32_t eye = 0; !rendered_layered && eye < eye_count; ++eye)
       {
         AbstractFramebuffer* eye_fb = sc->AcquireEyeFramebuffer(eye);
